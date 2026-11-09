@@ -12,7 +12,7 @@ import { testDeployment } from './fixtures/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 import { programSource, runProgram } from './fixtures/program.ts'
 
-// Git and shell subprocesses can exceed the 5s default timeout when the test suite runs in parallel.
+// 测试套件并行运行时，Git 与 shell 子进程可能超过 5 秒的默认超时。
 vi.setConfig({ testTimeout: 30_000 })
 const exec = promisify(execFile)
 let dir: string
@@ -20,7 +20,7 @@ let dir: string
 const program = (directory: string, name: string, body: string): string => programSource(directory, name, body)
 /** 把子进程的输出归一为单个行尾，便于比较各平台的 `\n` 与 `\r\n`。 */
 const lines = (text: string | undefined): string => (text ?? '').trim()
-/** Worker shell environment after DSH strips credential-shaped variables. */
+/** DSH 剥离凭据形态变量后的执行器 shell 环境。 */
 const workerEnv = (env: Record<string, string | undefined>): Record<string, string> =>
   Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined && !SENSITIVE_ENV_PATTERN.test(entry[0])))
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'environment-')); mkdirSync(join(dir, 'real')) })
@@ -70,7 +70,7 @@ return result.status === null ? 1 : result.status`)
     await writeEnvironment(testDeployment({ stateDir: dir }), ['old-cli'])
     await writeEnvironment(testDeployment({ stateDir: dir }), [])
     expect(readdirSync(workerBin(dir)).sort()).toEqual([shimFile('gh'), shimFile('lark-cli')])
-    // A file that merely contains the marker on a later line, a symlink to a shim, and a foreign gitconfig are all rejected.
+    // 仅在后续行包含标记的文件、指向垫片的符号链接，以及外来的 gitconfig，都会被拒绝。
     writeFileSync(join(workerBin(dir), 'notes'), `notes\nmore\n${readFileSync(join(workerBin(dir), shimFile('gh')), 'utf8').split('\n')[1]}\n`)
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${join(workerBin(dir), 'notes')} was not written by dsh-superagent`)
     rmSync(join(workerBin(dir), 'notes'))
@@ -94,11 +94,11 @@ return result.status === null ? 1 : result.status`)
 describe('agent git configuration', () => {
   it('ignores the operator\'s global and system git configuration, also after DSH drops credential-shaped variables', async () => {
     const home = join(dir, 'home'); mkdirSync(home)
-    // Operator configuration that rewrites HTTPS to SSH, enables commit signing, and sets a credential helper.
+    // 操作员配置：把 HTTPS 改写为 SSH、启用提交签名，并设置凭据助手。
     writeFileSync(join(home, '.gitconfig'), '[url "git@github.com:"]\n\tinsteadOf = https://github.com/\n[commit]\n\tgpgsign = true\n[credential]\n\thelper = osxkeychain\n')
     const deployment = testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli: '/opt/agent tools/gh' } })
     await writeEnvironment(deployment, [])
-    // Operator identity variables and git's fallback from the OS username must not apply to worker commits.
+    // 操作员身份变量以及 git 从操作系统用户名回退得到的身份，都不得用于执行器的提交。
     const env = workerEnv({ PATH: process.env.PATH, HOME: home, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.abbrev', GIT_CONFIG_VALUE_0: '12', GIT_AUTHOR_NAME: 'Operator', GIT_COMMITTER_EMAIL: 'operator@example.com', ...agentVariables(dir) })
     const git = async (...args: string[]): Promise<string> => (await exec('git', args, { cwd: dir, env })).stdout.trim()
     await git('init', '-q', 'repo')
@@ -143,7 +143,7 @@ it('removes every spelling of a directory from PATH and keeps the other entries'
   expect(withoutDirectory(entries.join(delimiter), bin)).toBe(['/usr/bin', 'node_modules/.bin'].join(delimiter))
 })
 
-/** Minimal SubprocessRuntime backed by child_process.spawn with an isolated global git config. */
+/** 由 child_process.spawn 支撑的最小 SubprocessRuntime，使用隔离的全局 git 配置。 */
 const subprocess = (config: string): SubprocessRuntime => ({
   spawn: ({ argv, cwd }: { argv: readonly string[]; cwd: string }) => {
     // 与产品一致：`.cmd`/`.bat` 经 `cmd.exe` 启动，并把命令传给 cmd 时不转义。
@@ -166,7 +166,7 @@ describe('ticket directory check', () => {
   it('passes a directory whose repository adds no credentials, and one outside any repository', async () => {
     await git('init', '-q', 'repo')
     await expect(check('repo')).resolves.toBeUndefined()
-    // When no config key matches at all, git config --get-regexp exits with status 1.
+    // 当没有任何配置键匹配时，git config --get-regexp 会以状态 1 退出。
     writeFileSync(join(dir, 'global'), '')
     await expect(check('real')).resolves.toBeUndefined()
   })
@@ -191,21 +191,21 @@ describe('ticket directory check', () => {
 
 describe('the repository the host\'s environment names', () => {
   it('is left alone by the tests\' git and named in no worker\'s environment, as when they run inside `git rebase --exec`', async () => {
-    // A scratch repository stands for the one under test, which `git rebase --exec` names in GIT_DIR and GIT_WORK_TREE.
+    // 一个临时仓库代表被测仓库，`git rebase --exec` 会在 GIT_DIR 和 GIT_WORK_TREE 中指明它。
     await exec('git', ['init', '-q', 'scratch'], { cwd: dir, env: gitEnv() })
     const config = () => readFileSync(join(dir, 'scratch', '.git', 'config'), 'utf8')
     const before = config()
     vi.stubEnv('GIT_DIR', join(dir, 'scratch', '.git')); vi.stubEnv('GIT_WORK_TREE', join(dir, 'scratch'))
-    // The operator's limit on git's search for a repository names none, and stays.
+    // 操作员对 git 搜索仓库范围的限制并未指明任何仓库，因而保留。
     vi.stubEnv('GIT_CEILING_DIRECTORIES', dir)
     try {
-      // What the tests do: a repository of their own, checked as a ticket directory.
+      // 测试自身的做法：创建自己的仓库，并把它当作工单目录来检查。
       await exec('git', ['init', '-q', 'repo'], { cwd: dir, env: gitEnv({ GIT_CONFIG_GLOBAL: join(dir, 'global'), GIT_CONFIG_NOSYSTEM: '1' }) })
       writeFileSync(join(dir, 'global'), '')
       await expect(verifyDirectory(join(dir, 'repo'), subprocess(join(dir, 'global')), new AbortController().signal)).resolves.toBeUndefined()
       expect(readdirSync(join(dir, 'repo'))).toContain('.git')
       expect(config()).toBe(before)
-      // The worker environment, which workers' shells and the host's own commands get, names no repository.
+      // 执行器环境（执行器的 shell 和宿主自身的命令都会用到）不指明任何仓库。
       const env = workerEnv({ ...process.env, ...agentVariables(dir) })
       for (const name of GIT_LOCATION) expect(env, name).not.toHaveProperty(name)
       expect(env.GIT_CEILING_DIRECTORIES).toBe(dir)

@@ -15,14 +15,14 @@ let ghCli: string
 let larkCli: string
 const program = (name: string, body = ''): string => programSource(join(dir, 'bin'), name, body)
 const programIn = (directory: string, name: string, body = ''): string => programSource(directory, name, body)
-/** Fake gh CLI signed in as `login` with configurable push access to acme/widgets (including its former name acme/gadgets). */
+/** 伪造的 gh CLI，以 `login` 身份登录，对 acme/widgets（包括其旧名 acme/gadgets）具有可配置的推送权限。 */
 const gh = (name: string, login: string, push = true): string => program(name, `const args = argv.join(' ')
 if (args === 'api user') { console.log(${JSON.stringify(JSON.stringify({ login, id: 7 }))}); return 0 }
 if (args.startsWith('api repos/acme/') && args.endsWith('--jq {name: .full_name, push: .permissions.push}')) {
   console.log(${JSON.stringify(JSON.stringify({ name: 'acme/widgets', push }))}); return 0
 }
 return 1`)
-/** Fake lark-cli program returning canned auth, strict-mode, and bot info responses. */
+/** 伪造的 lark-cli 程序，返回预设的认证、严格模式和机器人信息响应。 */
 const lark = (status: object, mode = 'bot', bot: object = { bot: { open_id: 'ou_bot', app_name: 'Widgets Bot' }, code: 0 }): string =>
   program('lark-cli', `const args = argv.join(' ')
 if (args === 'auth status') { console.log(${JSON.stringify(JSON.stringify(status))}); return 0 }
@@ -31,7 +31,7 @@ if (args === 'api GET /open-apis/bot/v3/info --as bot --format ndjson') { consol
 return 1`)
 const minimal = (overrides: Record<string, unknown> = {}) => ({ stateDir: join(dir, 'state'), ...overrides })
 const machine = (overrides: Partial<Machine> = {}): Machine => ({ ...machineOf(Config(minimal())), ...overrides })
-/** Runs commands like worker shells do, but locally: the stand-ins first on PATH, then the system's git. */
+/** 像执行器的 shell 那样运行命令，但在本地：替身程序优先于 PATH，之后是系统的 git。 */
 const probe: Probe = async argv => (await runProgram(argv[0]!, argv.slice(1), { env: { ...process.env, PATH: path, HOME: dir } })).stdout
 const setupError = (place: string, code: string, values: Record<string, unknown> = {}) => expect.objectContaining({ place, code, values: expect.objectContaining(values) })
 
@@ -41,7 +41,7 @@ beforeEach(async () => {
   path = [join(dir, 'state-link', 'worker-bin'), join(dir, 'state', 'worker-bin') + sep, join(dir, 'bin'), '/usr/bin', '/bin'].join(delimiter)
   ghCli = gh('gh', 'Agent-Bot')
   larkCli = lark({ appId: 'cli_bot', brand: 'lark', identities: { bot: { status: 'ready' } } })
-  // Stale worker shims with the same binary name must be skipped regardless of PATH normalization or symlinks.
+  // 同名的陈旧执行器垫片必须被跳过，无论 PATH 是否规范化或是否经过符号链接。
   programIn(join(dir, 'state', 'worker-bin'), 'gh')
   symlinkSync(join(dir, 'state'), join(dir, 'state-link'))
   await exec('git', ['init', '-q', join(dir, 'widgets')], { env: gitEnv() })
@@ -49,14 +49,14 @@ beforeEach(async () => {
 })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
-// Setup spawns CLI subprocesses that can take several seconds when tests run in parallel.
+// 测试并行运行时，Setup 启动的 CLI 子进程可能需要数秒。
 vi.setConfig({ testTimeout: 30_000 })
 
 describe('configuration schema', () => {
   it('requires only the state directory and reads the editable fields through references', () => {
     expect(() => Config({})).toThrow('stateDir')
     const read = machineOf(Config({ stateDir: join(dir, 'state') }))
-    // Limits are volatile references that the loader updates in place and callers read when used.
+    // 上限是易变引用，由加载器原地更新，调用方在用到时读取。
     expect({ ...read, promptMaxChars: read.promptMaxChars.get(), admissionContextMaxPages: read.admissionContextMaxPages.get(),
       admissionContextTimeoutMs: read.admissionContextTimeoutMs.get() })
       .toEqual({ stateDir: join(dir, 'state'), promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 })
@@ -75,7 +75,7 @@ describe('setup', () => {
     expect(deployment).toMatchObject({ repository: 'acme/widgets', github: { cli: ghCli, login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' } })
     expect(deployment.github).toEqual({ cli: ghCli, login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' })
     expect(deployment).not.toHaveProperty('feishu')
-    // A renamed repository is still resolved by its old name; notifications carry GitHub's current full_name.
+    // 重命名后的仓库仍可通过旧名解析；通知携带 GitHub 当前的全名（full_name）。
     expect((await resolveDeployment(machine(), { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
   })
   it('names what setup needs and where it is set', async () => {
@@ -88,7 +88,7 @@ describe('setup', () => {
     await needs('github', 'agentCliMissing', { output: 'bin/gh must be a command name or an absolute path' }, { repository, cli: 'bin/gh' })
     await needs('github', 'agentCliSignedOut', {}, { repository, cli: program('gh-broken', 'return 1') })
     await needs('github', 'repositoryReadOnly', { account: 'Agent-Bot', repository: 'acme/widgets' }, { repository, cli: gh('gh-reader', 'Agent-Bot', false) })
-    // Signed in, but the account cannot read the repository, or the CLI names no account.
+    // 已登录，但该账号无法读取仓库，或 CLI 未指明任何账号。
     const unreadable = program('gh-outsider', `const args = argv.join(' ')
 if (args === 'api user') { console.log('{"login":"Agent-Bot","id":7}'); return 0 }
 console.error('HTTP 404')
@@ -139,7 +139,7 @@ describe('gitlab setup', () => {
   const payload = (access: number | null = 30, group: number | null = null, path = project): string => JSON.stringify({ id: 42,
     path_with_namespace: path, namespace: { path: 'group/sub' },
     permissions: { project_access: access === null ? null : { access_level: access }, group_access: group === null ? null : { access_level: group } } })
-  /** Fake glab: reports the signed-in user and one project payload, like `glab api user` and `glab api projects/<encoded>`. */
+  /** 伪造的 glab：报告已登录用户和一个项目载荷，类似 `glab api user` 与 `glab api projects/<encoded>`。 */
   const glab = (name: string, userJson = user, projectJson = payload()): string => program(name, `const args = argv.join(' ')
 if (args === 'api user') { console.log(${JSON.stringify(userJson)}); return 0 }
 if (args === 'api projects/group%2Fsub%2Fwidgets') { console.log(${JSON.stringify(projectJson)}); return 0 }
@@ -148,7 +148,7 @@ return 1`)
     expect(await resolveGitlab(machine(), {}, probe, path)).toBeUndefined()
     const cli = glab('glab')
     expect(await resolveGitlab(machine(), { project, cli: 'glab' }, probe, path)).toEqual({ cli, project, projectId: 42, login: 'Agent-Bot', id: 7 })
-    // Group access counts the same as project access, and the canonical renamed path is used.
+    // 群组访问权限与项目访问权限等价，且使用重命名后的规范路径。
     expect(await resolveGitlab(machine(), { project, cli: glab('glab-group', user, payload(null, 30, 'group/renamed')) }, probe, path))
       .toMatchObject({ project: 'group/renamed' })
   })

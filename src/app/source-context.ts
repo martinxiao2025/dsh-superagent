@@ -1,4 +1,4 @@
-/** Scoped runtime context exposed to each Source kind, isolating Sources from direct Store or Engine access. */
+/** 暴露给每种来源的范围化运行时上下文，使来源与 Store 或 Engine 的直接访问相隔离。 */
 import type { EngineForSources, ReceiveResult, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
@@ -14,23 +14,23 @@ export interface SourceContextDeps {
   readonly engine: Pick<EngineForSources, 'bindThread' | 'threadClosed'>
   readonly commands: Commands
   readonly sources: SourceRegistry
-  /** Throws when accessed before initial setup completes. */
+  /** 在初始初始化完成之前访问会抛出异常。 */
   readonly deployment: Deployment
   readonly ready: Promise<void>
   configured(): boolean
-  /** Setup problem whose `place` matches the Source kind receives it on `context.problem`. */
+  /** 其 `place` 与来源类型匹配的初始化问题会通过 `context.problem` 交给该来源。 */
   readonly setupProblem?: SetupProblem | undefined
-  /** Why setup found no Feishu bot even though the Feishu Source names a CLI. */
+  /** 为什么即使飞书来源指定了 CLI，初始化仍未找到飞书机器人。 */
   readonly feishuProblem?: SetupProblem | undefined
-  /** Why setup could not verify the GitLab project even though the GitLab Source names one. */
+  /** 为什么即使 GitLab 来源指定了项目，初始化仍无法验证 GitLab 项目。 */
   readonly gitlabProblem?: SetupProblem | undefined
-  /** Hands a Trigger to the Engine and schedules the pass that assesses it. */
+  /** 将触发器交给引擎，并安排对其进行评估的轮次。 */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
 }
 
 /**
- * Builds the context for one Source kind. Health reports are restricted to entries declared by the kind and
- * bound to the active registration, becoming no-ops once unregistered.
+ * 为一个来源类型构建上下文。健康报告仅限于该类型声明的条目，
+ * 并绑定到活动注册；一旦取消注册即成为空操作。
  */
 export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }): SourceContext {
   const { store } = deps

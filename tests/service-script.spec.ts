@@ -1,4 +1,4 @@
-/** Tests for scripts/dsh-superagent.mjs using a temporary checkout path with spaces and stubbed ps, tmux, and dsh programs. */
+/** 使用带空格的临时检出路径以及打桩的 ps、tmux 和 dsh 程序测试 scripts/dsh-superagent.mjs。 */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync }
   from 'node:fs'
@@ -14,19 +14,19 @@ let server: Server | undefined
 let sleepers: ChildProcess[] = []
 const control = (profile: string) => join(root, '.artifacts', 'control', 'profiles', profile)
 const constant = (value: string) => JSON.stringify(value)
-/** Write a fake program into the checkout's `bin`, where `run` puts it first on PATH. */
+/** 将假程序写入检出的 `bin`，`run` 会把它放在 PATH 最前面。 */
 const program = (name: string, body: string) => programSource(join(root, 'bin'), name, body)
-/** Spawn a real Node process that stays alive, so the fake ps can list it and the script can signal it. */
+/** 启动一个保持存活的真实 Node 进程，使假 ps 能列出它，脚本也能向它发送信号。 */
 function sleeper(): number {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
   sleepers.push(child)
   return child.pid!
 }
 const service = (pid: number, profile = 'superagent') => `${pid} node node /opt/my tools/dsh --profile ${profile} --no-open`
-/** Write active process lines (`pid ucomm args`) for the fake ps. Entries prefixed with `after:<pid> ` appear only after that PID exits. */
+/** 为假 ps 写入活动进程行（`pid ucomm args`）。以 `after:<pid> ` 为前缀的条目仅在该 PID 退出后出现。 */
 const processes = (...lines: string[]) => writeFileSync(join(root, 'ps.txt'), lines.map(line => `${line}\n`).join(''))
 const started = (...lines: string[]) => writeFileSync(join(root, 'ps-started.txt'), lines.map(line => `${line}\n`).join(''))
-/** A fake `tmux` that logs its arguments and, on creation, prints the PID written to `pane`. */
+/** 一个假 `tmux`，记录其参数，并在创建会话时打印写入 `pane` 的 PID。 */
 const tmuxFake = (sessionExists = false) => program('tmux', `const fs = require('node:fs')
 const root = ${constant(root)}
 fs.appendFileSync(root + '/tmux.log', argv.join('\\n') + '\\n---\\n')
@@ -81,7 +81,7 @@ function run(...args: string[]): Promise<{ code: number; stdout: string; stderr:
     (error, stdout, stderr) => resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr })))
 }
 const READY = { health: { runtime: { state: 'ready', detail: '' } }, setup: { problem: null, feishuProblem: null } }
-/** Start a mock HTTP server that returns 503 until tmux launches the service (unless always is true). */
+/** 启动一个模拟 HTTP 服务器；除非 always 为 true，否则在 tmux 启动服务前返回 503。 */
 async function answering(state: unknown = READY, always = false): Promise<string> {
   server = createServer((_request, response) => {
     if (!always && !existsSync(join(root, 'launched'))) { response.writeHead(503).end(); return }
@@ -120,7 +120,7 @@ it('records the service PID at start, and still refuses a second instance the sc
   expect(start).toMatchObject({ code: 0, stdout: expect.stringContaining(`"pids": [\n    ${pid}\n  ]`) })
   expect(readFileSync(join(control('superagent'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
   const tmux = readFileSync(join(root, 'tmux.log'), 'utf8').split('---\n').find(call => call.startsWith('new-session'))!.split('\n')
-  // The checkout's path, which has a space, is one argument, and the log path inside it is quoted for the POSIX shell tmux runs.
+  // 检出的路径含有空格，它作为一个参数，其中的日志路径为 tmux 运行的 POSIX shell 加上了引号。
   const checkout = realpathSync(root)
   expect(tmux).toEqual(expect.arrayContaining(['-P', '-F', '#{pane_pid}', '-c', checkout]))
   const command = tmux.find(word => word.startsWith('umask 077; exec '))!
@@ -134,7 +134,7 @@ it('records the service PID at start, and still refuses a second instance the sc
 }, 20_000)
 it('waits only for the process it stopped', async () => {
   const pid = sleeper()
-  // Another instance shows up once the stopped one ended.
+  // 被停止的实例结束后，另一个实例会出现。
   processes(service(pid), `after:${pid} ${sleeper()} node node /opt/dsh --profile superagent`)
   expect(await run('stop', '--stop-timeout', '5')).toMatchObject({ code: 0, stdout: expect.stringContaining('dsh-superagent stopped') })
 }, 20_000)
@@ -154,7 +154,7 @@ it('keeps only the newest logs it wrote for the profile', async () => {
   const logs = readdirSync(join(root, '.artifacts'))
   const own = logs.filter(name => name.startsWith('dsh-superagent-superagent-')).sort()
   expect(own).toHaveLength(20)
-  // The oldest went; the new one stays, with the newest earlier ones. Another profile's logs and older names stay.
+  // 最旧的日志被删除；新日志保留，并保留最新的若干较早日志。其他配置文件的日志和旧命名保留。
   expect(own).not.toContain('dsh-superagent-superagent-20260901-000000-1.log')
   expect(own.filter(name => !name.startsWith('dsh-superagent-superagent-20260901-'))).toHaveLength(1)
   expect(logs.filter(name => name.startsWith('dsh-superagent-other-'))).toHaveLength(25)
@@ -200,7 +200,7 @@ it('restarts the service, and a restart whose graceful stop timed out does not k
   expect(restarted.stdout).not.toContain('Automatic recovery is paused')
   expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(false)
   expect(readFileSync(join(control('superagent'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
-  // A service that does not stop in time is left running, and the next check may restart it.
+  // 未能及时停止的服务会保持运行，下一次检查可以重启它。
   rmSync(join(root, 'launched'))
   processes(`ghost:${sleeper()} node node /opt/dsh --profile superagent --no-open`)
   expect(await run('restart', '--url', url, '--timeout', '10', '--stop-timeout', '1'))
@@ -253,7 +253,7 @@ it('does not signal a process that took the recorded service PID, and keeps a st
   writeFileSync(join(control('superagent'), 'service.pid'), `${other}\n`)
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 0 })
   expect(() => process.kill(other, 0)).not.toThrow()
-  // A service that does not stop in time keeps the stop, so recovery does not start it again.
+  // 未能及时停止的服务会保留停止标记，因此恢复流程不会再次启动它。
   rmSync(join(control('superagent'), 'manually-stopped'))
   processes(`ghost:${sleeper()} node node /opt/my tools/dsh --profile superagent --no-open`)
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })

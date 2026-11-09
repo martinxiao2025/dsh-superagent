@@ -1,4 +1,4 @@
-/** GitHub source kind definition, notification and repository polling loops, and Cordis plugin entry. */
+/** GitHub 来源种类定义、通知与仓库轮询循环，以及 Cordis 插件入口。 */
 import type { Context } from '@deepseek-ai/cordis'
 import { key, type Thread } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
@@ -19,7 +19,7 @@ import { z } from 'zod'
 export { pollFailure } from './poll.ts'
 
 export { commentTrigger, type GithubComment } from './github-trigger.ts'
-/** A notification of the agent account; `subject.url` is the API address of its Issue or PR. */
+/** 智能体账号的通知；`subject.url` 是其 Issue 或 PR 的 API 地址。 */
 const NotificationSchema = z.looseObject({
   repository: z.looseObject({ full_name: z.string() }), subject: z.looseObject({ url: z.string().nullish() }),
 })
@@ -50,12 +50,12 @@ export const githubKind: SourceKind<GithubConfig> = {
       hint: { zh: '打开后，Issue 和 PR 上没有 @ 智能体的评论和代码评论也会收到，由策略的接收表决定是否成为候选。', en: 'Comments and review comments on Issues and PRs that do not mention the agent are received too, and the Policy\'s admission table decides whether they become candidates.' } },
     { key: 'observeCi', type: 'switch', label: { zh: '接收默认分支的 CI', en: 'Receive the default branch\'s CI' },
       hint: { zh: '打开后，默认分支的 CI 失败和恢复会收到，由策略的接收表决定是否成为候选。', en: 'Failures of the default branch\'s CI, and its recovery, are received, and the Policy\'s admission table decides whether they become candidates.' } }],
-  // What the Source observes across the repository it receives in full; elsewhere, only what addresses the agent.
+  // 来源在它完整接收的仓库范围内观察什么；其他位置只观察针对智能体的内容。
   scope: ({ meta }, config) => forgeScope(meta, config, OBSERVED),
   health: ['github'],
   channel: { send: sendGithub, link: githubLink },
   threadContext: githubThreadContext,
-  // `#12`, `12`, or the page of an Issue or PR, of any repository, names Thread 12.
+  // `#12`、`12` 或任意仓库中 Issue/PR 的页面都指向线程 12。
   find: query => {
     const number = (/^#?(\d+)$/.exec(query.trim()) ?? /github\.com\/[^/]+\/[^/]+\/(?:pull|issues)\/(\d+)/.exec(query))?.[1]
     return { threads: number ? [`${SOURCE}:${number}`] : [], terms: [] }
@@ -104,7 +104,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const source = sourceContext(ctx.orchestrator, githubKind)
     const controller = new AbortController()
-    // Unhandled rejections terminate the DSH process, so a failure escaping the polling loop is reported as source health instead.
+    // 未处理的 Promise 拒绝会终止 DSH 进程，因此逃出轮询循环的失败改为报告为来源健康状态。
     const running = watch(source, controller.signal)
       .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
     return async () => { controller.abort(); await running }
@@ -114,7 +114,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   let interval = 60
   let failures = 0
   await ctx.ready
-  // Setup restarts dsh-superagent once it resolves the accounts; until then nothing is polled.
+  // 设置解析出账号后会重启 dsh-superagent；在此之前不轮询任何内容。
   if (!ctx.configured()) { ctx.report('github', health('paused', 'setupPending')); return }
   while (!signal.aborted) {
     const config = ctx.config<GithubConfig>(SOURCE)
@@ -140,9 +140,9 @@ const newRound = (signal?: AbortSignal): Round => ({ started: new Date().toISOSt
 const stopped = (ctx: SourceContext, round: Round): boolean => !!round.signal?.aborted || !ctx.config(SOURCE)
 export interface Retry { since: string; pr: boolean; failedAt?: string; attempts?: number }
 const RETRY_WINDOW_MS = 24 * 3600_000
-/** True when GitHub returns HTTP 410 (Gone); HTTP 404 is retried because it can indicate revoked access to a private repository. */
+/** GitHub 返回 HTTP 410（Gone）时为 true；HTTP 404 会重试，因为它可能表示私有仓库的访问权限被撤销。 */
 const deleted = (error: unknown): boolean => error instanceof CliError && error.code === 410
-/** Records a failed read on the Thread and in the round; deleted (410) or abandoned (24h+) threads do not fail the round. */
+/** 在线程和本轮中记录一次失败读取；已删除（410）或已放弃（24 小时以上）的线程不会让本轮失败。 */
 function failed(ctx: SourceContext, round: Round, number: number, error: unknown, abandoned = false): void {
   if (deleted(error)) round.dropped.push(number)
   else if (abandoned) round.abandoned.push(number)
@@ -155,13 +155,13 @@ function included(raw: string): { headers: string; body: string } {
   return { headers: raw.slice(0, split), body: raw.slice(split).trim() }
 }
 const ListedSchema = CommentSchema.extend({ issue_url: z.string().nullish(), pull_request_url: z.string().nullish() })
-/** Repository-wide event streams; GitHub's `/issues` endpoint includes PRs, and `/issues/comments` covers issue and PR conversation comments (excluding inline review comments). */
+/** 仓库级事件流；GitHub 的 `/issues` 端点包含 PR，`/issues/comments` 覆盖 Issue 和 PR 的会话评论（不含行内代码评论）。 */
 const STREAMS = [
   { id: 'issues', observed: (config: GithubConfig) => config.observeIssues || config.observePulls, path: 'issues?state=all' },
   { id: 'comments', observed: (config: GithubConfig) => config.observeComments, path: 'issues/comments?' },
   { id: 'review-comments', observed: (config: GithubConfig) => config.observeComments, path: 'pulls/comments?' },
 ] as const
-/** Polls repository-wide streams (new Issues/PRs, comments, default-branch CI); each stream reads from when it was switched on, resets when switched off, and fails independently. */
+/** 轮询仓库级事件流（新 Issue/PR、评论、默认分支 CI）；每个流从打开开关时开始读取，关闭时重置，并独立失败。 */
 async function pollRepository(ctx: SourceContext, round: Round): Promise<void> {
   const config = ctx.config<GithubConfig>(SOURCE)
   if (!config) return
@@ -171,7 +171,7 @@ async function pollRepository(ctx: SourceContext, round: Round): Promise<void> {
     try { await readStream(ctx, round, stream.id, stream.path, config) }
     catch (error) { if (!stopped(ctx, round)) round.failures.push(`${stream.id}: ${String(error)}`) }
   }
-  // When CI observation is turned off, clear the failure baseline but preserve the revision counter so future triggers have unique IDs.
+  // 关闭 CI 观察时清除失败基线，但保留修订号计数器，以便后续触发器拥有唯一 ID。
   if (!config.observeCi) {
     const seen = ctx.state.get(KV.github.branchCi)
     ctx.state.set(KV.github.branchCi, seen && { revision: seen.revision })
@@ -181,10 +181,10 @@ async function pollRepository(ctx: SourceContext, round: Round): Promise<void> {
   catch (error) { if (!stopped(ctx, round)) round.failures.push(`default branch CI: ${String(error)}`) }
 }
 /**
- * Polls one repository-wide event stream (oldest first) since its cursor and steps the cursor to five seconds before the
- * newest item (`cursorAt`), relying on Trigger ID deduplication so repeated messages are no-ops. While the cursor stays
- * unchanged (including when clamped to the hourly horizon), sending the last page's ETag makes an unchanged list return
- * HTTP 304 and cost no rate limit. Items from before their kind was switched on or beyond the horizon are ignored.
+ * 从游标开始轮询一个仓库级事件流（最早的在前），并把游标推进到最新条目之前五秒（`cursorAt`），
+ * 依靠触发器 ID 去重，使重复消息成为空操作。游标保持不变时（包括被限制到每小时时间窗时），
+ * 发送上一页的 ETag 会让未变化的列表返回 HTTP 304，不消耗速率限制。早于对应类型开关打开时间
+ * 或超出时间窗的条目会被忽略。
  */
 async function readStream(ctx: SourceContext, round: Round, id: string, path: string, config: GithubConfig): Promise<void> {
   const name = KV.github.stream(id)
@@ -208,7 +208,7 @@ async function readStream(ctx: SourceContext, round: Round, id: string, path: st
   const fresh = (at: string | null | undefined, kind: string) =>
     kind in started && Date.parse(at ?? '') >= Math.max(Date.parse(started[kind]!), horizon)
   for (const item of items) {
-    // Stopping mid-stream aborts before advancing the cursor so unread items are retried.
+    // 中途停止会在推进游标前中止，以便未读取的条目被重试。
     if (stopped(ctx, round)) throw new Error('The GitHub Source stopped during the poll')
     if (sameName(item.user.login, login)) continue
     if (id === 'issues') {
@@ -230,21 +230,21 @@ async function readStream(ctx: SourceContext, round: Round, id: string, path: st
   const moved = Number.isFinite(newest) ? cursorAt(new Date(newest).toISOString()) : since
   const next = Date.parse(moved) > Date.parse(since) ? moved : since
   const etag = /^etag:\s*(.+)$/im.exec(headers)?.[1]?.trim()
-  // The ETag belongs to this request, which the next round repeats only while the cursor stays unchanged.
+  // ETag 属于本次请求，只有游标保持不变时下一轮才会重复该请求。
   ctx.state.set(name, { since: next, started, ...etag && next === since ? { etag } : {} })
 }
-/** Polls default-branch CI checks, emitting a trigger only when the set of failing checks changes after the initial baseline. */
+/** 轮询默认分支的 CI 检查，仅在初始基线之后失败检查集合发生变化时发出触发器。 */
 async function pollBranchCi(ctx: SourceContext, round: Round): Promise<void> {
   const commands = ctx.commands.withSignal(round.signal)
   const { default_branch: branch } = await commands.api(z.looseObject({ default_branch: z.string() }), '')
   const head = await commands.api(z.looseObject({ sha: z.string() }), `commits/${encodeURIComponent(branch)}`)
   const snapshot = await pullChecks(commands, head.sha, round.tally)
   const previous = ctx.state.get(KV.github.branchCi)
-  // The first observation after switching on or renaming the default branch establishes the baseline.
+  // 打开开关或重命名默认分支后的首次观察会建立基线。
   const known = previous?.branch === branch ? previous.failures : undefined
   const failures = ciFailures(snapshot)
   const counts = ciCounts(snapshot)
-  // Retain previous failures while checks are still running so recovery is reported only once all checks pass.
+  // 检查仍在运行时保留之前的失败，以便只在所有检查通过后报告恢复。
   const now = failures.length || !counts.running ? failures : known ?? []
   let revision = previous?.revision ?? 0
   if (known && JSON.stringify(now) !== JSON.stringify(known)) {
@@ -257,11 +257,11 @@ async function pollBranchCi(ctx: SourceContext, round: Round): Promise<void> {
   ctx.state.set(KV.github.branchCi, { branch, failures: now, revision })
 }
 /**
- * One polling round: notifications, then observed repository streams, then the PRs of open tickets with their CI, then
- * subscribed Threads. Each step and each Issue, PR, or Thread fails independently so all steps run before the round fails.
- * Other read failures (including 404) fail the round toward the error threshold, whereas deleted (410) or abandoned
- * (24h+) threads are recorded only on the thread and in health detail.
- * @returns the polling interval requested by GitHub, in seconds.
+ * 一次轮询：先通知，再观察仓库事件流，然后处理未关闭工单的 PR 及其 CI，最后处理已订阅线程。
+ * 每个步骤以及每个 Issue、PR 或线程都独立失败，因此所有步骤都会执行完，本轮才失败。
+ * 其他读取失败（包括 404）会让本轮失败并逼近错误阈值，而已删除（410）或已放弃
+ * （24 小时以上）的线程只记录在线程和健康详情中。
+ * @returns GitHub 请求的轮询间隔，单位为秒。
  */
 export async function pollRound(ctx: SourceContext, signal?: AbortSignal): Promise<number> {
   const round = newRound(signal)
@@ -280,7 +280,7 @@ export async function pollRound(ctx: SourceContext, signal?: AbortSignal): Promi
   ctx.report('github', { state: 'ready', detail: `${count} notifications; next poll ≥ ${interval}s${dropped}`, at: round.started })
   return interval
 }
-/** Reads notifications since the cursor and each Issue or PR they name, advancing the cursor atomically with the retry map for failed reads; deleted (410) Issues are dropped once their error is recorded. */
+/** 读取游标以来的通知及其指向的每个 Issue 或 PR，并与失败读取的重试映射一起原子推进游标；已删除（410）的 Issue 在记录错误后被丢弃。 */
 async function pollNotifications(ctx: SourceContext, round: Round): Promise<{ count: number; interval: number }> {
   const { state } = ctx
   const commands = ctx.commands.withSignal(round.signal)
@@ -299,7 +299,7 @@ async function pollNotifications(ctx: SourceContext, round: Round): Promise<{ co
     ? await commands.pages(NotificationSchema, path, round.tally)
     : validItems(NotificationSchema, z.array(z.unknown()).parse(JSON.parse(body)), round.tally)
   const retries = { ...state.get(KV.github.retries) }
-  // Failed items from the previous round run first, followed by newly notified items in chronological order; each is read once.
+  // 上一轮失败的条目先运行，随后是按时间顺序新通知的条目；每项只读取一次。
   const items = new Map(Object.entries(retries).map(([number, retry]) => [Number(number), retry]))
   for (const notification of notifications.reverse()) {
     if (!sameName(notification.repository.full_name, repository)) continue
@@ -317,7 +317,7 @@ async function pollNotifications(ctx: SourceContext, round: Round): Promise<{ co
     } catch (error) {
       if (stopped(ctx, round)) return { count: notifications.length, interval }
       const retry = { ...item, failedAt: item.failedAt ?? round.started, attempts: (item.attempts ?? 0) + 1 }
-      // Abandon notification retries after 24 hours of failures so a permanently unreadable thread does not hold source health in error; its cursor stays so a later notification or thread poll still reads what was missed.
+      // 失败持续 24 小时后放弃通知重试，避免永久不可读的线程让来源健康一直处于错误；游标保留，以便之后的通知或线程轮询仍能读取遗漏内容。
       const abandoned = Date.parse(round.started) - Date.parse(retry.failedAt) >= RETRY_WINDOW_MS
       failed(ctx, round, number, error, abandoned)
       if (!deleted(error) && !abandoned) { retries[number] = retry; continue }
@@ -332,11 +332,11 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
   let isPr = item.pr
   if (!isPr) {
     const issue = await ctx.commands.withSignal(round.signal).api(IssueSchema, `issues/${number}`)
-    // `issues/<n>` also returns PRs with `pull_request` set; handle them in the PR branch below.
+    // `issues/<n>` 也会返回设置了 `pull_request` 的 PR；在下面的 PR 分支中处理它们。
     isPr = !!issue.pull_request
     if (!isPr) {
-      // An Issue opened by someone other than the agent since the cursor brings its body so a mention in it reaches the gate.
-      // A mention added by a later edit to the body is not read: only the author can be the actor of the body.
+      // 游标以来由他人而非智能体打开的 Issue 会带上正文，使正文中的 @ 能进入准入判断。
+      // 之后通过编辑正文添加的 @ 不会被读取：只有作者才能作为正文的行为者。
       const { login } = ctx.deployment.github
       const opened = Date.parse(issue.created_at) >= Date.parse(since) && !sameName(issue.user.login, login)
       if (opened) await ctx.receive(issueTrigger(issue, login))
@@ -346,7 +346,7 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
   }
   if (isPr) {
     const pr = await pull(ctx, round, number)
-    // Emit a PR description trigger for PRs opened since the cursor; its ID is the same as the one produced by the repository PR stream.
+    // 为游标以来打开的 PR 发出 PR 描述触发器；其 ID 与仓库 PR 流产生的一致。
     const { login } = ctx.deployment.github
     if (pr.created_at && Date.parse(pr.created_at) >= Date.parse(since) && !sameName(pr.user.login, login)) {
       const opened = { number, title: pr.title ?? '', body: pr.body, user: pr.user, created_at: pr.created_at, html_url: pr.html_url }
@@ -358,7 +358,7 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
   ctx.state.set(KV.github.cursor(number), cursorAt(round.started))
   ctx.threads.patch(`github:${number}`, { pollError: undefined })
 }
-/** Reads and observes a PR at most once per polling round. */
+/** 每轮轮询最多读取并观察一个 PR 一次。 */
 function pull(ctx: SourceContext, round: Round, number: number): Promise<Pull> {
   let read = round.pulls.get(number)
   if (!read) {
@@ -376,12 +376,12 @@ async function intakeComments(ctx: SourceContext, ref: PullRef, since: string, r
     const path = kind === 'conversation' ? `issues/${ref.number}/comments?per_page=100${suffix}` : kind === 'inline' ? `pulls/${ref.number}/comments?per_page=100${suffix}` : `pulls/${ref.number}/reviews?per_page=100`
     const comments = await commands.pages(CommentSchema, path, round.tally)
     for (const comment of comments) {
-      // Stopping mid-read throws so the thread's cursor stays where it was.
+      // 读取中途停止会抛出，以便线程游标保持原处。
       if (stopped(ctx, round)) throw new Error('The GitHub Source stopped during the poll')
       const timestamp = Date.parse(comment.updated_at ?? comment.submitted_at ?? comment.created_at ?? '')
       if (!Number.isFinite(timestamp) || timestamp < Date.parse(since)) continue
       if (sameName(comment.user.login, login)) continue
-      // A review decision without a body still reaches the ticket: a worker may be waiting for that approval.
+      // 没有正文的评审决定仍会进入工单：worker 可能正在等待该批准。
       const trigger = commentTrigger(comment, ref, kind, login)
       if (trigger.text) await ctx.receive(trigger)
     }
@@ -397,7 +397,7 @@ export async function pollTicketPulls(ctx: SourceContext, signal?: AbortSignal, 
     } catch (error) { if (!stopped(ctx, round)) failed(ctx, round, number, error) }
   }
 }
-/** Polls a PR's CI checks; only changes after the first baseline observation become Triggers. */
+/** 轮询 PR 的 CI 检查；只有首次基线观察之后的变化才会成为触发器。 */
 async function pollChecks(ctx: SourceContext, round: Round, number: number, pr: Pull): Promise<void> {
   const snapshot = await pullChecks(ctx.commands.withSignal(round.signal), pr.head.sha, round.tally)
   const fingerprint = key(JSON.stringify(snapshot))
@@ -412,7 +412,7 @@ function nameThread(ctx: SourceContext, number: number, title: string): void {
   ctx.threads.patch(`github:${number}`, { title })
   ctx.threads.describe(`github:${number}`, { label: `#${number} ${title}`, facts: { number: { value: `#${number}` } } })
 }
-/** Polls subscribed Issue and PR Threads not already read in this round; a deleted (410) Issue is still polled within the horizon (costing one read) and does not fail the round. */
+/** 轮询尚未在本轮读取的已订阅 Issue 和 PR 线程；已删除（410）的 Issue 在时间窗内仍会轮询（消耗一次读取），且不会让本轮失败。 */
 export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, round = newRound(signal)): Promise<void> {
   await pollEach(ctx, SOURCE, () => stopped(ctx, round), async thread => {
     try { await pollThread(ctx, round, thread) }
@@ -424,7 +424,7 @@ export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, roun
   }, thread => round.read.has(Number(thread.ref.id)))
 }
 async function pollThread(ctx: SourceContext, round: Round, thread: Thread): Promise<void> {
-  // The default branch's CI Thread has no Issue or PR to read; its CI arrives as Triggers.
+  // 默认分支的 CI 线程没有可读取的 Issue 或 PR；它的 CI 以触发器形式到达。
   if (thread.ref.id.startsWith('ci:')) return
   const number = Number(thread.ref.id)
   if (!number) throw new Error('Subscribed thread has no GitHub issue or PR number')

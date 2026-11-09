@@ -1,47 +1,47 @@
 /**
- * Typed key-value store keys and key families grouped by the single component that owns and writes each family.
- * Readers and writers refer to a record by its entry here so each key is spelled once with its value type.
+ * 类型化的键值存储键，以及按拥有并写入各族的单一组件分组的键族。
+ * 读写方通过这里的条目引用记录，使每个键只以带值类型的形式拼写一次。
  */
 import type { PromptVersion } from './app/prompts.ts'
 import type { SettingsVersion } from './app/store.ts'
 import type { SettingsSave } from './policy.ts'
 import type { Retry } from './sources/github.ts'
 
-/** Key of a KV record whose value has type `V`; a plain string represents an untyped key. */
+/** 值为类型 `V` 的 KV 记录的键；普通字符串表示无类型的键。 */
 export type Key<V> = string & { readonly __value?: V }
-/** Family of KV records sharing a prefix: callable to build a key from its name parts, and exposing `prefix` for listing. */
+/** 共享前缀的 KV 记录族：可调用以由名称各部分构建键，并暴露用于列举的 `prefix`。 */
 export type Family<V, A extends unknown[]> = ((...name: A) => Key<V>) & { readonly prefix: string }
-/** Define a single typed KV key; external Source plugins use `record` and `family` to type their own keys. */
+/** 定义单个类型化 KV 键；外部来源插件用 `record` 和 `family` 为自己的键指定类型。 */
 export const record = <V>(key: string) => key as Key<V>
-/** Define a KV key family whose keys join `prefix` and name parts with `:` (or a custom `format`). */
+/** 定义 KV 键族，其键以 `:`（或自定义 `format`）连接 `prefix` 和名称各部分。 */
 export function family<V, A extends unknown[] = [string]>(prefix: string, format = (...name: A) => name.join(':')): Family<V, A> {
   return Object.assign((...name: A) => `${prefix}${format(...name)}` as Key<V>, { prefix })
 }
 
 export const KV = {
-  /** Store: current database schema version. */
+  /** 存储：当前数据库 schema 版本。 */
   store: { schema: record<number>('schema') },
-  /** Settings: current revision, per-block revision, and saved settings snapshots (including the current one). */
+  /** 设置：当前修订号、按块的修订号，以及已保存的设置快照（包括当前快照）。 */
   settings: { revision: record<number>('settings-revision'),
     block: family<number, [block: SettingsSave]>('settings-block-revision:'),
     version: family<SettingsVersion, [revision: number]>('settings-version:') },
-  /** Prompts: current revision and saved prompt versions. */
+  /** 提示词：当前修订号和已保存的提示词版本。 */
   prompts: { revision: record<number>('prompt-revision'), version: family<PromptVersion, [revision: number]>('prompt-version:'),
-    /** The built-in text of a prompt part an override was edited from, by its `base`, which shows what an upgrade changed. */
+    /** 被覆盖编辑过的提示词部件的内置文本，按 `base` 存放，用于显示升级带来的变化。 */
     builtIn: family<string, [base: string]>('prompt-built-in:') },
-  /** Runtime: the main Session's ID. */
+  /** 运行时：主会话的 ID。 */
   runtime: { masterId: record<string>('master-id') },
-  /** Sessions: prompt revisions each Session has worked under, ordered oldest first; the last entry (`.at(-1)`) is its active revision. */
+  /** 会话：每个会话工作过的提示词修订号，按从旧到新排列；最后一项（`.at(-1)`）是其活动修订号。 */
   sessions: { prompts: family<number[], [session: string]>('session-prompts:') },
-  /** Schema 11 migration: legacy main-Session queues imported into the effect table. */
+  /** Schema 11 迁移：导入到效果表中的遗留主会话队列。 */
   queues: { relays: record<{ id: string; text: string }[]>('relay-queue'), unsubscribed: record<string[]>('subscription-results'),
     prompts: record<number | null>('prompt-notification'), settings: record<number | null>('settings-notification') },
-  /** Per-Source resolved display names mapping a named ID (such as a Feishu chat ID) to its display name. */
+  /** 按来源解析的显示名称，把有名称的 ID（例如飞书会话 ID）映射到其显示名称。 */
   sources: { labels: family<Record<string, string>, [source: string]>('source-labels:') },
   /**
-   * GitHub Source: notification cursor and pending retries; per-Issue/PR read cursor shared by notification and polled reads;
-   * per-stream cursor, start times by kind, and ETag; default-branch CI state; and per-PR CI fingerprint and revision (`revision`
-   * counts reported CI changes so each produces a distinct Trigger ID).
+   * GitHub 来源：通知游标和待处理重试；按 Issue/PR 记录的读取游标，由通知读取和轮询读取共用；
+   * 按流记录的游标、按类型记录的启动时间，以及 ETag；默认分支 CI 状态；以及按 PR 记录的 CI 指纹和修订号
+   * （`revision` 统计已报告的 CI 变化次数，使每次变化都产生不同的触发器 ID）。
    */
   github: { since: record<string>('github-since'), retries: record<Record<string, Retry>>('github-retry'),
     cursor: family<string, [number: number]>('github-cursor:'),
@@ -49,8 +49,8 @@ export const KV = {
     branchCi: record<{ branch?: string; failures?: string[]; revision: number }>('github-branch-ci'),
     ci: family<{ fingerprint: string; revision: number }, [number: number]>('github-ci:') },
   /**
-   * Feishu Source: known chats (`true` for direct messages); per-chat history cursor and active topics mapped from topic ID
-   * to last-seen timestamp; and per-polled-thread seen message IDs and initialization flag.
+   * 飞书来源：已知会话（私聊为 `true`）；按会话记录的历史游标，以及把话题 ID 映射到最近可见时间戳的活动话题；
+   * 以及按轮询线程记录的已见消息 ID 和初始化标记。
    */
   feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),

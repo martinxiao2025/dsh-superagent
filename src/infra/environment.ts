@@ -1,7 +1,7 @@
 /**
- * Process environment and CLI shims that bind git, gh, and lark-cli to the deployment's accounts and block disallowed commands.
- * Variables read by workers avoid `KEY|PASSWORD|SECRET|TOKEN` in their names because DSH strips credential-shaped variables from child environments.
- * Provides default-path guardrails rather than an OS-level security boundary, as workers run under the operator's OS user.
+ * 进程环境与 CLI 垫片：把 git、gh 和 lark-cli 绑定到部署的账号，并阻止被禁用的命令。
+ * 工作单元读取的变量名避免出现 `KEY|PASSWORD|SECRET|TOKEN`，因为 DSH 会从子进程环境中剥离形如凭据的变量。
+ * 这里提供的是默认路径防护栏，而非操作系统级安全边界，因为工作单元以运维者的 OS 用户身份运行。
  */
 import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -12,9 +12,9 @@ import { SetupError } from '../setup.ts'
 import { CliError } from './commands.ts'
 
 const MARKER = '# Written by dsh-superagent on every start; edits are lost.'
-/** Markers of files written under the project's earlier names (`dsh-tag`, `dsh-go`, `dsh-freelancer`), which `dsh-superagent` owns and replaces too. */
+/** 项目早先名称（`dsh-tag`、`dsh-go`、`dsh-freelancer`）下写入文件的标记，`dsh-superagent` 也拥有并会替换这些文件。 */
 const LEGACY_MARKERS = ['dsh-tag', 'dsh-go', 'dsh-freelancer'].map(name => `# Written by ${name} on every start; edits are lost.`)
-/** Commands workers need, which `blockedCommands` cannot block: the shims and git. */
+/** 工作单元需要的命令，`blockedCommands` 无法屏蔽它们：垫片和 git。 */
 export const WORKER_COMMANDS: readonly string[] = ['gh', 'git', 'lark-cli']
 export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bin')
 export const workerGitConfig = (stateDir: string): string => join(stateDir, 'worker-gitconfig')
@@ -29,48 +29,48 @@ export function sameDirectory(a: string, b: string): boolean {
 export function withoutDirectory(path: string, dir: string): string {
   return path.split(delimiter).filter(entry => !sameDirectory(entry, dir)).join(delimiter)
 }
-/** The argv for running `command` in a shell: `sh -c` on POSIX, and cmd's `/c` on Windows, which has no `sh`. */
+/** 在 shell 中运行 `command` 的 argv：POSIX 上用 `sh -c`，Windows 上用 cmd 的 `/c`（Windows 没有 `sh`）。 */
 export const shellArgv = (command: string): string[] => process.platform === 'win32'
   ? [process.env.ComSpec ?? 'cmd.exe', '/d', '/s', '/c', command]
   : ['sh', '-c', command]
 
 /**
- * The variables that tell git which repository, work tree and index to act on. A host started inside git, such as by
- * `git rebase --exec`, passes them on, and a git started below it would act on that repository. GIT_CEILING_DIRECTORIES is
- * kept: it names no repository, and it stops git's search for one where the operator chose.
+ * 告诉 git 要操作哪个仓库、工作树和索引的变量。在 git 内部启动的宿主（例如通过 `git rebase --exec`）会把它们传下去，
+ * 而在其下启动的 git 会作用到那个仓库。GIT_CEILING_DIRECTORIES 被保留：它不指名任何仓库，
+ * 并会让 git 在运维者选定的位置停止向上搜索仓库。
  */
 export const GIT_LOCATION: readonly string[] = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_PREFIX', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE']
 
 /**
- * Returns environment variable overrides that strip ambient GitHub tokens, interactive prompts, the repository the host's own
- * environment may name, and operator git identity/config overrides.
+ * 返回环境变量覆盖项，用于剥离环境中的 GitHub 令牌、交互式提示、宿主自身环境可能指明的仓库，
+ * 以及运维者的 git 身份/配置覆盖项。
  */
 export function agentVariables(stateDir: string): Record<string, string | undefined> {
   return {
     GH_TOKEN: undefined, GITHUB_TOKEN: undefined,
-    // A worker's git finds the repository from its directory, never from the host's environment.
+    // 工作单元的 git 从其目录查找仓库，而绝不从宿主环境获取。
     ...Object.fromEntries(GIT_LOCATION.map(name => [name, undefined])),
     GIT_CONFIG_GLOBAL: workerGitConfig(stateDir), GIT_CONFIG_NOSYSTEM: '1',
-    // Clear environment git config overrides; configuration passed through the environment would otherwise reach every git command the agent runs.
+    // 清除环境中的 git 配置覆盖项；否则通过环境传入的配置会到达智能体运行的每条 git 命令。
     GIT_CONFIG_COUNT: undefined, GIT_CONFIG_PARAMETERS: undefined,
-    // When the credential helper has no answer, git must fail rather than prompt; `GIT_ASKPASS: ''` also overrides `core.askPass` and `SSH_ASKPASS`.
+    // 当凭据助手没有答案时，git 必须失败而不是弹出提示；`GIT_ASKPASS: ''` 也会覆盖 `core.askPass` 和 `SSH_ASKPASS`。
     GIT_ASKPASS: '', SSH_ASKPASS: undefined, GIT_TERMINAL_PROMPT: '0',
-    // Clear operator commit identity variables; prompts specify commit identity and operator env vars would override what a worker sets.
+    // 清除运维者的提交身份变量；提示词会指定提交身份，而运维环境变量会覆盖工作单元设置的值。
     GIT_AUTHOR_NAME: undefined, GIT_COMMITTER_NAME: undefined, GIT_AUTHOR_EMAIL: undefined, GIT_COMMITTER_EMAIL: undefined,
   }
 }
 
-/** True when a regular file starts with the dsh-superagent marker in its first two lines; a symbolic link, directory, or other non-regular file never counts as written by dsh-superagent. */
+/** 当普通文件的前两行包含 dsh-superagent 标记时为 true；符号链接、目录或其他非普通文件永远不会被视为由 dsh-superagent 写入。 */
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
   const head = (await readFile(file, 'utf8')).split('\n', 2).map(line => line.replace(/\r$/, ''))
-  // A batch shim marks itself with `rem`, which `cmd` ignores and which keeps the marker in the second line.
+  // 批处理垫片用 `rem` 标记自身，`cmd` 会忽略它，因此标记仍位于第二行。
   return [MARKER, ...LEGACY_MARKERS].flatMap(marker => [marker, `rem ${marker}`]).some(marker => head.includes(marker))
 }
 async function own(file: string, text: string, mode = 0o644): Promise<void> {
   let foreign = false
-  try { foreign = !await written(file) } catch { /* The file does not exist yet. */ }
+  try { foreign = !await written(file) } catch { /* 文件尚不存在。 */ }
   if (foreign) throw new SetupError('foreignFile', { file })
   const temporary = `${file}.${process.pid}.tmp`
   await writeFile(temporary, text, { mode })
@@ -78,22 +78,22 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
 }
 
 /**
- * The file name of a worker shim. Windows starts only files that a `PATHEXT` extension names, so shims are
- * batch files there; a POSIX shell resolves the extensionless name.
+ * 工作单元垫片的文件名。Windows 只能启动 `PATHEXT` 扩展名所列的文件，因此那里的垫片是
+ * 批处理文件；POSIX shell 会解析无扩展名的名称。
  */
 export const shimFile = (name: string): string => process.platform === 'win32' ? `${name}.cmd` : name
-/** A batch shim: `cmd` ignores the first line and the marker line, then the body runs. */
+/** 批处理垫片：`cmd` 忽略第一行与标记行，然后执行正文。 */
 const batch = (body: readonly string[]): string => ['@echo off', `rem ${MARKER}`, ...body].join('\r\n') + '\r\n'
-/** POSIX lines that drop the shim directory from PATH; the shim directory is written in, exactly as PATH names it. */
+/** 从 PATH 中移除垫片目录的 POSIX 行；垫片目录按 PATH 中的写法原样写入。 */
 const posixWithoutShims = (dir: string): string[] => [
   `self=${shellQuote(dir)}`, 'rest=', 'IFS=:', 'set -f',
   'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
   'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
 ]
 /**
- * Windows lines that drop the shim directory from PATH, comparing each entry's full path with the script's directory.
- * The accumulation runs in a subroutine, because `%rest%` inside a `for` block would be expanded once when the block is
- * parsed and every entry would overwrite the previous value, leaving only the last one.
+ * 从 PATH 中移除垫片目录的 Windows 行，逐项比较完整路径与脚本所在目录。
+ * 累加在子例程中执行，因为 `for` 块内的 `%rest%` 只会在解析块时展开一次，
+ * 每一项都会覆盖前一个值，最终只留下最后一项。
  */
 const WINDOWS_WITHOUT_SHIMS = [
   'set "self=%~dp0"', 'set "rest="',
@@ -106,23 +106,23 @@ const WINDOWS_WITHOUT_SHIMS = [
   ':dsh_run',
 ]
 /**
- * A shim body that runs `program` with the caller's arguments. The shim directory leaves PATH first so a wrapper
- * that calls `gh` by name reaches the real binary instead of this shim again.
+ * 用调用方的参数运行 `program` 的垫片正文。垫片目录先离开 PATH，这样按名称调用 `gh` 的包装脚本
+ * 会到达真实二进制，而不是再次回到这个垫片。
  */
 function shimRunning(program: string, dir: string): string {
   if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\n${posixWithoutShims(dir).join('\n')}\nexec ${shellQuote(program)} "$@"\n`
   return batch([...WINDOWS_WITHOUT_SHIMS, `"${program}" %*`, 'exit /b %ERRORLEVEL%'])
 }
-/** A shim body that prints `message` to standard error and exits 1, for a blocked command or an absent Feishu bot. */
+/** 把 `message` 打印到标准错误并以 1 退出，用于被屏蔽的命令或缺失的飞书机器人。 */
 function shimFailing(message: string): string {
   if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\necho ${shellQuote(message)} >&2\nexit 1\n`
-  // `echo(` prints the rest of the line as it stands, including a closing parenthesis, so the text ends the line.
+  // `echo(` 会原样打印该行剩余内容（包括右括号），因此文本会结束该行。
   return batch([`1>&2 echo(${message}`, 'exit /b 1'])
 }
 
 /**
- * Atomically writes worker CLI shims and the isolated git configuration file into the state directory, refusing to overwrite foreign files.
- * Each shim strips the shim directory from PATH before it runs its target so wrapper scripts resolving `gh` or `lark-cli` by name reach the real binary.
+ * 原子地把工作单元 CLI 垫片和隔离的 git 配置文件写入状态目录，拒绝覆盖外来文件。
+ * 每个垫片在运行目标前先从 PATH 移除垫片目录，这样按名称解析 `gh` 或 `lark-cli` 的包装脚本会到达真实二进制。
  */
 export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
   const { stateDir, repository, github, feishu } = deployment
@@ -130,7 +130,7 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   await mkdir(dir, { recursive: true })
   const before = await readdir(dir)
   for (const name of before) { const file = join(dir, name); if (!await written(file)) throw new SetupError('foreignFile', { file }) }
-  // Workers may be running concurrently: write each shim to a temp file and atomically rename it so no command ever resolves past the shim directory.
+  // 工作单元可能并发运行：把每个垫片写入临时文件再原子重命名，确保任何命令都不会绕过垫片目录解析到目标。
   const kept = new Set<string>()
   const shim = async (name: string, text: string): Promise<void> => {
     const file = shimFile(name)
@@ -147,17 +147,17 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
   await own(workerGitConfig(stateDir), [
     MARKER,
-    // Make git refuse to commit without an explicit identity set by the worker instead of guessing from the operator's OS user.
+    // 让 git 在没有工作单元显式设置身份时拒绝提交，而不是从运维者的 OS 用户猜测。
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
     '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
     '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
-    // Include Git LFS filters because the operator's global gitconfig (which usually holds them) is ignored.
+    // 包含 Git LFS 过滤器，因为运维者的全局 gitconfig（通常保存它们）被忽略。
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')
 }
 
-/** Applies environment overrides and prepends worker shims to `process.env.PATH`, returning a restore callback. */
+/** 应用环境覆盖项并把工作单元垫片前置到 `process.env.PATH`，返回恢复回调。 */
 export function applyEnvironment(variables: Record<string, string | undefined>, stateDir: string, path: string): () => void {
   const values = { ...variables, PATH: [workerBin(stateDir), path].join(delimiter) }
   const previous = Object.fromEntries(Object.keys(values).map(name => [name, process.env[name]]))
@@ -166,7 +166,7 @@ export function applyEnvironment(variables: Record<string, string | undefined>, 
   return () => { apply(previous) }
 }
 
-/** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables. */
+/** 通过 DSH 子进程运行时启动命令，该运行时会剥离形如凭据的环境变量。 */
 export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal, env?: Record<string, string>): Promise<string> {
   const handle = subprocess.spawn({ argv, cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
   const { exitCode } = await handle.done
@@ -176,21 +176,21 @@ export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[],
   throw new CliError(read(handle.collected.stderr).trim() || `${argv.join(' ')} ${ended}`, undefined, exitCode ?? undefined)
 }
 
-/** Verifies that worker git invocations resolve the deployment's GitHub credential helper. */
+/** 验证工作单元的 git 调用会解析到部署的 GitHub 凭据助手。 */
 export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 'stateDir'>, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
   const { github, stateDir } = deployment
-  // `-z` separates fields with NUL and never quotes paths.
+  // `-z` 用 NUL 分隔字段，且从不引用路径。
   const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
   if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(github.cli), ''].join('\0')) throw new SetupError('gitTooOld')
 }
 
 /**
- * Verifies that a ticket directory's local or worktree git config defines no custom `credential.*` or `http.*extraheader`
- * keys, which the agent's git would read from the repository's own config and act on.
+ * 验证工单目录的本地或工作树 git 配置未定义自定义的 `credential.*` 或 `http.*extraheader`
+ * 键，否则智能体的 git 会从仓库自身的配置读取并据此行动。
  */
 export async function verifyDirectory(directory: string, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
   const keys = ['git', 'config', '-z', '--show-scope', '--get-regexp', '^(credential\\..*|http\\..*extraheader)$']
-  // `git config --get-regexp` exits with code 1 when no keys match.
+  // 没有匹配的键时，`git config --get-regexp` 会以退出码 1 结束。
   const output = await runAsWorker(subprocess, keys, directory, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
     .catch((error: unknown) => { if (error instanceof CliError && error.exitCode === 1) return ''; throw error })
   const scoped = output.split('\0')

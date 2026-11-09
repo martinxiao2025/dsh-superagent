@@ -36,14 +36,14 @@ const drop = (id: string, channel: ChannelRef, ticketId?: string) => {
 }
 
 it('names the Thread of each dropped message: the one of the Trigger its Channel answers, or the Channel\'s own', () => {
-  // A Feishu Channel names its chat; the message it answers belongs to the Thread of the topic's root message.
+  // 飞书渠道标明其群聊；它所回复的消息属于话题根消息所在的线程。
   store.triggers.save({ id: feishuTriggerId('om_reply'), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
     actor: { source: 'feishu', id: 'ou_a' }, human: true, at: new Date().toISOString(), text: 'please', meta: {} })
   store.threads.save({ key: 'github:42', ref: { source: 'github', id: '42' }, createdAt: '', subscriptions: [], correlated: [], pending: [],
     meta: {} })
   drop('a', feishuChannel('oc_1', 'om_reply'))
   drop('b', githubChannel(42))
-  // A message whose Trigger and Thread the store no longer has links nowhere.
+  // 触发器与线程在存储中都已不存在的消息不会链接到任何地方。
   drop('c', feishuChannel('oc_2', 'om_gone'))
   expect(Object.fromEntries(droppedReplies({ store, links }).map(item => [item.id, item.thread])))
     .toEqual({ a: 'feishu:oc_1:om_root', b: 'github:42', c: undefined })
@@ -58,7 +58,7 @@ function views() {
   return { store, sources, links }
 }
 const at = new Date().toISOString()
-/** A live ticket with no Assignment, as a follow-up's owner needs one. */
+/** 一个没有派工的活跃工单，正如后续消息的所有者需要的那样。 */
 const live = (id: string) => store.tickets.save({ id, title: id, decisionId: 'd', channels: [], undelivered: [], createdAt: at,
   updatedAt: at,
   mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'listed' }, actor: { source: 'feishu', id: 'ou_alice' }, scope: '' },
@@ -93,7 +93,7 @@ it('classifies a Thread by what it is doing, and offers a filtered Trigger of a 
   const view = snapshot(host)
   expect(threadSummary(view, store.threads.get('feishu:oc_1:om_root')!).stage).toBe('queued')
   const rows = ['e1', 'e2', 'e3'].map(id => triggerView(view, store.triggers.get(id)!))
-  // A queued Trigger waits for Eval already, and an automated one is not offered.
+  // 已排队的触发器已经在等待评估，自动消息则不提供。
   expect(rows.map(row => row.actions.requeue)).toEqual([true, false, false])
   expect(rows[0]!.actor.name).toEqual({ zh: 'Alice', en: 'Alice' })
 })
@@ -146,7 +146,7 @@ it('does not show a follow-up that reached a ticket as waiting for an Eval, thou
   const view = snapshot(host)
   expect(threadSummary(view, store.threads.get('feishu:oc_1:om_root')!)).toMatchObject({ stage: 'subscribed', pending: 0 })
   expect(triggerView(view, store.triggers.get('f1')!).disposition.queued).toBe(false)
-  // One a person sent to Eval again waits for it.
+  // 有人再次发给评估的触发器会等待它。
   store.threads.save({ ...store.threads.get('feishu:oc_1:om_root')!, pending: ['f1', 'f2'] })
   expect(threadSummary(snapshot(host), store.threads.get('feishu:oc_1:om_root')!)).toMatchObject({ stage: 'queued', pending: 1 })
 })
@@ -169,7 +169,7 @@ it('lists an Eval past its deadline, and as dsh-superagent\'s own errors only pa
     'sync:feishu': error('sync failed'), evals: error('unavailable'), launch: { state: 'ready' as const, detail: '' } }
   const found = problems(host, health)
   expect(found).toContainEqual({ kind: 'eval-overdue', thread: expect.objectContaining({ key: 'github:1', stage: 'evaluating' }) })
-  // Effects are dsh-superagent's own; a Source shows its parts and its Policy sync, and the Evals are listed one by one.
+  // 效果属于 dsh-superagent 自身；来源显示其部件与策略同步，评估则逐条列出。
   expect(found.filter(item => item.kind === 'runtime-error')).toEqual([{ kind: 'runtime-error', name: 'relay', detail: 'relay failing' },
     { kind: 'runtime-error', name: 'reply', detail: 'reply failing' }])
   expect(found.filter(item => item.kind === 'source-error').map(item => item.source.health.name)).toEqual(['feishu', 'history'])
@@ -214,7 +214,7 @@ it('words each settings save by what it changed from the one before, and nothing
     { code: 'blockedCommands', from: '', to: 'rm curl' }, { code: 'sourceDisabled', source: 'feishu' }])
   expect(changes(revision)).toEqual([{ code: 'sourceRowsRemoved', source: 'feishu', part: true, field: 'allowed', items: ['Bob'] },
     { code: 'resumed' }, { code: 'sourceEnabled', source: 'feishu' }])
-  // A save whose predecessor is missing from the history has nothing to compare with.
+  // 历史中缺少前驱的保存没有可比较的内容。
   store.delete(KV.settings.version(revision))
   store.saveSettings({ ...store.settings(), paused: true })
   expect(changes(revision + 1)).toBeNull()
@@ -242,7 +242,7 @@ it('shows a follow-up that reached a ticket as delivered, the tickets that hande
   store.triggers.saveDisposition('f2', { fanout: ['t1'], requeued: true, handbacks: [{ ticketId: 't1', reason: 'Asks for a new feature', at }], at })
   const view = snapshot(host)
   expect(triggerView(view, store.triggers.get('f1')!).disposition).toMatchObject({ delivered: true, queued: false, handbacks: [] })
-  // A Trigger handed back goes to Eval as any message on its Thread; the Ticket that handed it back is named by its title once it has one.
+  // 被交回的触发器会像其线程上的任何消息一样进入评估；交回它的工单有标题后会以标题标出。
   expect(triggerView(view, store.triggers.get('f2')!).disposition).toMatchObject({ delivered: false,
     handbacks: [{ ticketId: 't1', title: 't1', reason: 'Asks for a new feature' }] })
   store.threads.save({ key: 'github:7', ref: { source: 'github', id: '7' }, createdAt: at, subscriptions: ['t1'], context: ['t1'],
@@ -280,20 +280,20 @@ it('offers a person to send a follow-up to Eval while a ticket decides it, or on
   store.triggers.saveDisposition('f1', { fanout: ['t1'], at })
   const row = () => triggerView(snapshot(host), store.triggers.get('f1')!)
   expect(row()).toMatchObject({ actions: { requeue: true }, disposition: { delivered: true } })
-  // A ticket that ended after its worker had it leaves it to nobody: a person may still send it to Eval.
+  // 工单在其 worker 处理过后结束，就不再交由任何人处理：人仍可把它发给评估。
   store.tickets.save({ ...store.tickets.get('t1')!, ended: { at, by: 'executor', reason: 'done', outcome: 'completed' } })
   expect(row()).toMatchObject({ actions: { requeue: true }, disposition: { delivered: false } })
-  // Not once its worker acknowledged it, which took it up; a stop on it decided only the ticket's work.
+  // 但 worker 确认接收并接手后就不行；对它停止只决定了工单的工作。
   store.triggers.saveDisposition('f1', { fanout: ['t1'], acked: ['t1'], at })
   expect(row().actions.requeue).toBe(false)
   store.decisions.save({ id: 'stop', evalId: 'e', threadKey: 'feishu:oc_1:om_root', triggerIds: ['f1'], policyVersion: 'v', at, kind: 'stop',
     reason: [{ code: 'humanStop' }], strength: 'explicit', ticketId: 't1' })
   store.triggers.saveDisposition('f1', { fanout: ['t1'], decisionId: 'stop', at })
   expect(row().actions.requeue).toBe(true)
-  // So once the stop ended the ticket, which let go of the message, as the Engine records it.
+  // 因此当停止结束工单并释放该消息时，正如引擎记录的那样。
   store.triggers.saveDisposition('f1', { fanout: [], decisionId: 'stop', at })
   expect(row().actions.requeue).toBe(true)
-  // Once sent, it waits for the Eval.
+  // 一旦发送，它就在等待评估。
   store.threads.save({ ...store.threads.get('feishu:oc_1:om_root')!, pending: ['f1'] })
   store.triggers.saveDisposition('f1', { fanout: ['t1'], requeued: true, at })
   expect(row()).toMatchObject({ actions: { requeue: false }, disposition: { queued: true } })
@@ -313,7 +313,7 @@ it('reads each ticket a page\'s follow-ups reached once, and nothing for a messa
   expect(['f1', 'f2', 'f3'].map(id => triggerView(view, store.triggers.get(id)!).disposition.delivered)).toEqual([true, true, true])
   expect(tickets).toHaveBeenCalledOnce()
   tickets.mockRestore()
-  // A message the ticket handed back is decided by no ticket, which needs no read.
+  // 工单交回的消息不由任何工单决定，因此无需读取。
   store.triggers.saveDisposition('f3', { fanout: ['t1'], handbacks: [{ ticketId: 't1', reason: 'Another change', at }], at })
   const records = { tickets: { get: vi.fn() }, threads: { get: vi.fn() }, triggers: store.triggers }
   expect(followupOwners(store.triggers.get('f3')!, records)).toEqual([])

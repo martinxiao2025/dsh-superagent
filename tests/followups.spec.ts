@@ -1,4 +1,4 @@
-/** Follow-up routing: human messages on subscribed threads go directly to the ticket worker and notify the main session without starting an Eval. */
+/** 后续消息路由：已订阅线程上的人类消息直接交给工单执行器，并在不启动评估的情况下通知主会话。 */
 import { afterEach, expect, it, vi } from 'vitest'
 import { CHAT, feishu, startRuntime, type Host } from './fixtures/host.ts'
 import { repliedTo } from '../src/app/links.ts'
@@ -24,7 +24,7 @@ it('delivers a follow-up to the worker and tells the main Session with a card, w
     replies_to: { trigger_id: ticket.origin.triggerId, preview: '@bot 修一下回归' },
     delivered_to: [{ ticket_id: ticket.id, title: ticket.title, state: 'working' }],
       note: expect.stringContaining('worker has it and decides') }])
-  // No candidate, no Eval, no Decision: nothing waits on the main Session, and the Thread's queue stays free.
+  // 没有候选、没有评估、没有决策：主会话无需等待，线程的队列也保持空闲。
   expect(h.candidates()).toEqual([])
   expect(h.runtime.store.threads.get(THREAD)).toMatchObject({ pending: [] })
   expect(h.runtime.store.threads.get(THREAD)).not.toHaveProperty('evaluating')
@@ -56,17 +56,17 @@ it('leaves a delivered follow-up to its ticket\'s worker: the main Session may s
   }
   const master = (name: string, args: Record<string, unknown>) => h!.runTool(h!.runtime.masterId, name, args)
   const decides = /its worker decides whether it belongs there/
-  // A guest's follow-up stays inferred, so its stop does not stop the work; the main Session cannot route or requeue it.
+  // 访客的后续消息保持为推断强度，因此其中的停止不会停止工作；主会话不能路由或重新排队它。
   const guest = await settle('4', '别做了', 'ou_guest')
   expect(await h!.route({ kind: 'stop', ticket_id: ticket.id, trigger_id: guest })).toMatchObject({ decision: 'ignore' })
   await expect(h!.route({ kind: 'accept', trigger_id: guest, title: 'More', worktree_name: 'more', acknowledgement: 'ok' }))
     .rejects.toThrow(decides)
   await expect(master('orchestrator_trigger_requeue', { trigger_id: guest })).rejects.toThrow(decides)
-  // A person may still send it to Eval from the panel.
+  // 真人仍可以从面板把它送入评估。
   expect(await h.api('POST', `triggers/${encodeURIComponent(guest)}/requeue`)).toMatchObject({ status: 200, body: { queued: true } })
   await h.runtime.pump(); await h.runtime.idle()
   expect(h.candidates()).toContain(guest)
-  // Alice's follow-ups carry her authority once the worker hands them back: one goes to the other ticket, one becomes new work.
+  // Alice 的后续消息在执行器交回后带有她的权限：一条转到另一张工单，一条成为新工作。
   const attach = await settle('5', '这个其实是另一件事的')
   await expect(h!.route({ kind: 'attach', ticket_id: other.ticket.id, trigger_id: attach })).rejects.toThrow(decides)
   await h.runTool(sessionId, 'orchestrator_trigger_handback', { trigger_id: attach, reason: 'It is about the other request.' })
@@ -75,22 +75,21 @@ it('leaves a delivered follow-up to its ticket\'s worker: the main Session may s
   const work = await settle('6', '另外把导出按钮也加上')
   const request = { trigger_id: work, title: '导出按钮', worktree_name: 'export', acknowledgement: '收到，加导出按钮。' }
   await expect(h!.route({ kind: 'accept', ...request })).rejects.toThrow(decides)
-  // The attach subscribed the other ticket to this thread, so its worker decides the message too; it is new work once both
-  // hand it back.
+  // 附加操作让另一张工单订阅了此线程，因此其执行器也要判断该消息；两者都交回后它才是新工作。
   await h.runTool(sessionId, 'orchestrator_trigger_handback', { trigger_id: work, reason: 'It asks for an export button.' })
   await expect(h!.route({ kind: 'accept', ...request })).rejects.toThrow(decides)
   await h.runTool(other.sessionId, 'orchestrator_trigger_handback', { trigger_id: work, reason: 'Not this ticket either.' })
   const accepted = await h!.route({ kind: 'accept', ...request })
   expect(h.runtime.store.tickets.get((accepted.ticket as { ticket_id: string }).ticket_id)!.mandate).toMatchObject({ strength: 'explicit' })
-  // A stop on a person's request needs no hand-back.
+  // 针对某人的请求执行停止无需交回。
   const stop = await settle('7', '先停一下')
   expect(await h!.route({ kind: 'stop', ticket_id: ticket.id, trigger_id: stop })).toMatchObject({ decision: 'stop' })
   expect(h.runtime.store.tickets.get(ticket.id)!.ended).toMatchObject({ by: 'human', outcome: 'stopped' })
 })
 
 /**
- * Count main-session model turns triggered by steers: each steer while idle starts a new turn,
- * whereas all steers arriving while running batch into the next step.
+ * 统计由 steer 触发的主会话模型轮次：空闲时每次 steer 都会开启新一轮，
+ * 而运行期间到达的 steer 会合并进下一步。
  */
 function modelCalls(host: Host) {
   const master = host.agents.get(host.runtime.masterId)!
@@ -123,7 +122,7 @@ it('keeps a follow-up\'s notice in the effect queue until the main Session takes
   const message = followup('2', '补充一点')
   h.runtime.receive(message)
   await h.runtime.idle()
-  // The notice is stored with the intake's transaction, keyed by its Trigger, and a duplicate message adds nothing.
+  // 该通知随接收事务一起存储，以触发器的键为准；重复消息不会新增任何内容。
   expect(h.runtime.store.db.prepare("SELECT key FROM effect WHERE kind = 'relay'").all()).toEqual([{ key: `followup:${message.id}` }])
   expect(h.runtime.receive(followup('2', '补充一点'))).toBe('duplicate')
   vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 2000 })
@@ -141,7 +140,7 @@ it('relays a message a worker handed back as a candidate with the worker\'s reas
   expect(await h.runTool(sessionId, 'orchestrator_trigger_handback', { trigger_id: message.id, reason: 'It asks for an export button.' }))
     .toEqual({ trigger_id: message.id, queued: true })
   await h.runtime.pump(); await h.runtime.idle()
-  // The candidate tells the main Session; no requeue notice comes before it.
+  // 候选会告知主会话；在此之前不会出现重新排队通知。
   const injected = h.agents.get(h.runtime.masterId)!.inject.mock.calls.map(([notice]) => JSON.stringify(notice))
   expect(injected.filter(notice => notice.includes('trigger_requeued'))).toEqual([])
   expect(h.relays(h.runtime.masterId).find(item => item.kind === 'candidate'
@@ -149,7 +148,7 @@ it('relays a message a worker handed back as a candidate with the worker\'s reas
     handed_back: [{ trigger_id: message.id, ticket_id: ticket.id, reason: 'It asks for an export button.' }] })
   await expect(h.runTool(sessionId, 'orchestrator_trigger_handback', { trigger_id: message.id,
     reason: 'Again' })).rejects.toThrow(/handed that trigger back/)
-  // Attaching it back to the ticket that returned it is refused.
+  // 把它附加回交回它的那张工单会被拒绝。
   await expect(h.route({ kind: 'attach', ticket_id: ticket.id, trigger_id: message.id }))
     .rejects.toThrow(/handed that trigger back as beyond it/)
 })
@@ -192,7 +191,7 @@ it('tells the main Session of a follow-up to an ended ticket once the ticket res
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
   await h.runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Done' })
   expect(h.runtime.store.tickets.get(ticket.id)!.ended).toBeDefined()
-  // While processing is paused the message waits for the ticket, which has not resumed: the main Session hears nothing yet.
+  // 处理暂停期间，该消息等待工单，而工单尚未恢复：主会话此时不会收到任何消息。
   await h.runtime.settings.pause(true, 'panel')
   h.deliveries.mockClear()
   const message = followup('2', '再改一下标题')
@@ -221,7 +220,7 @@ it('tells the main Session of a follow-up an earlier version queued for Eval, wh
   const { ticket } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
   const message = followup('2', '顺便看看日志')
   h.deliveries.mockClear()
-  // An earlier version delivered the follow-up to the ticket, queued it for Eval as well, and told the main Session nothing.
+  // 旧版本把该后续消息投递给工单、同时排入评估，却没有告知主会话。
   h.runtime.store.atomic(() => {
     h!.runtime.store.triggers.save(message)
     h!.runtime.store.triggers.saveDisposition(message.id, { fanout: [ticket.id], at: message.at })
@@ -240,7 +239,7 @@ it('sends a request on a thread a worker follows only for context to Eval, and m
   const request = feishu('10', '@bot 把这里的按钮也改了', { root_id: 'om_9' })
   h.runtime.receive(request)
   await h.runtime.idle()
-  // It is nobody's follow-up: the main Session assesses it, and the worker reads it as context.
+  // 它不属于任何工单的后续消息：主会话对它做评估，执行器则把它当作上下文读取。
   expect(h.candidates()).toEqual([request.id])
   expect(notices(h)).toEqual([])
   expect(h.runtime.store.triggers.disposition(request.id)).toMatchObject({ fanout: [ticket.id], context: [ticket.id] })
@@ -265,16 +264,16 @@ it('keeps a listed member\'s request on a ticket\'s thread to that ticket, so it
   h = await startRuntime()
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下设置页保存按钮的文案'))
   h.deliveries.mockClear()
-  // The benchmark's case: an addressed request from a listed member on the ticket's own thread.
+  // 基准测试的场景：名单内成员在工单自己的线程上发出被 @ 的请求。
   const request = followup('2', '@bot [W1-a] 概览页的保存按钮也按同样方式改一下', { mentions: [{ id: 'ou_bot' }] })
   h.runtime.receive(request); await h.runtime.idle()
-  // The worker has it and decides; the main Session hears of it and cannot open a second ticket for it.
+  // 执行器持有它并做判断；主会话虽收到消息，却不能为它再开一张工单。
   expect(h.relays(sessionId)).toEqual([expect.objectContaining({ trigger_id: request.id })])
   expect(notices(h)).toEqual([expect.objectContaining({ trigger_id: request.id,
     note: expect.stringContaining('orchestrator_route kind stop') })])
   await expect(h.route({ kind: 'accept', trigger_id: request.id, title: '概览页按钮',
     worktree_name: 'overview-button', acknowledgement: '收到。' })).rejects.toThrow(/its worker decides whether it belongs there/)
-  // The worker takes it as within its ticket and says so.
+  // 执行器把它视为属于本工单，并如此答复。
   expect(await h.runTool(sessionId, 'orchestrator_ack', { trigger_id: request.id, text: '收到：概览页的保存按钮也一起改。' }))
     .toMatchObject({ trigger_id: request.id })
   expect(h.runtime.store.tickets.list().map(item => item.id)).toEqual([ticket.id])
@@ -288,7 +287,7 @@ it('leaves a follow-up to its ticket\'s worker after the main Session drops the 
   h.runtime.receive(request); await h.runtime.idle()
   const master = (name: string, args: Record<string, unknown>) => h!.runTool(h!.runtime.masterId, name, args)
   expect(await master('orchestrator_thread_unsubscribe', { thread: THREAD })).toEqual({ removed: true, thread: THREAD })
-  // The worker has the message and still decides it, so the main Session cannot open a second ticket for it.
+  // 执行器已持有该消息并仍会判断它，因此主会话不能为它再开一张工单。
   await expect(h!.route({ kind: 'accept', trigger_id: request.id, title: '导出按钮', worktree_name: 'export',
     acknowledgement: '收到，加导出按钮。' })).rejects.toThrow(/its worker decides whether it belongs there/)
   expect(h.runtime.store.tickets.list().map(item => item.id)).toEqual([ticket.id])

@@ -1,6 +1,6 @@
 /**
- * In-memory DSH host fixture (as in tests/runtime.spec.ts) running a configured Runtime with GitHub and Feishu sources,
- * allowed member Alice (`ou_alice`), listened chat `oc_team`, and `auto` eval mode. Stop it with `stop()`.
+ * 内存中的 DSH 宿主夹具（与 tests/runtime.spec.ts 中一样），运行已配置的 Runtime，包含 GitHub 与飞书来源、
+ * 允许成员 Alice（`ou_alice`）、监听的群聊 `oc_team`，以及 `auto` 评估模式。用 `stop()` 停止它。
  */
 import { Context } from '@deepseek-ai/cordis'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -21,7 +21,7 @@ import { testMachine } from './deployment.ts'
 export const MEMBER = 'ou_alice'
 export const CHAT = 'oc_team'
 
-/** Build a Feishu mention trigger from Alice in `oc_team`, using the digits in `id` as the timestamp offset in seconds. */
+/** 根据 `oc_team` 中 Alice 的消息构建飞书提及触发器，使用 `id` 中的数字作为以秒为单位的时间戳偏移。 */
 export function feishu(id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
   const at = String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000)
   return feishuTrigger({ message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: at,
@@ -33,17 +33,17 @@ type FakeAgent = {
   id: string; status: string; inbox: { nextTurn: UserMessage[]; nextStep: UserMessage[] }
   cancel: Mock; inject: Mock<(message: UserMessage) => void>; steer: Mock<(message: UserMessage) => void>; followup: Mock<(message: UserMessage) => void>
 }
-/** A text message, as DSH's job tools and subagents send their notices. */
+/** 一条文本消息，正如 DSH 的任务工具和子代理发送的通知。 */
 const notice = (id: string, text: string) => ({ id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'tool-jobs', form: 'notice' } }) as unknown as UserMessage
 type HttpHandler = (req: unknown, res: unknown) => Promise<void>
 type Delivery = { sessionId: string; mode: 'queue' | 'steer'; id: string; text: string }
 
 /**
- * DSH's job registry as the Executor uses it, with DSH's job tools: the jobs a Session can see, their events, a wait and a
- * kill. `run` starts a job a Session owns, `output` has one print, and `end` ends one, as its process does; an end no wait
- * collected reaches its owner, which it wakes when idle, as the job tools deliver it. `released` counts the waits ends
- * released.
- * @param owner - the agent of a Session, which an end reaches.
+ * DSH 的任务注册表，正如执行器使用的那样，包含 DSH 的任务工具：会话可见的任务、其事件、等待和
+ * kill。`run` 启动会话拥有的任务，`output` 让任务打印，`end` 结束任务（正如其进程所做）；未被等待
+ * 收集的结束会到达其所有者，所有者在空闲时被唤醒，正如任务工具投递的那样。`released` 统计结束释放的
+ * 等待。
+ * @param owner - 会话的智能体，结束会到达它。
  */
 export function jobRegistry(owner: (sessionId: string) => FakeAgent | undefined = () => undefined) {
   type Job = { id: string; owner: string; status: string; label?: string }
@@ -66,14 +66,14 @@ export function jobRegistry(owner: (sessionId: string) => FakeAgent | undefined 
   }
   const service = {
     list: vi.fn((caller: string) => [...jobs.values()].filter(job => job.owner === caller)),
-    // A wait ends with the job, or fails once its signal aborts, which leaves the job's end uncollected.
+    // 等待会随任务结束，或在其信号中止时失败，这会让任务的结束未被收集。
     wait: vi.fn((id: string, _timeoutMs: number, _caller: string, signal?: AbortSignal) => new Promise<Job>((resolve, reject) => {
       const wake = (job: Job) => { signal?.removeEventListener('abort', abort); resolve(job) }
       const abort = () => { waits.set(id, (waits.get(id) ?? []).filter(item => item !== wake)); reject(new Error('wait aborted')) }
       waits.set(id, [...waits.get(id) ?? [], wake])
       signal?.addEventListener('abort', abort, { once: true })
     })),
-    // A killed job ends a moment later, as its process does, also under a test's fake timers.
+    // 被 kill 的任务稍后结束，正如其进程，在测试的假定时器下也是如此。
     kill: vi.fn((id: string) => { queueMicrotask(() => { end(id, 'killed') }); return 'requested' }) as Mock<(id: string) => string>,
     events: { subscribe: (filter: { owner: string }, listener: (event: { type: string }) => void) => {
       const entry = { owner: filter.owner, listener }
@@ -86,10 +86,10 @@ export function jobRegistry(owner: (sessionId: string) => FakeAgent | undefined 
 }
 
 /**
- * DSH's subagents as the Executor uses them. `spawn` starts a child of a Session, an agent while it lives, which a drain of
- * the Session's descendants refuses from then on; `settle` ends one, whose end wakes its idle parent or steers a running one
- * before a wait for the parent's children returns. Releasing or interrupting a child settles it; a drain of descendants
- * injects their ends. The catalog lists every child a Session had.
+ * DSH 的子代理，正如执行器使用它们那样。`spawn` 启动会话的子级，在其存活期间是一个智能体，此后对会话后代的
+ * drain 会拒绝它；`settle` 结束一个，其结束会唤醒空闲的父级，或在等待父级子项返回前引导正在运行的
+ * 父级。释放或中断子级会使其结算；后代的 drain
+ * 会注入它们的结束。目录列出会话曾拥有的每个子级。
  */
 export function subagentRuntime(agents: Map<string, FakeAgent>) {
   const children = new Map<string, { parent: string; live: boolean; settled: PromiseWithResolvers<void> }>()
@@ -131,7 +131,7 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
   return { service, settle, spawn, live: (id: string) => !!children.get(id)?.live }
 }
 
-/** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
+/** @param seed - 在 Runtime 打开数据库之前写入，例如早期版本存储的记录。 */
 export async function startRuntime(seed?: (store: Store) => void) {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
   const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot')
@@ -150,7 +150,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
     ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT)}\0`,
     [scoped]: `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT)}\0`,
   }
-  /** A prepare command (`sh -c`) waits for this while it is set. */
+  /** 一个 prepare 命令（`sh -c`）在设置此项时会等待它。 */
   const hooks: { prepare?: Promise<void> } = {}
   const subprocess = { spawn: vi.fn((spec: { argv: readonly string[] }) => {
     const argv = [...spec.argv]
@@ -161,7 +161,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
     return { done, collected: { stdout: reader(answers[argv.join(' ')] ?? ''), stderr: reader('') } }
   }) }
   const agents = new Map<string, FakeAgent>()
-  /** Each Session's next step, which takes the messages that wait for one. */
+  /** 每个会话的下一步，它取走等待下一步的消息。 */
   const steps = new Map<string, () => void>(), claims = new Map<string, () => void>()
   const tools = new Map<string, Map<string, RegisteredTool>>()
   const deliveries = vi.fn<(request: Delivery) => void>()
@@ -178,14 +178,14 @@ export async function startRuntime(seed?: (store: Store) => void) {
       agentCtx.reflect.provide('skills', { register: () => () => {} })
       agentCtx.reflect.provide('systemPrompt', { section: () => () => {} })
       const inbox = { nextTurn: [] as UserMessage[], nextStep: [] as UserMessage[],
-        // A pending message taken out, as DSH's inbox does by its id.
+        // 取出一条待处理消息，正如 DSH 的收件箱按其 id 所做的那样。
         remove: (id: string) => [inbox.nextTurn, inbox.nextStep].some(list => {
           const at = list.findIndex(message => message.id === id)
           if (at >= 0) list.splice(at, 1)
           return at >= 0
         }) }
-      // A step claims each message once, all that wait for a step and, as a turn starts, the next queued one, and takes them into
-      // the Session's history, unless it is `cut` off before, as a cancel in its pre-step does; DSH says each.
+      // 某个步骤会认领每条消息一次，包括所有等待步骤的消息，以及回合开始时下一条排队的消息，并将它们带入
+      // 会话的历史，除非它在此之前被 `cut` 掉，正如其前步骤中的取消；DSH 会说明每一条。
       const taken = new Set<string>()
       let turn = 0
       const take = (starts: boolean, cut = false) => {
@@ -202,7 +202,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
       const deliver = (mode: 'queue' | 'steer') => vi.fn((message: UserMessage) => {
         inbox[mode === 'queue' ? 'nextTurn' : 'nextStep'].push(message)
         deliveries({ sessionId, mode, id: message.id, text: message.content.map(block => block.type === 'text' ? block.text : '').join('') })
-        // A message wakes an idle agent: its turn starts at once, and DSH says so, and its first step takes what waits.
+        // 消息会唤醒空闲的智能体：其回合立即开始，DSH 会说明这一点，其第一步取走等待的内容。
         const agent = agents.get(sessionId)!
         if (agent.status !== 'idle') return
         agent.status = 'running'
@@ -213,7 +213,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
       const session = { id: sessionId, snapshotEvents: () => [], requestHeader: () => undefined, append: vi.fn() }
       let status = 'idle'
       const idle: (() => void)[] = []
-      // A cancel drops the inbox unless kept, and the turn it stops ends a moment later, which DSH says.
+      // 取消会丢弃收件箱（除非保留），它停止的回合稍后结束，DSH 会说明这一点。
       const cancel = vi.fn((_cause: unknown, options?: { keepInbox?: boolean }) => {
         if (!options?.keepInbox) { inbox.nextTurn.length = 0; inbox.nextStep.length = 0 }
         if (status === 'idle') return
@@ -226,7 +226,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
       })
       agents.set(sessionId, { id: sessionId, ctx: agentCtx, inbox, followup: deliver('queue'), steer: deliver('steer'), inject: vi.fn(), session, cancel,
         get status() { return status }, set status(next: string) { status = next; if (next === 'idle') for (const wake of idle.splice(0)) wake() },
-        // Once its turn ended, as DSH's does.
+        // 其回合结束后，正如 DSH 所做的那样。
         whenIdle: () => status === 'idle' ? Promise.resolve() : new Promise<void>(resolve => { idle.push(resolve) }) } as never)
     }),
     selectModel: vi.fn(async () => {}), resolveAgent: vi.fn(resolveDefault), rename: vi.fn(async () => {}),
@@ -258,7 +258,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
     sources: { ...sources, feishu: { enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
   deliveries.mockClear()
 
-  /** Parsed JSON payloads delivered to `sessionId`. */
+  /** 投递到 `sessionId` 的已解析 JSON 载荷。 */
   const relays = (sessionId: string) => deliveries.mock.calls.map(([call]) => call).filter(call => call.sessionId === sessionId)
     .map(call => JSON.parse(call.text) as Record<string, unknown>)
   const candidates = () => relays(runtime.masterId).filter(item => item.kind === 'candidate').map(item => item.trigger_id)
@@ -267,7 +267,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
     if (!tool) throw new Error(`Tool ${name} is not registered for ${sessionId}`)
     return await tool.execute(args, { signal: new AbortController().signal }) as Record<string, unknown>
   }
-  /** Route one decision with the main Session's orchestrator_route, answering its result; a refused one throws its reason. */
+  /** 用主会话的 orchestrator_route 路由一个决定并返回其结果；被拒绝的会抛出原因。 */
   async function route(item: Record<string, unknown>): Promise<Record<string, unknown>> {
     const { results } = await runTool(runtime.masterId, 'orchestrator_route', { decisions: [item] }) as { results: Record<string, unknown>[] }
     if (results[0]!.refused) throw new Error(String(results[0]!.refused))
@@ -289,9 +289,9 @@ export async function startRuntime(seed?: (store: Store) => void) {
     return { status, body: JSON.parse(text) as Record<string, unknown> }
   }
   async function stop() { await runtime.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) }
-  /** The Session's model takes its next step, which takes the messages steered in since its last. */
+  /** 会话的模型会执行下一步，取走自上次以来被引导进来的消息。 */
   const step = (sessionId: string) => { steps.get(sessionId)!() }
-  /** A step of the worker claims what waits for it, and is cut off before the Session took it. */
+  /** worker 的某个步骤会认领等待它的内容，并在会话取走它之前被切断。 */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
   return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, hooks, resolveDefault, stop,
     jobs, subagents, step, claim }

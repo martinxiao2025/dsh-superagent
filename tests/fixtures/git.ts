@@ -1,9 +1,9 @@
-/** The environment of the git processes the tests start. */
+/** 测试启动的 git 进程所使用的环境。 */
 import { GIT_LOCATION } from '../../src/infra/environment.ts'
 
 /**
- * The process environment with `extra`, and without the variables that tell git which repository to act on (`GIT_LOCATION`):
- * the tests run inside `git rebase --exec` inherit GIT_DIR, and a `git init` there would reinitialize the repository under test.
+ * 带有 `extra` 的进程环境，并去掉告诉 git 应作用于哪个仓库的变量（`GIT_LOCATION`）：
+ * 在 `git rebase --exec` 中运行的测试会继承 GIT_DIR，若在其中执行 `git init`，会重新初始化被测仓库。
  */
 export const gitEnv = (extra: Record<string, string> = {}): Record<string, string | undefined> =>
   ({ ...process.env, ...Object.fromEntries(GIT_LOCATION.map(name => [name, undefined])), ...extra })

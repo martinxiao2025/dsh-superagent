@@ -43,7 +43,7 @@ describe('account-isolated operations', () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal); vi.spyOn(commands,'pages').mockResolvedValue([])
     const gh = vi.spyOn(commands,'gh').mockResolvedValue({})
     await send(commands, reply)
-    // The disclosure line is prompt text: the model writes it, and the host adds nothing.
+    // 披露行属于提示词文本：由模型写入，宿主不添加任何内容。
     expect(gh).toHaveBeenCalledWith(['api',`repos/${REPOSITORY}/issues/8/comments`,'--method','POST','-f',expect.stringMatching(/^body=Done\n\n<!-- dsh-superagent:stable-operation -->$/)])
     await expect(new Commands(() => deployment, {}, new AbortController().signal).pages(z.unknown(),
       '../../someone/else/issues')).rejects.toThrow()
@@ -98,7 +98,7 @@ describe('Channels', () => {
       gh.mockRejectedValueOnce(commandError({ stderr, code: 1 }))
       expect(await send(value, reply)).toBe('gone')
     }
-    // GitHub also answers 404 for a private repository the agent lost access to, so 404 is retried rather than dropped.
+    // 对于代理已失去访问权限的私有仓库，GitHub 也会返回 404，因此 404 会重试而不是丢弃。
     for (const stderr of ['gh: Not Found (HTTP 404)', 'gh: Server Error (HTTP 500)']) {
       gh.mockRejectedValueOnce(commandError({ stderr, code: 1 }))
       await expect(send(value, reply)).rejects.toThrow(stderr)
@@ -140,10 +140,10 @@ describe('GitHub calls', () => {
       await expect(value.api(z.unknown(), path)).rejects.toThrow('restricted to the configured repository')
     }
     expect(run).toHaveBeenCalledTimes(2)
-    // An empty path targets the repository root.
+    // 空路径指向仓库根目录。
     await value.api(z.unknown(), '')
     expect(run).toHaveBeenLastCalledWith('/path/agent-gh', ['api', `repos/${REPOSITORY}`])
-    // Without a schema, api() returns the raw CLI stdout.
+    // 没有 schema 时，api() 返回 CLI 的原始标准输出。
     run.mockResolvedValue('raw file')
     expect(await value.api('contents/README.md', '-H', 'Accept: application/vnd.github.raw')).toBe('raw file')
   })
@@ -178,9 +178,9 @@ it('names only the program and how it ended when a command prints no diagnostics
   expect(failed.message).toMatch(/ exited with code 3$/)
   expect(failed.message).not.toContain(secret)
   await expect(commands.run('/no/such/program', ['secret reply text'])).rejects.toMatchObject({ message: 'program could not run: ENOENT' })
-  // A signaled child is reported by its signal only; Node's own message would echo every argument.
+  // 被信号终止的子进程只按信号报告；Node 自带的消息会回显每个参数。
   expect(commandError({ killed: true, signal: 'SIGKILL', code: null, stderr: '' }, '/bin/sh')).toMatchObject({ message: 'sh was stopped by SIGKILL' })
-  // Timeouts kill the child with SIGTERM; Node's default error message would echo every argument.
+  // 超时会用 SIGTERM 终止子进程；Node 默认的错误消息会回显每个参数。
   const timedOut = { killed: true, signal: 'SIGTERM', code: null, stderr: '',
     message: 'Command failed: /path/lark-bot im +messages-reply --markdown withdrawn' }
   expect(commandError(timedOut, '/path/lark-bot')).toMatchObject({ message: 'lark-bot timed out after 90 s' })
@@ -192,7 +192,7 @@ it('reports failures as CliError with the code the CLI names and the exit status
   expect(notFound).toMatchObject({ message: 'gh: Not Found (HTTP 404)', code: 404, exitCode: 1 })
   expect(commandError({ stderr: JSON.stringify({ error: { code: 230011, message: 'The message is recalled' } }),
     code: 1 })).toMatchObject({ message: 'The message is recalled (230011)', code: 230011 })
-  // A cancelled command stays an AbortError so callers can distinguish cancellation from failure.
+  // 被取消的命令仍保持为 AbortError，以便调用方区分取消与失败。
   const aborted = Object.assign(new Error('The operation was aborted'), { name: 'AbortError', stderr: '' })
   expect(commandError(aborted)).toBe(aborted)
   const controller = new AbortController()
@@ -211,7 +211,7 @@ it('stops a running command when the signal of its work aborts, or the lifetime,
   const running = commands.withSignal(work.signal).run(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'])
   work.abort()
   await expect(running).rejects.toThrow()
-  // Only commands bound to the aborted work signal stop.
+  // 只有绑定到已中止工作信号的命令会停止。
   expect(await commands.run(process.execPath, ['-e', 'console.log("still")'])).toBe('still\n')
   const other = commands.withSignal(new AbortController().signal).run(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'])
   lifetime.abort()

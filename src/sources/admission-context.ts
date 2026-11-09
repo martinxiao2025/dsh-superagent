@@ -1,8 +1,8 @@
-/** Bounded thread message window loaded for admission assessments. */
+/** 为准入评估加载的有界线程消息窗口。 */
 import type { Commands } from '../infra/commands.ts'
 import type { ContextMessage, TriggerContext } from './kind.ts'
 
-/** Selects the first five thread messages plus five messages on either side of `sourceId`, recording omitted gap counts. */
+/** 选取前五条线程消息以及 `sourceId` 两侧各五条消息，并记录省略的间隔数量。 */
 export function threadWindow(messages: ContextMessage[], sourceId: string) {
   const trigger = messages.findIndex(message => message.id === sourceId)
   const selected = messages.map((message, index) => ({ message, index }))
@@ -16,8 +16,8 @@ export function threadWindow(messages: ContextMessage[], sourceId: string) {
   return { entries, source_found: trigger >= 0, loaded_messages: messages.length, omitted_after: messages.length - previous - 1 }
 }
 /**
- * Reads up to `maxPages` of a trigger's thread and builds the bounded message window around the trigger; counts describe
- * only this loaded snapshot (never unread history), and `status` reports fallback modes such as `chat_neighbours`.
+ * 读取触发器线程最多 `maxPages` 页，并在触发器周围构建有界消息窗口；计数只描述本次加载的快照
+ * （绝不包含未读历史），`status` 报告 `chat_neighbours` 等回退模式。
  */
 export async function admissionContext(context: TriggerContext, commands: Commands, maxPages: number) {
   const messages: ContextMessage[] = []

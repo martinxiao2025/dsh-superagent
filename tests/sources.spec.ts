@@ -39,10 +39,10 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   const engine = new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(store.settings(), sources), assessor, executor, outbox })
   const commands = new Commands(() => deployment, {}, new AbortController().signal)
   const receive = vi.fn(async (trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
-  // Record outbound messages in the store without sending them.
+  // 在存储中记录出站消息，而不发送它们。
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
-  // The Sources' functions take the context; plugin entries and kind callbacks take the host, which builds each kind's context.
+  // 来源的函数接收上下文；插件条目与类型回调接收宿主，宿主会构建每个类型的上下文。
   const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind) }
   const context = sourceContextOf(parts, { kind: 'feishu', health: ['github', 'feishu', 'history'] })
   const health = overrides.sources ? healthOf.get(overrides.sources)!.all : board.all
@@ -74,7 +74,7 @@ const notification = (number: number, kind: 'issues' | 'pulls' = 'issues') => ({
   repository: { full_name: 'acme/widgets' }, subject: { url: `https://api.github.com/repos/acme/widgets/${kind}/${number}`,
     type: kind === 'pulls' ? 'PullRequest' : 'Issue', title: '' } })
 const refused = (status: number, text: string) => commandError({ stderr: `gh: ${text} (HTTP ${status})`, code: 1 })
-/** Stubs `gh api` calls against `acme/widgets` and returns the requested paths in order. */
+/** 对 `acme/widgets` 打桩 `gh api` 调用，并按顺序返回请求的路径。 */
 function github(h: ReturnType<typeof host>, routes: Record<string, unknown>): string[] {
   const reads: string[] = []
   vi.spyOn(h.commands, 'run').mockImplementation(async (_program, args) => {
@@ -93,13 +93,13 @@ const bare = (reads: string[]) => reads.map(path => path.split('?')[0])
 describe('feishu source', () => {
   it('registers its kind without a bot, and names on its health what setup still needs', async () => {
     const run = async (overrides: Partial<SourceContextDeps>) => {
-      // The fixture's registry already holds the kind; this one starts empty so the plugin's registration shows.
+      // 夹具的注册表已持有该类型；这个注册表初始为空，以便显示插件的注册。
       const value = host({ sources: emptyRegistry(), ...overrides })
       const disposers: (() => unknown)[] = []
       applyFeishu({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
       await vi.waitFor(() => expect(value.health.history).toBeDefined())
       const registered = value.sources.kind('feishu')
-      // Snapshot health before disposal clears the registered entries.
+      // 在处置清除已注册条目之前快照健康状态。
       const health = { ...value.health }
       for (const dispose of disposers) await dispose()
       return { ...value, registered, health }
@@ -109,7 +109,7 @@ describe('feishu source', () => {
     expect(unset.health).toMatchObject({ feishu: { state: 'paused', code: 'feishuCliUnset' }, history: { state: 'paused', code: 'feishuBotMissing' } })
     const problem = new SetupError('feishuBotNotReady', { app: 'cli_bot', status: 'missing' }).problem
     const refused = await run({ deployment: testDeployment({ feishu: undefined }), feishuProblem: problem })
-    // A failed bot check waits for the operator's fix and a check; it does not retry by itself like a polling error.
+    // 失败的机器人检查会等待操作者的修复和一次检查；它不会像轮询错误那样自行重试。
     expect(refused.health.feishu).toEqual({ state: 'paused', detail: problem.detail })
     expect((await run({ configured: () => false })).health.feishu).toEqual({ state: 'paused', detail: 'Waiting for the deployment check', code: 'setupPending' })
   })
@@ -151,7 +151,7 @@ describe('feishu source', () => {
   })
   it('translates a polled topic reply as the event consumer translates the live event', async () => {
     const h = host()
-    // A direct-message chat the bot knows from its events.
+    // 机器人从其事件中获知的直接消息聊天。
     h.store.set('feishu-chats', { oc_dm: true })
     const source = feishuTrigger({ message_id: 'om_root', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
       content: 'fix it', create_time: '1757376000000' }, 'ou_bot', 'cli_bot')!
@@ -165,7 +165,7 @@ describe('feishu source', () => {
     vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
       if (args[0] === 'api') return { items: [{ message_id: 'om_root', chat_id: 'oc_dm', thread_id: 'omt_dm' }] }
       if (args[1] === '+messages-mget') return { messages: [] }
-      // The page lists the reply without its root, and the bot's own message by its app.
+      // 页面列出其回复而不含根消息，并按应用列出机器人自己的消息。
       const messages = [page('om_mine', { id: 'cli_bot', sender_type: 'app' }), page('om_reply', { id: MEMBER, sender_type: 'user' })]
       return { thread_id: 'omt_dm', has_more: false, messages }
     })
@@ -225,7 +225,7 @@ describe('feishu source', () => {
     const recover = () => backfillChat(h, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
     lark.mockResolvedValueOnce({ has_more: false, items: [message({ chat_id: 'oc_other' })] })
     await expect(recover()).rejects.toThrow('outside the requested chat or thread')
-    // A topic's page that holds a message of another topic.
+    // 话题页面包含另一个话题的消息。
     h.store.set('feishu-history-threads:oc_team', { omt_1: now })
     lark.mockResolvedValueOnce({ has_more: false, items: [] }).mockResolvedValueOnce({ has_more: false, items: [message({ thread_id: 'omt_2' })] })
     await expect(recover()).rejects.toThrow('outside the requested chat or thread')
@@ -251,7 +251,7 @@ describe('feishu source', () => {
     const lark = vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
       if (args[0] === 'api') return { items: [{ message_id: 'om_root', chat_id: 'oc_1', thread_id: 'omt_1' }] }
       if (args[1] === '+messages-mget') return { messages: [] }
-      // Newest first: a new reply, then the one the Thread knew, and an older page that is not read.
+      // 从新到旧：一条新回复，然后是线程已知的那条，以及一个未读取的较旧页面。
       return { thread_id: 'omt_1', has_more: true, page_token: 'older', messages: [reply('om_3'), reply('om_2')] }
     })
     await pollFeishuThreads(h)
@@ -270,7 +270,7 @@ describe('feishu source', () => {
     vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
       const params = JSON.parse(args[args.indexOf('--params') + 1]!) as { container_id_type: string; container_id: string }
       scans.push(params.container_id)
-      // Each day's chat scan yields one new thread; thread scans return no further messages.
+      // 每天的聊天扫描产生一个新线程；线程扫描不再返回消息。
       return { has_more: false, items: params.container_id_type === 'chat' ? [{ message_id: `om_${round}`, chat_id: 'oc_team',
         create_time: String(start + round * day), thread_id: `omt_${round}`,
         sender: { id: 'ou_bob', sender_type: 'user' }, body: { content: '{"text":"hi"}' } }] : [] }
@@ -281,7 +281,7 @@ describe('feishu source', () => {
       await backfillChat(h, 'oc_team', false, since, new Date(start + round * day + 60_000).toISOString(), new AbortController().signal)
       if (round === 0) expect(scans).toContain('omt_old')
     }
-    // The chat, and the topics with a message in the last 14 days.
+    // 聊天，以及最近 14 天内有消息的话题。
     expect(scans).toHaveLength(1 + 14)
     expect(Object.keys(h.store.get<Record<string, string>>('feishu-history-threads:oc_team')!)).toHaveLength(14)
     expect(h.store.get<Record<string, string>>('feishu-history-threads:oc_team')!.omt_29).toBe(new Date(start + 29 * day).toISOString())
@@ -310,7 +310,7 @@ describe('feishu source', () => {
   })
   it('syncs its part of the Policy from the sync chat: people who left are removed, names follow the chat, new people are appended', async () => {
     const h = host()
-    // The sync reads the chat under its signal, so stopping the sync stops the read.
+    // 同步在其信号下读取聊天，因此停止同步会停止读取。
     const withSignal = vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
     const lark = vi.spyOn(h.commands, 'lark').mockResolvedValue({ users: [{ member_id: 'ou_carol', name: 'Carol' }, { member_id: MEMBER, name: 'Alice Li' }], has_more: false })
     const sync = feishuKind.policy!.sync!
@@ -329,15 +329,15 @@ describe('github source', () => {
   it('normalizes comments and reviews into triggers with review-thread channels, and marks only GitHub Apps and machine accounts as automated', () => {
     const trigger = commentTrigger({ id: 5, body: 'nit', user: { login: 'review-bot[bot]', type: 'Bot' }, html_url: 'https://github.com/acme/widgets/pull/7#discussion_r5', updated_at: '2026-09-01T00:00:00Z' }, { number: 7, isPr: true, prAuthor: 'agent-bot' }, 'inline', 'agent-bot')
     expect(trigger).toMatchObject({ source: 'github', threads: [{ source: 'github', id: '7' }], human: false, channel: { address: { number: '7', url: 'https://github.com/acme/widgets/pull/7#discussion_r5' } }, meta: { commentId: 5, kind: 'inline', prAuthor: 'agent-bot' } })
-    // A review bot on an ordinary account counts as a person here; the prompts name it as automated.
+    // 普通账户上的评审机器人在这里按人处理；提示词将其称为自动化的。
     expect(commentTrigger({ id: 6, body: 'x', user: { login: 'review-bot', type: 'User' } }, { number: 7, isPr: false }, 'conversation', 'agent-bot').human).toBe(true)
     expect(commentTrigger({ id: 7, body: 'x', user: { login: 'ci[bot]', type: 'Bot' } }, { number: 7, isPr: false }, 'conversation', 'agent-bot').human).toBe(false)
-    // A review decision reaches the ticket even without a body; a plain review comment carries only its body.
+    // 评审决定即使没有正文也会到达工单；普通评审评论只携带其正文。
     const review = (fields: Partial<GithubComment>) => commentTrigger({ id: 8, user: { login: 'carol', type: 'User' }, submitted_at: '2026-09-01T00:00:00Z', ...fields }, { number: 7, isPr: true }, 'review', 'agent-bot').text
     expect(review({ state: 'APPROVED', commit_id: 'abc123' })).toBe('APPROVED review of commit abc123')
     expect(review({ state: 'CHANGES_REQUESTED', commit_id: 'abc123', body: 'Keep the margin' })).toBe('CHANGES_REQUESTED review of commit abc123\n\nKeep the margin')
     expect(review({ state: 'COMMENTED', commit_id: 'abc123' })).toBe('')
-    // A mention of the agent addresses it, whatever the case; the agent's own messages are automated.
+    // 对智能体的提及会构成请求，无论大小写；智能体自己的消息是自动化的。
     expect(commentTrigger({ id: 9, body: '@Agent-Bot please fix', user: { login: 'alice', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot')).toMatchObject({ human: true, addressed: 'mention' })
     expect(commentTrigger({ id: 10, body: 'mail@agent-bot.example', user: { login: 'alice', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot')).not.toHaveProperty('addressed')
     expect(commentTrigger({ id: 11, body: 'pushed', user: { login: 'Agent-Bot', type: 'User' } }, { number: 7, isPr: true }, 'conversation', 'agent-bot').human).toBe(false)
@@ -412,25 +412,25 @@ describe('github source', () => {
     await observePull(h, agentsPull(9))
     expect(pullOf(h.store.tickets.get('t1')!)).toBe(9)
     expect(h.store.threads.get('github:9')?.subscriptions).toEqual(['t1'])
-    // A ticket that follows a PR moves to another only by its Executor's report.
+    // 跟随 PR 的工单只会因执行器的报告而转移。
     await observePull(h, agentsPull(10))
     expect(pullOf(h.store.tickets.get('t1')!)).toBe(9)
     expect(await observePull(h, endedPull(9, '2026-09-02T00:00:00Z'))).toBe(true)
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { by: 'executor', outcome: 'merged', at: '2026-09-02T00:00:00.000Z' } })
     expect(h.store.threads.get('github:9')?.subscriptions).toEqual(['t1'])
-    // The notice its end gives follows the language of the source request.
+    // 其结束产生的通知会跟随来源请求的语言。
     const notices = pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets')
     expect(notices).toEqual([expect.objectContaining({ kind: 'notice', channel: expect.objectContaining({ source: 'feishu' }), text: expect.stringContaining('已合并') })])
     expect(h.executor.stop).toHaveBeenCalledOnce()
-    // Resumed after the merge, the ticket works on: a later look at the merged PR reports nothing again.
+    // 合并后恢复，工单继续工作：之后查看已合并的 PR 不会再报告任何内容。
     h.store.tickets.save({ ...h.store.tickets.get('t1')!, ended: undefined, assignments: [...h.store.tickets.get('t1')!.assignments, { id: 'a2', state: 'pending', createdAt: '2026-09-03T00:00:00Z' }] })
     expect(await observePull(h, endedPull(9, '2026-09-02T00:00:00Z'))).toBe(true)
     expect(h.store.tickets.get('t1')!.ended).toBeUndefined()
-    // Once the resumed work reports ready, the ticket ends with the merged PR, at that time and without a second notice.
+    // 恢复的工作报告就绪后，工单会随已合并的 PR 结束，就在那时，且没有第二次通知。
     h.engine.report('t1', { state: 'ready', summary: 'answered' })
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { outcome: 'merged' } })
     expect(Date.parse(h.store.tickets.get('t1')!.ended!.at)).toBeGreaterThan(Date.parse('2026-09-03T00:00:00Z'))
-    // Its notice has the id of the first one, so it goes out once.
+    // 其通知拥有第一条的 id，因此只会发出一次。
     expect(pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets').map(notice => notice.id)).toEqual(notices.map(notice => notice.id))
     h.store.close()
   })
@@ -447,7 +447,7 @@ describe('github source', () => {
     expect(h.executor.stop).not.toHaveBeenCalled()
     expect(await observePull(h, endedPull(21, '2026-09-03T00:00:00Z'))).toBe(true)
     expect(h.store.tickets.get('t3')).toMatchObject({ ended: { outcome: 'merged', at: '2026-09-03T00:00:00.000Z' } })
-    // A PR's end is kept on the tickets that follow it, so binding and closing write no key-value record.
+    // PR 的结束会保留在跟随它的工单上，因此绑定和关闭不会写入键值记录。
     expect(h.store.keys('github-')).toEqual([])
     h.store.close()
   })
@@ -491,7 +491,7 @@ describe('github source', () => {
     expect(h.receive).toHaveBeenCalledTimes(1)
     expect(h.receive.mock.calls[0]![0]).toMatchObject({ actor: { id: 'b' }, text: 'new', threads: [{ source: 'github', id: '7' }] })
     expect(h.store.get('github-cursor:7')).toBeDefined()
-    // A Thread whose title the Source had not read yet is named by its number and title, with its number as a fact.
+    // 来源尚未读取标题的线程会以编号和标题命名，并以编号作为事实。
     expect(h.store.threads.get('github:7')!.meta).toMatchObject({ title: 'Fix the margin', label: '#7 Fix the margin', facts: { number: { value: '#7' } } })
     h.store.close()
   })
@@ -525,7 +525,7 @@ describe('github source', () => {
     thread(13 * day)
     await pollGithubThreads(h)
     expect(bare(reads)).toEqual(['issues/7/comments'])
-    // A live ticket keeps a quiet Thread polled.
+    // 活跃工单会让安静的线程保持轮询。
     h.store.tickets.save(openTicket('t9'))
     thread(15 * day, ['t9'])
     await pollGithubThreads(h)
@@ -558,7 +558,7 @@ describe('github source', () => {
     const routes: Record<string, unknown> = { notifications: [notification(9, 'pulls')], 'pulls/9': pr, 'commits/abc/check-runs': checks }
     const reads = github(h, routes)
     await pollRound(h)
-    // The notification, the ticket's PR and the subscribed Thread share one read of the PR.
+    // 通知、工单的 PR 和已订阅的线程共享一次 PR 读取。
     expect(reads.filter(path => path === 'pulls/9')).toHaveLength(1)
     const facts = () => h.store.threads.get('github:9')!.meta.facts as Record<string, unknown>
     expect(facts()).toMatchObject({ autoMerge: { label: { zh: '自动合并', en: 'Auto-merge' } }, ci: { value: '1' } })
@@ -566,7 +566,7 @@ describe('github source', () => {
     routes['commits/abc/check-runs'] = { check_runs: [{ name: 'test', status: 'completed', conclusion: 'failure' }] }
     await pollRound(h)
     expect(facts()).not.toHaveProperty('autoMerge')
-    // Only a change after the first look is a Trigger.
+    // 只有第一次查看之后的变化才是触发器。
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta)).toEqual([expect.objectContaining({ ci: true, revision: 1 })])
     routes['pulls/9'] = { ...pr, state: 'closed', merged: true, merged_at: '2026-09-09T00:00:00Z' }
     await pollRound(h)
@@ -585,10 +585,10 @@ describe('github source', () => {
       'issues/13': issue(13, { created_at: '2026-08-01T00:00:00Z' }),
       'issues/13/comments': [mention(1, 13, '2026-09-08T01:00:00Z')] }
     github(h, routes)
-    // A read that failed for another reason than a missing Issue fails the round once every step ran.
+    // 因 Issue 缺失之外原因失败的读取会在每个步骤运行后使本轮失败一次。
     await expect(pollRound(h)).rejects.toThrow('#12: Error: gh: Bad Gateway (HTTP 502)')
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.number)).toEqual([13])
-    // The cursor moved together with the Issue it does not cover yet.
+    // 游标随它尚未覆盖的 Issue 一起移动。
     expect(Date.parse(h.store.get<string>('github-since')!)).toBeGreaterThan(Date.parse('2026-09-08T00:00:00.000Z'))
     expect(h.store.get('github-retry')).toEqual({ 12: { since: '2026-09-08T00:00:00.000Z', pr: false, attempts: 1, failedAt: expect.any(String) } })
     expect(h.store.threads.get('github:12')!.meta.pollError).toContain('Bad Gateway')
@@ -610,12 +610,12 @@ describe('github source', () => {
     github(h, { notifications: [notification(14), notification(15)], 'issues/14': deleted, 'issues/15': deleted })
     await pollRound(h)
     expect(h.store.get('github-retry')).toEqual({})
-    // Dropping a read moves no read position.
+    // 丢弃读取不会移动读取位置。
     expect(h.store.get('github-cursor:14')).toBeUndefined()
     expect(h.store.threads.get('github:14')!.meta.pollError).toContain('deleted')
-    // Without a Thread to keep it, the Source's health names it.
+    // 没有线程保存它时，来源的健康状态会点名它。
     expect(h.health.github).toMatchObject({ state: 'ready', detail: '2 notifications; next poll ≥ 60s; deleted on GitHub: #14, #15' })
-    // GitHub also answers 404 for a private repository the agent lost access to: that is a failure read again.
+    // GitHub 对智能体失去访问权限的私有仓库也返回 404：那是一次再次读取的失败。
     github(h, { notifications: [notification(16)] })
     await expect(pollRound(h)).rejects.toThrow('#16: Error: gh: Not Found (HTTP 404)')
     expect(h.store.get('github-retry')).toEqual({ 16: expect.objectContaining({ pr: false }) })
@@ -666,12 +666,12 @@ describe('github source', () => {
     await expect(pollRound(h)).rejects.toThrow('#16: Error: gh: Not Found (HTTP 404)')
     const first = h.store.get<Record<string, { failedAt: string; attempts: number }>>('github-retry')![16]!
     expect(first).toMatchObject({ attempts: 1, failedAt: expect.any(String) })
-    // However many reads failed, a day of failures has not passed: the read is retried, and the round still fails.
+    // 无论多少次读取失败，一天尚未过去：会重试读取，而本轮仍会失败。
     h.store.set('github-retry', { 16: { ...first, attempts: 99 } })
     github(h, { notifications: [] })
     await expect(pollRound(h)).rejects.toThrow('#16')
-    // A day after the first failed read, it is dropped: its Thread keeps the error, the health names it, and the round does not
-    // fail. Its read position stays, so a later read takes in what the failed reads missed.
+    // 首次失败读取一天后，它会被丢弃：其线程保留错误，健康状态点名它，而本轮不会
+    // 失败。其读取位置保留，因此之后的读取会纳入失败读取遗漏的内容。
     h.store.set('github-retry', { 16: { ...first, failedAt: new Date(Date.now() - 25 * 3600_000).toISOString() } })
     await pollRound(h)
     expect(h.store.get('github-retry')).toEqual({})
@@ -704,7 +704,7 @@ describe('github source', () => {
     const id = issueTrigger({ ...pr, id: 9 } as GithubIssue, 'agent-bot').id
     expect(opened).toEqual([expect.objectContaining({ id, addressed: 'mention', actor: { source: 'github', id: 'carol' },
       meta: expect.objectContaining({ number: 9, isPr: true, prAuthor: 'carol' }) })])
-    // The agent's own PR, and one opened before the cursor, bring no description.
+    // 智能体自己的 PR，以及游标之前打开的一个，不会带来描述。
     h.receive.mockClear()
     h.store.set('github-since', '2026-09-08T00:00:00.000Z')
     github(h, { notifications: [notification(9, 'pulls')], 'pulls/9': { ...pr, user: { login: 'agent-bot' } } })
@@ -732,13 +732,13 @@ describe('github source', () => {
     h.store.tickets.save({ ...openTicket('ticket'), follows: [{ thread: 'github:7', own: true }, { thread: 'github:8', own: true }] })
     subscribed(h, { source: 'github', id: '5' }, { number: 5, isPr: false, title: 'Gone' })
     h.store.threads.save({ ...h.store.threads.get('github:5')!, lastAt: new Date().toISOString() })
-    // The PRs' Threads, which nothing subscribes to, so only the ticket's PR reads reach them.
+    // PR 的线程没有订阅者，因此只有工单 PR 的读取会到达它们。
     for (const number of [7, 8]) {
       h.store.threads.save({ key: `github:${number}`, ref: { source: 'github', id: String(number) }, createdAt: '', subscriptions: [],
         correlated: [], pending: [], meta: {} })
     }
     github(h, { notifications: [], 'issues/5/comments': refused(410, 'Gone'), 'pulls/7': refused(410, 'Gone') })
-    // Every PR read but #8's succeeds or is dropped; #8 fails like a network error.
+    // 除 #8 外每次 PR 读取都成功或被丢弃；#8 像网络错误一样失败。
     vi.mocked(h.commands.run).mockImplementation(async (_program, args) => {
       const path = args[1]!.replace(/^repos\/acme\/widgets\//, '').split('?')[0]!
       if (path === 'notifications') return 'HTTP/2.0 200 OK\r\n\r\n[]'
@@ -755,7 +755,7 @@ describe('github source', () => {
       if (path === 'issues/5/comments' || path === 'pulls/7' || path === 'pulls/8') throw refused(410, 'Gone')
       return JSON.stringify(args.includes('--slurp') ? [[]] : [])
     })
-    // With every failure a 410, the round succeeds and names what GitHub deleted.
+    // 每次失败都是 410 时，本轮成功并点名 GitHub 删除的内容。
     await pollRound(h)
     expect(h.health.github).toMatchObject({ state: 'ready', detail: expect.stringContaining('deleted on GitHub: #5, #7, #8') })
     h.store.close()
@@ -780,7 +780,7 @@ describe('github source', () => {
       const off = await start({}, { enabled: false, config: {} })
       await vi.waitFor(() => expect(off.value.health.github).toMatchObject({ state: 'paused', code: 'sourceOff' }))
       await off.stop()
-      // Rounds fail, succeed, fail, fail: only the last two in a row make the error. A round reads through a Commands of its own.
+      // 轮次失败、成功、失败、失败：只有连续最后两次才会产生错误。一轮通过自己的命令读取。
       const outcomes = [false, true, false, false]
       let round = 0
       const run = vi.spyOn(Commands.prototype, 'run').mockImplementation(async () => {
@@ -788,7 +788,7 @@ describe('github source', () => {
         return 'HTTP/2.0 200 OK\r\n\r\n[]'
       })
       const flaky = await start({}, { enabled: true, config: { failuresBeforeError: 2 } })
-      // Each round reads its notifications once, then waits a minute for the next.
+      // 每轮读取一次通知，然后等待一分钟进入下一轮。
       const until = async (count: number) => {
         while (round < count) {
           await vi.waitFor(() => expect(round).toBeGreaterThan(0))
@@ -804,7 +804,7 @@ describe('github source', () => {
     } finally { vi.useRealTimers() }
   })
   it('reports a failure that escapes the polling loop as its health instead of an unhandled rejection', async () => {
-    // The fixture's registry already holds the kind; this one starts empty so the plugin can register it.
+    // 夹具的注册表已持有该类型；这个注册表初始为空，以便插件注册它。
     const value = host({ sources: emptyRegistry(), ready: Promise.reject(new Error('lock held')) })
     const disposers: (() => unknown)[] = []
     applyGithub({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
@@ -812,21 +812,21 @@ describe('github source', () => {
     for (const dispose of disposers) await dispose()
     value.store.close()
   })
-  /** An Issue as GitHub returns it, opened by alice. */
+  /** GitHub 返回的 Issue，由 alice 打开。 */
   const issue = (number: number, fields: Partial<GithubIssue> = {}): GithubIssue => ({ id: 1000 + number, number, title: 'Login fails',
     body: 'details', state: 'open', created_at: '2026-09-09T00:00:00Z', html_url: `https://github.com/acme/widgets/issues/${number}`,
     user: { login: 'alice', type: 'User' }, ...fields })
-  /** GitHub as `pollRound` reads it after `since`: one notification per Issue, the Issues, and their conversation comments by number. */
+  /** GitHub 在 `since` 之后被 `pollRound` 读取的内容：每个 Issue 一条通知、Issue 本身，以及按编号的会话评论。 */
   function notify(h: ReturnType<typeof host>, issues: GithubIssue[], comments: Record<number, GithubComment[]> = {},
     since = '2026-09-08T00:00:00.000Z') {
     h.store.set('github-since', since)
-    // A notification is as new as the latest change it reports: the Issue or its newest comment.
+    // 通知与它报告的最新变化一样新：Issue 或其最新评论。
     const updated = (item: GithubIssue) => [item.updated_at ?? item.created_at,
       ...(comments[item.number] ?? []).map(comment => comment.updated_at ?? '')].sort().at(-1)!
     const notifications = issues.map(item => ({ id: `n${item.number}`, updated_at: updated(item), reason: 'mention',
       repository: { full_name: 'acme/widgets' },
       subject: { url: `https://api.github.com/repos/acme/widgets/issues/${item.number}`, type: 'Issue', title: item.title } }))
-    // An Issue that is a PR also answers as the PR.
+    // 作为 PR 的 Issue 也会作为 PR 回答。
     const routes: Record<string, unknown> = { notifications, ...Object.fromEntries(issues.flatMap(item => [[`issues/${item.number}`, item],
       [`pulls/${item.number}`, openPull(item.number)],
       [`issues/${item.number}/comments`, comments[item.number] ?? []]])) }
@@ -834,7 +834,7 @@ describe('github source', () => {
   }
   it('takes in a new Issue from its notification as a Trigger with its body, addressed to the agent when the body mentions it', async () => {
     const h = host()
-    // A pull request reported at its Issue address, and an Issue the agent opened itself, add nothing.
+    // 在 Issue 地址报告的拉取请求，以及智能体自己打开的 Issue，不会添加任何内容。
     const agents = { user: { login: 'agent-bot', type: 'User' } }
     notify(h, [issue(12, { body: '@agent-bot please fix the login' }), issue(13, { pull_request: { url: 'x' } }), issue(14, agents)])
     await pollRound(h)
@@ -845,7 +845,7 @@ describe('github source', () => {
       actor: { source: 'github', id: 'alice' }, human: true, at: '2026-09-09T00:00:00Z',
       text: 'Login fails\n\n@agent-bot please fix the login', addressed: 'mention', channel: githubChannel(12, url), url,
       meta: { number: 12, isPr: false, kind: 'issue' } })
-    // An allowed sender's mention is an explicit request on that poll.
+    // 允许发送者的提及就是该轮询上的明确请求。
     expect(h.engine.candidate(id)?.strength).toBe('explicit')
     expect(h.store.threads.get('github:12')!.meta).toMatchObject({ title: 'Login fails', label: '#12 Login fails' })
     h.store.close()
@@ -859,14 +859,14 @@ describe('github source', () => {
     await pollRound(h)
     const expected = commentTrigger(comment, { number: 12, isPr: false, url }, 'conversation', 'agent-bot')
     expect(h.receive.mock.calls.map(([trigger]) => trigger)).toEqual([expected])
-    // An Issue has only its conversation; the comments are read since the notification cursor.
+    // Issue 只有其会话；评论从通知游标之后读取。
     const since = encodeURIComponent('2026-09-08T00:00:00.000Z')
     expect(reads.filter(path => path.includes('/comments'))).toEqual([`issues/12/comments?per_page=100&since=${since}`])
     h.store.close()
   })
   it('keeps one body Trigger for an Issue that a later poll reads again', async () => {
     const h = host()
-    // Opened just before the poll, the Issue is still after the cursor the next poll reads from.
+    // 就在轮询前打开的 Issue 在下一轮读取所依据的游标之后。
     notify(h, [issue(12, { created_at: new Date(Date.now() - 1000).toISOString() })], {}, new Date(Date.now() - 60_000).toISOString())
     await pollRound(h)
     await pollRound(h)
@@ -884,7 +884,7 @@ describe('github source', () => {
     expect(plain).toMatchObject({ id: key('github-issue', '12'), human: true })
     expect(plain).not.toHaveProperty('addressed')
     expect(bot).toMatchObject({ id: key('github-issue', '15'), human: false })
-    // The Issue's own read position moves past what this round read.
+    // Issue 自己的读取位置会越过本轮读取的内容。
     expect(Date.parse(h.store.get<string>('github-cursor:12')!)).toBeGreaterThan(Date.parse('2026-09-08T00:00:00.000Z'))
     h.store.close()
   })
@@ -903,7 +903,7 @@ describe('github source', () => {
   })
   it('takes in an Issue body only when the Issue was opened since the cursor, not when an edit or a comment changed it', async () => {
     const h = host()
-    // Whoever edits the body, its author would be the actor, so a mention added by an edit is not read.
+    // 无论谁编辑正文，其作者都会成为参与者，因此编辑添加的提及不会被读取。
     const edited = issue(12, { created_at: '2026-08-01T00:00:00Z', updated_at: '2026-09-09T00:00:00Z',
       body: 'Login fails. @agent-bot can you look?' })
     notify(h, [edited])
@@ -954,7 +954,7 @@ describe('github source', () => {
     expect(claimPull(h, 't1', { ...openPull(31), head: { sha: 'abc', ref: 'agent/fix-1',
       repo: { full_name: 'acme/widgets' } } })).toContain('PR does not belong to this ticket')
     expect(claimPull(h, 't1', agents(41, 'agent/fix-1'))).toBe('PR already belongs to another active ticket')
-    // A PR that is not open is not bound, and that is no refusal.
+    // 未打开的 PR 不会被绑定，而这不算拒绝。
     expect(claimPull(h, 't1', { ...agents(42, 'agent/fix-1'), state: 'closed' })).toBeUndefined()
     expect(pullOf(h.store.tickets.get('t1')!)).toBeUndefined()
     expect(claimPull(h, 't1', openPull(30))).toBeUndefined()
@@ -963,7 +963,7 @@ describe('github source', () => {
     expect(h.store.tickets.get('t1')).toMatchObject({ follows: [{ thread: 'github:30', own: false }, { thread: 'github:43', own: true }], channels: [] })
     expect(pullOf(h.store.tickets.get('t1')!)).toBe(43)
     expect(h.store.threads.get('github:43')).toMatchObject({ subscriptions: ['t1'], meta: { isPr: true, prAuthor: 'agent-bot' } })
-    // The PR the ticket started from is not one it opened: when its own PR merges, the ticket ends instead of following it.
+    // 工单起始的 PR 不是它打开的：当其自己的 PR 合并时，工单会结束而不是跟随它。
     expect(await observePull(h, endedPull(43, '2026-09-02T00:00:00Z'))).toBe(true)
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { outcome: 'merged' } })
     expect(claimPull(h, 't1', openPull(30))).toBe('Ticket ended because its PR was closed')
@@ -998,7 +998,7 @@ describe('source context', () => {
     h.threads.patch('github:7', { title: 'new', pollError: undefined })
     expect(h.store.threads.get('github:7')).toMatchObject({ subscriptions: ['t'], meta: { title: 'new', label: '#7 old' } })
     expect(h.store.threads.get('github:7')!.meta).not.toHaveProperty('pollError')
-    // A Thread that does not exist is not created.
+    // 不存在的线程不会被创建。
     h.threads.patch('github:8', { title: 'x' })
     expect(h.store.threads.get('github:8')).toBeUndefined()
     h.store.close()
@@ -1013,7 +1013,7 @@ describe('source context', () => {
     expect(h.store.keys('github-retry')).toEqual([])
     h.store.tickets.save({ ...openTicket('t1'), execution: execution('one') })
     h.tickets.bindThread('t1', { source: 'github', id: '4' }, true)
-    // The ticket follows the Thread; its other fields stay as they were.
+    // 工单跟随该线程；其其他字段保持原样。
     expect(h.store.tickets.get('t1')).toMatchObject({ follows: [{ thread: 'github:4', own: true }], execution: execution('one'),
       origin: { triggerId: 'source-t1' } })
     h.store.close()
@@ -1031,19 +1031,19 @@ describe('feishu event consumer', () => {
   let dir: string
   let controller: AbortController
   let running: Promise<unknown> | undefined
-  // The fake CLI is a real process, which starts slower while the whole suite runs.
+  // 伪 CLI 是真实进程，整个测试套件运行时启动较慢。
   const until = { timeout: 10_000 }
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'feishu-consumer-')); controller = new AbortController() })
   afterEach(async () => {
     controller.abort()
     await running
     vi.useRealTimers()
-    // Windows may still hold the last CLI's files for a moment after it is terminated.
+    // Windows 可能在终止后短暂保留上一个 CLI 的文件。
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
   /**
-   * A bot CLI whose `event consume` behaves as `mode` says: `never` gets ready, `warn` warns once ready, `ready` stays up,
-   * and `flaky` exits after its first ready. It records each run and the PID of the latest.
+   * 一个机器人 CLI，其 `event consume` 按 `mode` 所述运行：`never` 会就绪，`warn` 就绪后警告一次，`ready` 保持运行，
+   * 而 `flaky` 在首次就绪后退出。它记录每次运行以及最新运行的 PID。
    */
   function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late' | 'crlf'): string {
     const runsFile = JSON.stringify(join(dir, 'runs')), pidFile = JSON.stringify(join(dir, 'pid'))
@@ -1069,7 +1069,7 @@ ${body}`)
   }
   const runs = () => existsSync(join(dir, 'runs')) ? Number(readFileSync(join(dir, 'runs'), 'utf8')) : 0
   const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
-  /** The Feishu Source's context, on a fresh Store whose Feishu Source is on, with `cli` as the bot CLI. */
+  /** 飞书来源的上下文，位于一个开启飞书来源的新 Store 上，`cli` 作为机器人 CLI。 */
   function consumerSource(path: string, config: Record<string, unknown> = { chats: [] }) {
     const store = new Store(join(dir, 'db.sqlite'))
     store.saveSettings(SettingsSchema.parse({ sources: { feishu: { enabled: true, config } } }))
@@ -1090,7 +1090,7 @@ ${body}`)
     return { ctx: sourceContextOf(deps, feishuKind), health, store, turnOff }
   }
 
-  /** A message event line as `event consume` prints it; a group message mentions the bot. */
+  /** `event consume` 打印的消息事件行；群消息会提及机器人。 */
   const event = (id: string, chat: string, type: 'group' | 'p2p') => JSON.stringify({ message_id: id, chat_id: chat, chat_type: type,
     sender_id: 'ou_alice', sender_type: 'user', content: 'fix it', create_time: String(Date.now()),
     ...type === 'group' ? { mentions: [{ id: 'ou_bot', name: 'Bot' }] } : {} })
@@ -1119,7 +1119,7 @@ ${body}`)
     running = runFeishu(ctx, controller.signal)
     await vi.waitFor(() => expect(health.feishu).toMatchObject({ state: 'ready' }), until)
     turnOff()
-    // The CLI prints the event a second after it is ready, before the consumer stops for the Source being off.
+    // CLI 在就绪一秒后打印事件，早于消费者因来源关闭而停止。
     await vi.waitFor(() => expect(existsSync(join(dir, 'printed'))).toBe(true), until)
     await new Promise(resolve => setTimeout(resolve, 300))
     expect(store.triggers.get(feishuTriggerId('om_9'))).toBeUndefined()
@@ -1194,7 +1194,7 @@ ${body}`)
     running = runFeishu(ctx, controller.signal)
     const exited = { state: 'error', detail: expect.stringContaining('exited (1, ready=true)') }
     await vi.waitFor(() => expect(health.feishu).toMatchObject(exited), until)
-    // The first restart waits a second.
+    // 第一次重启等待一秒。
     await vi.waitFor(() => expect(runs()).toBe(2), until)
     await vi.waitFor(() => expect(health.feishu).toMatchObject({ state: 'ready' }), until)
     controller.abort(); await running; store.close()
@@ -1202,14 +1202,14 @@ ${body}`)
 })
 
 describe('observing the GitHub repository', () => {
-  /** Hour `hour` of the day before yesterday, well within the polling horizon. */
+  /** 前天 `hour` 点，完全在轮询范围内。 */
   const at = (hour: number) => new Date(Math.floor(Date.now() / 86_400_000 - 2) * 86_400_000 + hour * 3_600_000).toISOString()
   const issue = (number: number, fields: Partial<GithubIssue> = {}): GithubIssue => ({ id: 1000 + number, number, title: `Issue ${number}`,
     body: 'details', state: 'open', created_at: at(0), updated_at: at(0),
     html_url: `https://github.com/acme/widgets/issues/${number}`, user: { login: 'carol', type: 'User' }, ...fields })
   const observe = (h: ReturnType<typeof host>, config: Record<string, boolean>) =>
     h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, github: { enabled: true, config } } })
-  /** GitHub as the repository's lists and its default branch answer; a request with the ETag of an unchanged list answers 304. */
+  /** GitHub 作为仓库列表及其默认分支作答；对未更改列表的 ETag 请求会返回 304。 */
   function repository(h: ReturnType<typeof host>, answers: { issues?: unknown[]; comments?: unknown[]; reviewComments?: unknown[];
     branch?: { sha: string; checks: unknown[] } }) {
     const calls: string[][] = []
@@ -1240,21 +1240,21 @@ describe('observing the GitHub repository', () => {
       { ...issue(5, { created_at: at(3), updated_at: at(3) }), pull_request: { url: 'x' } },
       issue(6, { created_at: at(4), updated_at: at(4), user: { login: 'agent-bot', type: 'User' } })] })
     await pollRound(h)
-    // #3 was opened before the Source observed Issues, and #6 is the agent's own.
+    // #3 在来源观察 Issue 之前打开，#6 是智能体自己的。
     expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.meta.kind, trigger.id]))
       .toEqual([[4, 'issue', issueTrigger(issue(4), 'agent-bot').id], [5, 'pull', issueTrigger(issue(5), 'agent-bot').id]])
     const started = { issues: at(0), pulls: at(0) }
     expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(4)), started })
     const list = () => calls.filter(args => args[1]!.startsWith('repos/acme/widgets/issues?'))
     expect(list()[0]![1]).toContain(`since=${encodeURIComponent(at(0))}`)
-    // The next round repeats the request at the newest Issue, whose ETag the round after sends, which GitHub answers 304 for.
+    // 下一轮会在最新 Issue 处重复请求，其后一轮会发送该 ETag，GitHub 对此返回 304。
     await pollRound(h)
     expect(h.store.get('github-stream:issues')).toEqual({ since: cursorAt(at(4)), started, etag: '"same"' })
     h.receive.mockClear()
     await pollRound(h)
     expect(list().at(-1)).toEqual(expect.arrayContaining(['-H', 'If-None-Match: "same"']))
     expect(h.receive).not.toHaveBeenCalled()
-    // Switched off, the stream forgets where it was, so it starts afresh once switched on again.
+    // 关闭后，流会忘记其位置，因此再次开启时会重新开始。
     observe(h, {})
     await pollRound(h)
     expect(h.store.get('github-stream:issues')).toBeUndefined()
@@ -1316,7 +1316,7 @@ describe('observing the GitHub repository', () => {
     const list = calls.find(args => args[1]!.startsWith('repos/acme/widgets/issues?'))!
     expect(list).not.toContain('-H')
     const since = Date.parse(decodeURIComponent(/since=([^&]+)/.exec(list[1]!)![1]!))
-    // The horizon, on the hour.
+    // 地平线，按小时。
     expect(Date.now() - POLL_HORIZON_MS - since).toBeGreaterThanOrEqual(0)
     expect(Date.now() - POLL_HORIZON_MS - since).toBeLessThan(3_600_000)
     h.store.close()
@@ -1337,14 +1337,14 @@ describe('observing the GitHub repository', () => {
     const h = host()
     observe(h, { observeIssues: true, observePulls: true })
     h.store.set('github-since', at(-24))
-    // The stream took in Issues from hour 0; PRs were switched on only now.
+    // 流从第 0 小时起纳入 Issue；PR 直到现在才开启。
     h.store.set('github-stream:issues', { since: at(0), started: { issues: at(0) } })
     repository(h, { issues: [{ ...issue(5, { created_at: at(2), updated_at: at(2) }), pull_request: { url: 'x' } },
       issue(6, { created_at: at(3), updated_at: at(3) })] })
     await pollRound(h)
     expect(h.receive.mock.calls.map(([trigger]) => [trigger.meta.number, trigger.meta.kind])).toEqual([[6, 'issue']])
     expect(h.store.get<{ started: Record<string, string> }>('github-stream:issues')!.started).toEqual({ issues: at(0), pulls: expect.any(String) })
-    // Switched off, a kind forgets its start.
+    // 关闭后，类型会忘记其起点。
     observe(h, { observePulls: true })
     await pollRound(h)
     expect(Object.keys(h.store.get<{ started: Record<string, string> }>('github-stream:issues')!.started)).toEqual(['pulls'])
@@ -1358,7 +1358,7 @@ describe('observing the GitHub repository', () => {
     repository(h, { issues: [issue(6, { created_at: at(3), updated_at: at(3) })] })
     await pollRound(h)
     expect(h.store.get<{ since: string }>('github-stream:issues')!.since).toBe(new Date(Date.parse(at(3)) - 5000).toISOString())
-    // A cursor behind the horizon reads from the horizon on the hour, the same in the next round, which sends the ETag.
+    // 落后于地平线的游标会从按小时的地平线读取，下一轮也一样，并发送 ETag。
     const old = new Date(Date.now() - 20 * 86_400_000).toISOString()
     h.store.set('github-stream:issues', { since: old, started: { issues: old } })
     const calls = repository(h, {})
@@ -1385,7 +1385,7 @@ describe('observing the GitHub repository', () => {
     const ids = h.receive.mock.calls.map(([trigger]) => trigger.id)
     expect(ids).toHaveLength(3)
     expect(new Set(ids).size).toBe(3)
-    // Switched off and on again, the CI starts from a new first look, and its ids keep counting.
+    // 再次关闭并开启后，CI 会从新的首次查看开始，其 id 继续计数。
     observe(h, {})
     await pollRound(h)
     observe(h, { observeCi: true })
@@ -1409,7 +1409,7 @@ describe('observing the GitHub repository', () => {
     await pollRound(h)
     answers.branch = { sha: 'bbb2222', checks: [check('lint', 'failure'), check('e2e', 'success')] }
     await pollRound(h)
-    // A rerun that still runs is no recovery yet; the recovery is told once every check passes.
+    // 仍在运行的重新运行尚不算恢复；每次检查通过后才会通知恢复。
     answers.branch = { sha: 'ccc3333', checks: [check('lint', null), check('e2e', null)] }
     await pollRound(h)
     answers.branch = { sha: 'ccc3333', checks: [check('lint', 'success'), check('e2e', 'success')] }

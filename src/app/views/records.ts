@@ -1,4 +1,4 @@
-/** Shared view projections for triggers, tickets, threads, decisions, and channel links. */
+/** 触发器、工单、线程、决策与渠道链接的共享视图投影。 */
 import { z } from 'zod'
 import { canRetry, followupOwners, latestReport, liveTicket, settled, threadKey, ticketStage, type ActorRef, type ChannelRef, type Decision,
   type DecisionKind, type Thread, type ThreadFacts, type Ticket, type TicketStage, type Trigger } from '../../core/index.ts'
@@ -16,13 +16,13 @@ const DAY = 86_400_000
 export const dayAgo = () => new Date(Date.now() - DAY).toISOString()
 export const newestFirst = (a: Ticket, b: Ticket) => b.updatedAt.localeCompare(a.updatedAt)
 
-/** Sender projection for the UI; automated notices have an empty `id` and no `name`. */
+/** 面向 UI 的发送者投影；自动通知的 `id` 为空且没有 `name`。 */
 export interface ActorView { source: string; id: string; name?: Localized }
-/** The tickets whose worker decides a person's follow-up (see `followupOwners`). */
+/** 由执行器决定人员后续消息归属的工单（见 `followupOwners`）。 */
 export type Owners = (trigger: Trigger) => string[]
 /**
- * The owners of follow-ups as one request reads them: the rows of a page share their tickets and Threads, so each is read
- * once however many rows it decides.
+ * 一次请求读取时后续消息的归属方：同一页的各行共享其工单与线程，因此无论有多少行需要判断，
+ * 每个工单或线程都只读取一次。
  */
 export function ownersOf(store: Pick<Store, 'tickets' | 'threads' | 'triggers'>): Owners {
   const once = <T>(read: (id: string) => T) => {
@@ -33,14 +33,14 @@ export function ownersOf(store: Pick<Store, 'tickets' | 'threads' | 'triggers'>)
     triggers: store.triggers }
   return trigger => followupOwners(trigger, records)
 }
-/** One request's reads, each read once: the Threads each Ticket subscribes to, the rules by id, and the senders' names. */
+/** 单次请求内的读取，每项只读一次：每个工单订阅的线程、按 id 索引的规则，以及发送者名称。 */
 export interface Snapshot extends ViewHost {
   threadsOf(ticketId: string): Thread[]
-  /** Current rule name, falling back to `id` once a rule has been removed. */
+  /** 当前规则名称；规则被移除后回退到 `id`。 */
   rule(id: string): { id: string; name: string }
-  /** Resolves sender display name from policy allowlists/bot lists, falling back to the Source kind's unnamed label or raw id. */
+  /** 从策略允许列表/机器人列表中解析发送者显示名，回退到来源类型的未命名标签或原始 id。 */
   actor(actor: ActorRef, human?: boolean): ActorView
-  /** The owners of follow-ups (see `ownersOf`). */
+  /** 后续消息的归属方（见 `ownersOf`）。 */
   owners: Owners
 }
 export function snapshot(host: ViewHost): Snapshot {
@@ -68,8 +68,8 @@ export function snapshot(host: ViewHost): Snapshot {
 }
 
 /**
- * The Triggers of a Thread's queue that wait for an Eval: a person's follow-up a ticket still decides, which an older
- * version queued, leaves the queue with the next Eval without one.
+ * 线程队列中等待 Eval 的触发器：仍由某个工单决定的人员后续消息（由较旧版本排队）会在下一次不带该消息的
+ * Eval 后离开队列。
  */
 export const awaitingEval = ({ store, owners }: { store: Pick<Store, 'triggers'>; owners: Owners }, thread: Thread): string[] =>
   thread.pending.filter(id => {
@@ -77,11 +77,10 @@ export const awaitingEval = ({ store, owners }: { store: Pick<Store, 'triggers'>
     return !trigger || !owners(trigger).length
   })
 /**
- * A trigger with where it went: queued for Eval, the Decision that consumed it, the Tickets it fanned out to, `delivered`
- * when it is a person's follow-up that a ticket's worker decides without an Eval, and the Tickets that handed it back for
- * a new Eval, with why; `requeue` when a person may send it to Eval, which is where no Eval reached a judgement: its Source
- * filtered it, its Eval was unavailable, a ticket's worker still decides it, or it reached a ticket and nothing decided it,
- * such as a message a worker neither acknowledged, answered nor handed back, or one only a stop was decided on.
+ * 触发器及其去向：排队等待 Eval、消费它的决策、它分发到的工单；当其属于由工单执行器不经 Eval 判断的人员后续
+ * 消息时为 `delivered`；还包括将其交回以重新评估的工单及原因。当人员可以把它送去 Eval 时为 `requeue`，
+ * 即没有任何 Eval 得出结论的情况：其来源将其过滤、其 Eval 不可用、工单执行器仍在决定它，或它到达了工单却
+ * 无人决定，例如执行器既未确认、未回答也未交回的消息，或仅对其做出了停止决策的消息。
  */
 export function triggerView(view: Snapshot, trigger: Trigger, threadDecisions?: Decision[]) {
   const { store } = view
@@ -106,7 +105,7 @@ export function triggerView(view: Snapshot, trigger: Trigger, threadDecisions?: 
         : undefined } }
 }
 export type TriggerView = ReturnType<typeof triggerView>
-/** Single-line summary of why a ticket in the `person` stage is waiting on human action (omitted once answered and back with the Executor). */
+/** 处于 `person` 阶段的工单为何在等待人员处理的一行摘要（已回答并回到执行器后省略）。 */
 function ticketNote(ticket: Ticket, stage: TicketStage): { text: string; error: boolean } | undefined {
   if (stage.stage !== 'person') return undefined
   if (stage.action === 'answer' && ticket.attention) return { text: preview(ticket.attention.question), error: false }
@@ -123,7 +122,7 @@ export function ticketSummary(ticket: Ticket) {
     actions: { retry: canRetry(ticket), stop: liveTicket(ticket) }, strength: ticket.mandate.strength, ended: ticket.ended,
     attention: ticket.attention && { ...ticket.attention, question: markdown(ticket.attention.question) },
       assignments: ticket.assignments.length, inputs: ticket.inputs.length, undelivered: ticket.undelivered.length,
-    // Every started Assignment of a Ticket runs in its one shared worker Session.
+    // 工单中每个已开始的分配都在其唯一的共享执行器会话中运行。
     deliveryError: attribute(ticket.delivery?.error), sessionId: ticket.assignments.some(item => item.startedAt)
       ? workerSessionId(ticket.id) : '',
     directory: attribute(ticket.execution?.directory), summary: latestReport(ticket)?.summary ?? '', createdAt: ticket.createdAt,
@@ -143,7 +142,7 @@ export const ticketLine = (view: Snapshot, ticket: Ticket) => ({ ...ticketSummar
 export function threadTitle(store: Pick<Store, 'read'>, thread: Thread): string {
   const label = attribute(thread.meta.label)
   if (label) return label
-  // Prefer the first human trigger over automated triggers when deriving a fallback thread title.
+  // 推导后备线程标题时，优先使用首个由人员发出的触发器，而非自动触发器。
   const first = store.read.firstTrigger(thread.key, true) ?? store.read.firstTrigger(thread.key)
   return first ? preview(first.text, 80) : thread.key
 }
@@ -152,7 +151,7 @@ function latestOnThread(view: Snapshot, thread: Thread) {
   if (!trigger) return undefined
   return { actor: view.actor(trigger.actor, trigger.human), human: trigger.human, at: trigger.at, preview: preview(trigger.text, 120) }
 }
-/** Thread lifecycle stage in priority order: poll error, evaluating, queued, subscribed by open ticket, dormant (ended tickets only), or unsubscribed. */
+/** 线程生命周期阶段，按优先级排列：轮询错误、评估中、排队中、被未结束工单订阅、休眠（仅有已结束工单）或未订阅。 */
 export type ThreadStage = 'error' | 'evaluating' | 'queued' | 'subscribed' | 'dormant' | 'unsubscribed'
 function threadStage(thread: Thread, pending: number, tickets: { state: string }[]): ThreadStage {
   if (attribute(thread.meta.pollError)) return 'error'
@@ -176,12 +175,12 @@ export function threadSummary(view: Snapshot, thread: Thread) {
     facts: (thread.meta.facts ?? {}) as ThreadFacts }
 }
 export type ThreadSummaryView = ReturnType<typeof threadSummary>
-/** Resolves a channel link, preferring the specific trigger URL when the source link references a trigger. */
+/** 解析渠道链接；当来源链接指向某个触发器时，优先使用该触发器的 URL。 */
 export function channelLink({ store, links }: ViewHost, channel: ChannelRef) {
   const { url, label, triggerId } = links(channel)
   return { source: channel.source, url: (triggerId && store.triggers.get(triggerId)?.url) || url, label }
 }
-/** Parses stored assessment audit metadata, tolerating fields omitted or shaped differently by older versions. */
+/** 解析已保存的评估审计元数据，容忍旧版本省略或形状不同的字段。 */
 const AuditSchema = z.object({
   would_accept: z.boolean().optional().catch(undefined),
   rule_assessments: z.array(z.object({ rule_id: z.string(), matched: z.boolean(), reason: z.string() })).optional().catch(undefined),
@@ -189,7 +188,7 @@ const AuditSchema = z.object({
   direction: z.object({ implementation_requested: z.boolean(), target_basis: z.string(), requires_design_decision: z.boolean(),
     evidence: z.string() }).optional().catch(undefined),
 }).catch({})
-/** Decision kind, or `wouldAccept` for an ignore decision that observe mode would have accepted. */
+/** 决策类型；对观察模式下本会接受的忽略决策，返回 `wouldAccept`。 */
 export type DecisionOutcome = DecisionKind | 'wouldAccept'
 const outcomeOf = (decision: Decision): DecisionOutcome =>
   decision.kind === 'ignore' && AuditSchema.parse(decision.audit ?? {}).would_accept ? 'wouldAccept' : decision.kind
@@ -198,7 +197,7 @@ export function decisionView(view: Snapshot, decision: Decision) {
   const thread = store.threads.get(decision.threadKey)
   const texts = decision.triggerIds.flatMap(id => { const trigger = store.triggers.get(id); return trigger ? [preview(trigger.text)] : [] })
   const audit = AuditSchema.parse(decision.audit ?? {})
-  // Fall back to `matches` for assessments recorded by older versions.
+  // 对旧版本记录的评估回退到 `matches`。
   const judged = audit.rule_assessments ?? audit.matches?.map(match => ({ ...match, matched: true })) ?? []
   return { id: decision.id, kind: decision.kind, outcome: outcomeOf(decision), reason: decision.reason, at: decision.at,
     strength: decision.strength, ticketId: decision.ticketId, triggerIds: decision.triggerIds, thread: decision.threadKey,

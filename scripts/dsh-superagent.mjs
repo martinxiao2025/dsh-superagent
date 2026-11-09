@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Manage a local dsh-superagent service (one DSH profile, default `superagent`) without affecting other tmux sessions.
+ * 管理本地 dsh-superagent 服务（一个 DSH 配置文件，默认 `superagent`），且不影响其他 tmux 会话。
  *
- * `status`, `start`, and `restart` exit 0 while the service runs normally; 1 when it is stopped, duplicated, unreachable, or
- * reporting a runtime error, which `restart` may fix; 2 when it runs while a component such as a Source reports an error;
- * and 3 when it runs and waits for setup. A restart fixes neither 2 nor 3: they need a person.
+ * 服务正常运行时，`status`、`start` 和 `restart` 退出码为 0；服务已停止、重复、不可达或
+ * 报告运行时错误时为 1，`restart` 可能修复该错误；当某个组件（例如来源）报告错误而服务仍在运行时为 2；
+ * 服务运行并等待设置时为 3。重启既不能修复 2 也不能修复 3：它们需要人处理。
  *
- * The script is plain Node.js so it starts on every platform the bundle installs on; `ps` and `tmux` are still required
- * to run a service, and are resolved through PATH.
+ * 脚本是纯 Node.js，因此能在捆绑包安装的每个平台上启动；运行服务仍需要 `ps` 和 `tmux`，
+ * 它们通过 PATH 解析。
  */
 import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
@@ -20,17 +20,17 @@ const ARTIFACTS = join(ROOT, '.artifacts')
 const CONTROL = join(ARTIFACTS, 'control')
 const KEEP_LOGS = 20
 
-/** Return the control directory for `profile`, creating it if needed. */
+/** 返回 `profile` 的控制目录，必要时创建它。 */
 function control(profile) {
   const directory = join(CONTROL, 'profiles', profile)
   mkdirSync(directory, { recursive: true })
   return directory
 }
 
-/** Return whether `profile` was intentionally stopped. */
+/** 返回 `profile` 是否被有意停止。 */
 const stopped = profile => existsSync(join(control(profile), 'manually-stopped'))
 
-/** Return whether command-line arguments belong to the main DSH service process for `profile`. */
+/** 返回命令行参数是否属于 `profile` 的主 DSH 服务进程。 */
 function serves(args, profile) {
   const words = []
   let matched = false
@@ -46,10 +46,10 @@ function serves(args, profile) {
   return matched && !words.includes('plugin')
 }
 
-/** The extensions a bare command name may carry on this platform, as `cmd` and `which` do. */
+/** 裸命令名在此平台上可能携带的扩展名，正如 `cmd` 和 `which` 所做的那样。 */
 const EXTENSIONS = process.platform === 'win32' ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : ['']
 
-/** Resolve `name` on PATH to an executable file, or return undefined. */
+/** 在 PATH 上将 `name` 解析为可执行文件，找不到则返回 undefined。 */
 function which(name) {
   for (const directory of (process.env.PATH ?? '').split(delimiter)) {
     if (!directory) continue
@@ -61,24 +61,24 @@ function which(name) {
   return undefined
 }
 
-/** Quote one argument for a `cmd.exe /c` command line, doubling embedded quotes as cmd expects. */
+/** 为 `cmd.exe /c` 命令行引用一个参数，并按 cmd 的期望将内嵌引号加倍。 */
 const cmdQuote = argument => `"${argument.replaceAll('"', '""')}"`
 /**
- * The file and argument list that start `program`. A batch file needs `cmd.exe`, because Windows cannot start it
- * directly; cmd strips one layer of quotes after `/s /c`, so the whole command is quoted once more.
+ * 启动 `program` 的文件与参数列表。批处理文件需要 `cmd.exe`，因为 Windows 无法直接启动它；
+ * cmd 会在 `/s /c` 后剥掉一层引号，因此整个命令会再引用一次。
  */
 const commandOf = (program, args) => process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(program)
   ? [process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${[program, ...args].map(cmdQuote).join(' ')}"`]]
   : [program, args]
 
-/** Return whether `pid` names a running process. */
+/** 返回 `pid` 是否指向一个正在运行的进程。 */
 function alive(pid) {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
 /**
- * Yield `[pid, command name, argv]` from `ps`. Arguments are split on whitespace, so paths with spaces become several
- * words and only `--profile` and subcommands are inspected.
+ * 从 `ps` 产生 `[pid, 命令名, argv]`。参数按空白拆分，因此含空格的路径会变成多个
+ * 词，只有 `--profile` 和子命令会被检查。
  */
 function ps(options = [], check = false) {
   const program = which('ps')
@@ -94,12 +94,12 @@ function ps(options = [], check = false) {
   return found
 }
 
-/** Return whether `pid` is currently running the DSH service for `profile` (`ps -p` returns nothing once exited). */
+/** 返回 `pid` 当前是否正在运行 `profile` 的 DSH 服务（进程退出后 `ps -p` 不返回任何内容）。 */
 const running = (pid, profile) => ps(['-p', String(pid)]).some(([found, name, args]) => found === pid && (name === 'node' || name === 'dsh') && serves(args, profile))
 
 /**
- * Return the PIDs of all running DSH service processes for `profile`, including instances started outside this script
- * and the recorded `service.pid` while it still runs.
+ * 返回 `profile` 的所有正在运行的 DSH 服务进程 PID，包括在本脚本之外启动的实例
+ * 以及仍在运行的已记录 `service.pid`。
  */
 function processes(profile) {
   const found = ps(['-ax'], true).filter(([, name, args]) => (name === 'node' || name === 'dsh') && serves(args, profile)).map(([pid]) => pid)
@@ -109,8 +109,8 @@ function processes(profile) {
 }
 
 /**
- * Fetch health and setup status from the management API, or return undefined if unreachable.
- * The request deliberately avoids a keep-alive agent and long-lived handles, so a CLI run exits as soon as it is done.
+ * 从管理 API 获取健康状态与设置状态，不可达时返回 undefined。
+ * 请求特意避免 keep-alive 代理和长期句柄，因此 CLI 运行完成后会立即退出。
  */
 function state(url) {
   return new Promise(resolve => {
@@ -135,9 +135,9 @@ function state(url) {
   })
 }
 
-/** Reduce a management API answer to the health and setup fields the CLI reports. */
+/** 将管理 API 的回答精简为 CLI 所报告的 health 与 setup 字段。 */
 function summarize(value) {
-  // Keys omitted by another version read as empty so the service is not mistaken for unreachable.
+  // 另一个版本省略的键会读为空，以免服务被误认为不可达。
   const health = value.health ?? {}
   const setup = value.setup ?? {}
   const entries = Object.entries(health).map(([name, entry]) => [name, entry && typeof entry === 'object' ? entry : {}])
@@ -153,17 +153,17 @@ const PART_ERROR = 2
 const SETUP_WAITS = 3
 const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds))
 
-/** Return whether the runtime is ready or paused awaiting operator action; a component still starting does not hold this up. */
+/** 返回运行时是否已就绪，或暂停等待操作者操作；仍在启动的组件不会阻止这一判断。 */
 const runtimeUp = current => current !== undefined && ['ready', 'paused'].includes(current.health.runtime)
 
-/** Return non-runtime components that are in an error state. */
+/** 返回处于错误状态的非常规运行时组件。 */
 const partErrors = current => Object.fromEntries(Object.entries(current.errors).filter(([name]) => name !== 'runtime').sort(([a], [b]) => a.localeCompare(b)))
 
-/** Compute the CLI exit code from running PIDs and management API state. */
+/** 根据运行中的 PID 和管理 API 状态计算 CLI 退出码。 */
 function outcome(pids, current) {
   if (pids.length !== 1 || !runtimeUp(current)) return 1
   if (current.setup) return SETUP_WAITS
-  // A component's lasting error, unlike a Feishu bot check that failed during setup, requires operator action.
+  // 组件的持续错误不同于设置期间失败的飞书机器人检查，需要操作者处理。
   return Object.keys(partErrors(current)).length ? PART_ERROR : 0
 }
 
@@ -178,7 +178,7 @@ async function status(options) {
   return outcome(pids, current)
 }
 
-/** The current local time as `YYYY-MM-DDTHH:MM:SS+ZZZZ`. */
+/** 当前本地时间，格式为 `YYYY-MM-DDTHH:MM:SS+ZZZZ`。 */
 function timestamp() {
   const now = new Date()
   const pad = value => String(Math.trunc(Math.abs(value))).padStart(2, '0')
@@ -187,11 +187,11 @@ function timestamp() {
     + `${offset >= 0 ? '+' : '-'}${pad(offset / 60)}${pad(offset % 60)}`
 }
 
-/** Stop the service gracefully, recording a manual stop marker when `intentional` is true. */
+/** 优雅停止服务；当 `intentional` 为 true 时记录手动停止标记。 */
 async function stop(options, intentional = true) {
   const pids = processes(options.profile)
   if (pids.length > 1) throw new Error('Multiple dsh-superagent processes found; refusing to choose one.')
-  // Write the stop marker before waiting so monitors respect the intentional stop even if graceful shutdown times out.
+  // 在等待之前写入停止标记，这样即使优雅关闭超时，监控也会尊重这次有意停止。
   if (intentional) writeFileSync(join(control(options.profile), 'manually-stopped'), timestamp() + '\n')
   for (const pid of pids) process.kill(pid, process.platform === 'win32' ? 'SIGTERM' : 'SIGINT')
   const deadline = Date.now() + options.stopTimeout * 1000
@@ -203,7 +203,7 @@ async function stop(options, intentional = true) {
   console.log(intentional ? 'dsh-superagent stopped. Automatic recovery is paused until start/restart.' : 'dsh-superagent stopped.')
 }
 
-/** Retain only the newest `KEEP_LOGS` log files for `profile`. */
+/** 只保留 `profile` 最新的 `KEEP_LOGS` 个日志文件。 */
 function pruneLogs(profile) {
   const name = new RegExp('^' + `dsh-superagent-${profile}-`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\d{8}-\\d{6}-\\d+\\.log$')
   const logs = readdirSync(ARTIFACTS).filter(file => name.test(file)).map(file => join(ARTIFACTS, file))
@@ -211,7 +211,7 @@ function pruneLogs(profile) {
   for (const file of logs.slice(0, Math.max(0, logs.length - KEEP_LOGS))) rmSync(file, { force: true })
 }
 
-/** Quote one word for a POSIX shell, as tmux runs the start command. */
+/** 为 POSIX shell 引用一个词，正如 tmux 运行启动命令那样。 */
 const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`
 
 async function start(options) {
@@ -227,10 +227,10 @@ async function start(options) {
     const log = join(ARTIFACTS, `dsh-superagent-${options.profile}-${localStamp()}-${process.pid}.log`)
     writeFileSync(log, '')
     pruneLogs(options.profile)
-    // `exec` replaces the shell so the pane PID printed by tmux is the DSH service process itself.
+    // `exec` 替换 shell，因此 tmux 打印的面板 PID 就是 DSH 服务进程本身。
     const command = 'umask 077; exec ' + [dsh, '--profile', options.profile, '--no-open'].map(shellQuote).join(' ')
       + ' >> ' + shellQuote(log) + ' 2>&1'
-    // Reuse an existing tmux session without disturbing other windows.
+    // 复用现有 tmux 会话，而不打扰其他窗口。
     const target = exists ? ['new-window', '-t', '=' + session + ':'] : ['new-session', '-s', session]
     const [tmuxFile, tmuxArgs] = commandOf(tmux, [...target, '-d', '-P', '-F', '#{pane_pid}', '-n', 'server', '-c', ROOT, command])
     const result = spawnSync(tmuxFile, tmuxArgs, { encoding: 'utf8', windowsVerbatimArguments: process.platform === 'win32' })
@@ -265,7 +265,7 @@ async function start(options) {
   throw new Error('Startup health check timed out; inspect the log. Any running process was left intact.')
 }
 
-/** The local stamp of a log file name, `YYYYMMDD-HHMMSS`. */
+/** 日志文件名的本地时间戳，格式为 `YYYYMMDD-HHMMSS`。 */
 function localStamp() {
   const now = new Date()
   const pad = value => String(value).padStart(2, '0')
@@ -273,8 +273,8 @@ function localStamp() {
 }
 
 /**
- * Take the profile's control lock, so two operations cannot interleave. The lock is a file naming its owner;
- * a file left by a process that no longer runs is reclaimed.
+ * 取得配置文件的控制锁，使两个操作无法交错。锁是一个命名其所有者的文件；
+ * 已不再运行的进程留下的文件会被回收。
  */
 function acquire(profile) {
   const lock = join(control(profile), 'operation.lock')
@@ -294,7 +294,7 @@ function acquire(profile) {
   throw new Error('Another dsh-superagent control operation is in progress.')
 }
 
-/** Parse the command line, writing usage errors to standard error and exiting 2 as `argparse` did. */
+/** 解析命令行，将用法错误写入标准错误，并像 `argparse` 那样以 2 退出。 */
 function parse(argv) {
   const options = {
     action: undefined,
@@ -334,7 +334,7 @@ async function main() {
     }
     if (options.action === 'status') return await status(options)
     if (options.action === 'stop' || options.action === 'restart') {
-      // Only a stop keeps automatic recovery off; a restart whose stop timed out leaves it on.
+      // 只有停止会让自动恢复保持关闭；停止超时的重启会使其保持开启。
       await stop(options, options.action === 'stop')
     }
     if (options.action === 'start' || options.action === 'restart') return await start(options)

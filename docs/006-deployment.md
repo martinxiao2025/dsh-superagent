@@ -1,39 +1,39 @@
-# 006 Deployment
+# 006 部署
 
-Use this guide to install, configure and operate dsh-superagent. It covers accounts, startup checks, upgrades and troubleshooting, building on [001 Domain model](001-domain.md) through [005 Panel](005-panel.md).
+使用本指南安装、配置和运维 dsh-superagent。它涵盖账号、启动检查、升级和故障排查，建立在 [001 领域模型](001-domain.md) 到 [005 面板](005-panel.md) 之上。
 
-## What runs
+## 运行的内容
 
-- **A dedicated DeepSeek Harness profile**, called `superagent` in this guide. Create it from the Web profile template. It loads the bundle and serves its panel on `127.0.0.1`. Keep it separate from the profile you work in: the plugin changes process-wide `PATH` and git settings, and its process needs independent restarts and upgrades.
-- **An agent GitHub account.** The agent comments, pushes branches and opens pull requests as this account, through a GitHub CLI signed in only as that account.
-- **Optional:** a Feishu bot for chat requests.
-- **Optional:** a GitLab account and project, read and commented on through a GitLab CLI signed in as that account.
+- **一个专用的 DeepSeek Harness profile，** 本指南中称为 `superagent`。从 Web profile 模板创建它。它加载本插件包，并在 `127.0.0.1` 上提供面板。让它与你日常工作的 profile 分开：插件会修改进程级的 `PATH` 和 git 设置，其进程需要独立的重启和升级。
+- **一个智能体 GitHub 账号。** 智能体以此账号发表评论、推送分支并打开拉取请求，通过仅以该账号登录的 GitHub CLI 进行。
+- **可选：** 用于聊天请求的飞书机器人。
+- **可选：** 一个 GitLab 账号和项目，通过以该账号登录的 GitLab CLI 读取和评论。
 
-Plugin configuration holds the state directory and machine limits. Use the panel for everything else: Sources for the repository and accounts, Policy for allowed lists, and Execution for worker directories and commands.
+插件配置保存状态目录和机器限制。其他所有内容都使用面板：来源用于仓库和账号，策略用于允许名单，执行用于执行器目录和命令。
 
-### Permissions and isolation
+### 权限与隔离
 
-The bundle defines `dsh-superagent-worker` for Executors and `dsh-superagent-router` for the main Session. They appear in the DeepSeek Harness preset list but are intended only for dsh-superagent. Do not select them for personal Sessions or disable their configuration rows. The application needs them to create and resume its Sessions.
+插件包为执行器定义 `dsh-superagent-worker`，为主会话定义 `dsh-superagent-router`。它们会出现在 DeepSeek Harness 的预设列表中，但只供 dsh-superagent 使用。不要为个人会话选择它们，也不要禁用它们的配置行。本应用需要它们来创建和恢复会话。
 
-Opening a blank managed Session in the Web UI can select the profile's default preset. dsh-superagent restores its role-specific preset before the first turn.
+在 Web UI 中打开空白的受管会话时，可能会选中该 profile 的默认预设。dsh-superagent 会在第一个回合之前恢复其角色专用预设。
 
-Both presets run with `danger-full-access` as the operator's OS user and read messages from subscribed Threads. Account wrappers choose the agent's credentials by default; they do not isolate the process. A worker can execute programs by path and read the operator's home directory. For isolation, use a dedicated OS account containing only the agent's credentials.
+两个预设都以 `danger-full-access` 以操作者的操作系统用户身份运行，并读取已订阅线程的消息。账号包装脚本默认选择智能体的凭据；它们不隔离进程。执行器可以按路径执行程序，并读取操作者的主目录。若要隔离，请使用仅包含智能体凭据的专用操作系统账号。
 
-## Prerequisites
+## 前置条件
 
-- Node.js 22.19+ or 24+, pnpm, git 2.32+, tmux
-- GitHub CLI (`gh`) 2.48 or later. Source CLI fields must point to `gh`, `lark-cli` or `glab` wrappers; the host relies on their subcommands and output formats.
-- A repository on github.com; GitHub Enterprise Server is not supported. To create a checkout per Ticket, keep a local clone from which the prepare command can add worktrees. Install `git-lfs` if that repository uses Git LFS.
-- A model provider configured for DeepSeek Harness. dsh-superagent uses the profile's default model unless the Eval or Execution settings name another.
-- For Feishu: `lark-cli` (tested with 1.0.90) and a Feishu or Lark app with a bot
-- For GitLab: `glab` (Developer access or higher on the project)
+- Node.js 22.19+ 或 24+、pnpm、git 2.32+、tmux
+- GitHub CLI（`gh`）2.48 或更高版本。来源的 CLI 字段必须指向 `gh`、`lark-cli` 或 `glab` 包装脚本；宿主依赖它们的子命令和输出格式。
+- github.com 上的一个仓库；不支持 GitHub Enterprise Server。要为每个工单创建检出，请保留一个本地克隆，让准备命令可以从中添加 worktree。如果该仓库使用 Git LFS，请安装 `git-lfs`。
+- 为 DeepSeek Harness 配置的模型提供方。除非评估或执行设置指定了其他模型，dsh-superagent 使用该 profile 的默认模型。
+- 飞书：`lark-cli`（已在 1.0.90 测试）以及带机器人的飞书或 Lark 应用
+- GitLab：`glab`（在项目上具有 Developer 或更高权限）
 
-## Accounts
+## 账号
 
-### Agent GitHub account
+### 智能体 GitHub 账号
 
-1. Create a GitHub user account for the agent and give it write access to the repository. A GitHub App cannot be the agent, because dsh-superagent reads the account's notifications.
-2. Give it a GitHub CLI that uses only its own credentials:
+1. 为智能体创建一个 GitHub 用户账号，并授予它对仓库的写权限。GitHub App 不能作为智能体，因为 dsh-superagent 会读取该账号的通知。
+2. 为它提供一个仅使用自身凭据的 GitHub CLI：
 
    ```sh
    mkdir -p ~/.local/bin
@@ -46,12 +46,12 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
    gh-agent api user --jq .login
    ```
 
-   Sign in as the agent account; the last command prints its login. dsh-superagent reads the login the same way.
+   以智能体账号登录；最后一条命令会打印其登录名。dsh-superagent 也以同样方式读取登录名。
 
-### Feishu bot (optional)
+### 飞书机器人（可选）
 
-1. Create a self-built app with the bot capability. Grant it the permissions to receive message events, read and send chat messages, and read chat members, then publish the app version.
-2. Give the bot its own `lark-cli` configuration, restricted to the bot identity, and a wrapper:
+1. 创建一个具有机器人能力的自建应用。授予它接收消息事件、读取和发送群消息、读取群成员的权限，然后发布应用版本。
+2. 给机器人一份自己的 `lark-cli` 配置，限制为机器人身份，并创建包装脚本：
 
    ```sh
    LARKSUITE_CLI_CONFIG_DIR="$HOME/.lark-cli-dsh-superagent" lark-cli config init --app-id <cli_…> --app-secret-stdin
@@ -64,51 +64,48 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
    chmod +x ~/.local/bin/lark-bot
    ```
 
-   The first command reads the app secret from standard input. Use a separate configuration directory: `lark-cli` allows one profile per app id, and your personal configuration may already contain a user login for that app.
+   第一条命令从标准输入读取应用密钥。请使用单独的配置目录：`lark-cli` 每个应用 id 只允许一个 profile，而你的个人配置中可能已经包含该应用的用户登录。
+   宿主会拒绝能以用户身份行动的 CLI。它从机器人配置中读取应用 id、飞书/Lark 品牌和机器人 `open_id`。
+   两份配置共享应用密钥的钥匙串条目。若要仅移除机器人配置，请删除其目录；不要运行 `lark-cli config remove`，那会影响共享的密钥。
+3. 在飞书或 Lark 开发者控制台中，为应用订阅 `im.message.receive_v1`，并通过长连接（WebSocket）投递事件，然后发布应用版本。dsh-superagent 运行 `lark-cli event consume im.message.receive_v1 --as bot`；没有订阅时消费者会退出，飞书卡片会显示 CLI 自己的消息。
+4. 把机器人加入它应当接收的每个群。机器人无法读取它未加入的群，面板中的群列表也只显示已加入的群。
+5. 在真实租户上验证机器人：
+   - 飞书卡片会写明机器人名称，**选择机器人已加入的群** 会列出各群，这也证明读取权限有效。
+   - 重启后，飞书条目显示 **正在监听机器人事件**，历史条目在一分钟内变为就绪。
+   - 在已配置的群中 @ 机器人会创建工单，其确认会作为该消息话题中的回复出现。
+   - 关闭来源会在五秒内暂停事件消费者；重新打开会再次监听。
+   - 撤回回复所针对的消息后，该回复会被认定为已消失，而不是反复重试。
 
-   The host refuses a CLI that can act as a user. It reads the app id, Feishu/Lark brand and bot `open_id` from the bot configuration.
+   自动化测试用假 CLI 离线覆盖 CLI 契约：`auth status`、`config strict-mode`、`bot/v3/info`、`event consume`（NDJSON、CRLF、格式错误行、退出与重启、停止进程树）、`im +messages-reply`（幂等键、已消失错误码）、`im +chat-list`，以及历史和线程读取。它们无法覆盖的是真实租户：应用权限、事件订阅、机器人所在群成员关系，以及飞书自己的错误码。这些正是上述检查的条件。
 
-   Both configurations share the keychain entry for the app secret. To remove only the bot configuration, delete its directory; do not run `lark-cli config remove`, which would affect the shared secret.
+### GitLab 项目（可选）
 
-3. In the Feishu or Lark developer console, subscribe the app to `im.message.receive_v1` and deliver events over the long connection (WebSocket), then publish the app version. dsh-superagent runs `lark-cli event consume im.message.receive_v1 --as bot`; without the subscription the consumer exits and the Feishu card shows the CLI's own message.
-4. Add the bot to every chat it should receive. A bot cannot read a chat it has not joined, and the chat list in the panel shows only joined chats.
-5. Verify the bot against a real tenant:
-   - The Feishu card names the bot, and **Choose a chat the bot has joined** lists the chats, which also proves the read permissions.
-   - After a restart, the Feishu entry reads **Listening for bot events** and the history entry becomes ready within a minute.
-   - Mentioning the bot in a configured chat creates a Ticket, and its acknowledgement appears as a reply in that message's topic.
-   - Turning the Source off pauses the event consumer within five seconds; turning it on listens again.
-   - Recalling the message a reply targets settles the reply as gone instead of retrying it.
-
-   The automated tests cover the CLI contract offline, with fake CLIs: `auth status`, `config strict-mode`, `bot/v3/info`, `event consume` (NDJSON, CRLF, malformed lines, exit and restart, stopping the process tree), `im +messages-reply` (idempotency key, gone codes), `im +chat-list`, and the history and thread reads. What they cannot cover is a real tenant: the app's permissions, the event subscription, the bot's chat membership, and Feishu's own error codes. Those are the conditions of the check above.
-
-### GitLab project (optional)
-
-1. Install [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) on the machine, version 1.30 or later.
-2. Sign the CLI in as the agent's GitLab account, with a token that has the `api` scope:
+1. 在机器上安装 [GitLab CLI](https://gitlab.com/gitlab-org/cli)（`glab`），版本 1.30 或更高。
+2. 以智能体的 GitLab 账号登录 CLI，使用具有 `api` 范围的令牌：
 
    ```sh
    glab auth login --hostname gitlab.com
    glab api user
    ```
 
-   The last command prints the account's `id` and `username`; setup reads them the same way. A `GITLAB_TOKEN` in the CLI environment works as well.
+   最后一条命令会打印账号的 `id` 和 `username`；安装也以同样方式读取它们。CLI 环境中的 `GITLAB_TOKEN` 同样可用。
 
-3. Give the account **Developer** access (access level 30) or higher on the project, directly or through its group. Reporter access can read but not comment, so setup rejects it.
-4. On the GitLab Source card, set `project` to `group/project` (multi-level namespaces such as `group/subgroup/project` are supported), keep `cli` as `glab` or give the wrapper's absolute path, and turn the Source on. Saving checks the account and the project, then restarts dsh-superagent.
-5. Verify against a real project:
-   - The card names the account, and the history entry reads ready with `N issues, M merge requests`.
-   - A mention of `@<agent username>` in a new Issue or merge request creates a Ticket within the polling interval (60 seconds by default).
-   - A note that mentions the agent is received; with **Receive comments in the project** on, other notes are received too, subject to the Policy's admission table.
-   - A reply appears as a note on the Issue or merge request, and a note deleted before a retry settles as gone.
-   - Turning the Source off pauses polling; turning it on resumes it.
+3. 授予该账号对项目的 **Developer** 权限（访问级别 30）或更高，可直接授予或通过其群组授予。Reporter 权限可以读取但不能评论，因此安装会拒绝它。
+4. 在 GitLab 来源卡片上，把 `project` 设为 `group/project`（支持 `group/subgroup/project` 等多级命名空间），把 `cli` 保持为 `glab` 或给出包装脚本的绝对路径，然后打开来源。保存会检查账号和项目，然后重启 dsh-superagent。
+5. 在真实项目上验证：
+   - 卡片会写明账号，历史条目显示就绪并带有 `N issues, M merge requests`。
+   - 在新 Issue 或合并请求中 @ 智能体，会在轮询间隔内（默认 60 秒）创建工单。
+   - 提到智能体的评论会被接收；开启 **接收项目中的评论** 时，其他评论也会被接收，但仍受策略准入表约束。
+   - 回复会作为 Issue 或合并请求上的评论出现，重试前被删除的评论会被认定为已消失。
+   - 关闭来源会暂停轮询；重新打开会恢复。
 
-   The automated tests cover the CLI contract offline with a fake `glab`. What they cannot cover is a real GitLab instance: token scopes, project permissions, and GitLab's own error codes.
+   自动化测试用假的 `glab` 离线覆盖 CLI 契约。它们无法覆盖的是真实 GitLab 实例：令牌范围、项目权限以及 GitLab 自己的错误码。
 
-   GitLab is a Source only; the deployment still targets the GitHub repository. Pipelines/CI and inline diff discussions are not implemented.
+   GitLab 只是来源；部署仍然面向 GitHub 仓库。未实现流水线/CI 和内联差异讨论。
 
-## Install
+## 安装
 
-Run this block once, on a machine that has no `superagent` profile yet:
+在还没有 `superagent` profile 的机器上运行一次以下代码块：
 
 ```sh
 npm install -g @deepseek-ai/dsh@0.2.1-rc.3
@@ -118,131 +115,131 @@ dsh superagent --from-default-profile web --dump-config > /dev/null
 dsh plugin --profile superagent add "link:$PWD"
 ```
 
-The pinned version above is public; other versions must satisfy `engines.dsh` in `package.json`.
+上面固定的版本是公开的；其他版本必须满足 `package.json` 中的 `engines.dsh`。
 
-The fourth command creates `~/.dsh/profiles/superagent` from the DeepSeek Harness Web template. The fifth installs this bundle. Set `DSH_HOME` to relocate the default `~/.dsh` directory.
+第四条命令从 DeepSeek Harness Web 模板创建 `~/.dsh/profiles/superagent`。第五条安装本插件包。设置 `DSH_HOME` 可以迁移默认的 `~/.dsh` 目录。
 
-Run the profile-creation command only for a new installation. If the profile already exists, that command replaces it and deletes its `cordis.patch.yml`, including machine configuration. Do not use it for upgrades.
+只在全新安装时运行创建 profile 的命令。如果 profile 已存在，该命令会替换它并删除其 `cordis.patch.yml`，包括机器配置。升级时不要使用它。
 
-## Machine configuration
+## 机器配置
 
-Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there. The `webserver` entry sets the panel's port.
+把 [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) 复制到 `~/.dsh/profiles/superagent/cordis.patch.yml`，替换该文件，并替换每个 `<placeholder>`。如果使用飞书，还要在那里启用 `dsh-superagent-feishu` 条目。`webserver` 条目设置面板端口。
 
-| Key | Required | Meaning |
+| 键 | 必需 | 含义 |
 | --- | --- | --- |
-| `stateDir` | yes | Absolute path: the database, the lock, the command shims in `worker-bin`, the agent's git configuration and, by default, the Ticket directories in `work`. Back it up before upgrades |
-| `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | no | The largest saved prompt configuration, and how many Thread pages one assessment reads within what time |
+| `stateDir` | 是 | 绝对路径：数据库、锁、`worker-bin` 中的命令垫片、智能体的 git 配置，以及默认情况下 `work` 中的工单目录。升级前请备份 |
+| `promptMaxChars`, `admissionContextMaxPages`, `admissionContextTimeoutMs` | 否 | 保存的提示词配置的最大大小，以及一次评估在什么时间内读取多少个线程页 |
 
-After the first start, edit machine limits in **Settings → Deployment** or the DeepSeek Harness Plugin Manager. Changes apply without restart. `stateDir` cannot be changed there. Invalid values or unknown configuration keys prevent startup; the log identifies the key.
+首次启动后，在 **设置 → 部署** 或 DeepSeek Harness 插件管理器中编辑机器限制。更改无需重启即可生效。`stateDir` 无法在那里更改。无效值或未知配置键会阻止启动；日志会指明该键。
 
-## Start and stop
+## 启动与停止
 
 ```sh
 scripts/dsh-superagent.mjs start
 scripts/dsh-superagent.mjs status
 ```
 
-`start` runs `dsh --profile superagent` in tmux session `dsh-superagent`, or `dsh-<profile>` for another profile. It waits up to one minute for the runtime to become ready or report a setup requirement. On a first run it prints the missing setup information. It refuses duplicate instances, including ones started outside this script.
+`start` 在 tmux 会话 `dsh-superagent`（或其他 profile 的 `dsh-<profile>`）中运行 `dsh --profile superagent`。它最多等待一分钟，让运行时变为就绪或报告安装要求。首次运行时，它会打印缺失的安装信息。它拒绝重复实例，包括在本脚本之外启动的实例。
 
-`stop` and `restart` request graceful shutdown and wait up to five minutes for Executors. They never force-kill the process or touch other tmux sessions.
+`stop` 和 `restart` 请求优雅关闭，并最多等待执行器五分钟。它们从不强制终止进程，也不碰其他 tmux 会话。
 
-`status` prints process ids, health and setup problems. For a different profile or port, use `--profile` and `--url`, or set `DSH_SUPERAGENT_PROFILE` and `DSH_SUPERAGENT_URL`.
+`status` 打印进程 id、健康状况和安装问题。对其他 profile 或端口，使用 `--profile` 和 `--url`，或设置 `DSH_SUPERAGENT_PROFILE` 和 `DSH_SUPERAGENT_URL`。
 
-`status`, `start` and `restart` exit with one of four codes:
+`status`、`start` 和 `restart` 以以下四种退出码之一退出：
 
-| Code | Meaning |
+| 退出码 | 含义 |
 | --- | --- |
-| 0 | The service runs normally |
-| 1 | It does not run, runs twice, does not answer, or its runtime reports an error; a restart may fix it |
-| 2 | It runs, but a part other than the runtime, such as a Source or a Policy sync (`sync:<source id>`), reports an error; a restart does not fix it |
-| 3 | It runs and waits for setup; a restart does not fix it |
+| 0 | 服务正常运行 |
+| 1 | 它未运行、运行了两份、没有响应，或其运行时报告错误；重启可能修复 |
+| 2 | 它在运行，但运行时之外的某个部分（例如来源或策略同步 `sync:<source id>`）报告错误；重启无法修复 |
+| 3 | 它在运行并等待安装；重启无法修复 |
 
-A Source that is still starting counts as normal operation. So does a Feishu bot that setup could not check.
+仍在启动的来源算作正常运行。安装无法检查的飞书机器人也是如此。
 
-`status` returns failed parts and their details under `errors`, and setup requirements under `setup`. `start` and `restart` print those problems as lines; they exit 1 if the service never comes up. Only an intentional `stop` pauses automatic recovery.
+`status` 在 `errors` 下返回失败的部分及其详情，在 `setup` 下返回安装要求。`start` 和 `restart` 会把这些以行文本打印出来；如果服务始终未启动，它们以 1 退出。只有有意执行的 `stop` 会暂停自动恢复。
 
-Each profile stores logs and control files under `.artifacts/`:
+每个 profile 在 `.artifacts/` 下保存日志和控制文件：
 
-- Startup logs: `dsh-superagent-<profile>-<date>-<time>-<pid>.log`, where the pid belongs to the script. The newest 20 are kept.
-- Control files: `control/profiles/<profile>/`, containing the stop marker, lock and process id.
+- 启动日志：`dsh-superagent-<profile>-<date>-<time>-<pid>.log`，其中 pid 属于脚本。保留最新的 20 个。
+- 控制文件：`control/profiles/<profile>/`，包含停止标记、锁和进程 id。
 
-Open the URL printed in the log, then choose **Superagent** in the sidebar.
+打开日志中打印的 URL，然后在侧边栏中选择 **Superagent**。
 
-### Hourly check
+### 每小时检查
 
-Create the hourly check in the DeepSeek Harness profile you normally use, not in `superagent`. It must keep running when the agent service is down. Ask an agent in that profile to create an hourly schedule using this prompt, with the checkout path filled in:
+在你日常使用的 DeepSeek Harness profile 中创建每小时检查，而不是在 `superagent` 中。它必须在智能体服务停止时仍继续运行。在该 profile 中让一个智能体用下面的提示词创建每小时计划，并填入检出路径：
 
 ```text
 Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` in <checkout>. Exit 0: do nothing and say nothing. Exit 2: do not restart; tell me each part under `errors` with its detail, unless you already told me about the same ones. Exit 3: do not restart; tell me what `setup` says setup needs, unless you already told me. If it reports manually_stopped: true, leave it stopped. Otherwise (exit 1) run `scripts/dsh-superagent --profile superagent --respect-stop restart`, which exits the same way: 0 means it recovered, so say nothing; 2 and 3 are reported as above; if it exits 1 or fails otherwise, read the newest .artifacts/dsh-superagent-superagent-*.log and the Troubleshooting section of docs/006-deployment.md, fix what you can, and tell me what was wrong and what you did.
 ```
 
-`--respect-stop` preserves an intentional stop. Only `stop` writes the marker; `start` clears it. `restart` writes no marker, so the check can recover a restart whose shutdown timed out.
+`--respect-stop` 会保留有意执行的停止。只有 `stop` 会写入标记；`start` 会清除它。`restart` 不写标记，因此检查可以恢复关闭超时的重启。
 
-## Settings
+## 设置
 
-Setup must succeed before polling or work starts. Overview lists missing requirements and links to their settings. A settings change runs setup again. If you fix something outside the application, such as CLI authentication, choose **Check again**.
+在轮询或工作开始之前，安装必须成功。概览会列出缺失的要求，并链接到对应设置。设置更改会重新运行安装。如果你在应用之外修复了某些内容（例如 CLI 登录），请选择 **重新检查**。
 
-1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`. Requests normally arrive through the agent account's notifications. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages.
-2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts and Feishu users who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**.
-3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of the repository:
+1. **来源。** 设置 GitHub 仓库（`owner/name`）和智能体 CLI，例如 `/home/me/.local/bin/gh-agent`。请求通常通过智能体账号的通知到达。提到该账号的新 Issue 或评论会在下次轮询时到达；通过编辑已有 Issue 正文添加的 @ 不会。请改为发布新评论。对于飞书，设置机器人 CLI、群、每个群的接收全部或仅 @ 模式，以及是否接收私信。
+2. **策略。** 两条示例规则可以编辑或删除。在 **各来源** 下，添加可以发起工作的 GitHub 账号和飞书用户；名单中有人之前，任何请求都不能成为工单。对于飞书，可以选择一个群在启动时和 **立即同步** 时同步名单。
+3. **执行。** 目录根和准备命令。要给每个工单一个仓库检出：
 
    ```sh
    git -C /home/me/src/widgets fetch --no-tags "https://github.com/$DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
    git -C /home/me/src/widgets worktree add -b "agent/$DSH_SUPERAGENT_NAME" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
    ```
 
-   List personal CLIs, such as one signed in to your own account, as blocked commands.
-4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
+   把个人 CLI（例如登录你自己账号的 CLI）列为被阻止的命令。
+4. **提示词。** 设置团队段落：GitHub 披露行、评审机器人、提交作者和自动合并条件。
 
-### Management API
+### 管理 API
 
-The panel uses a local HTTP API that agents can also call. `SETUP.md` uses it to save settings, and the service script reads `GET state`.
+面板使用一个本地 HTTP API，智能体也可以调用。`SETUP.md` 用它保存设置，服务脚本读取 `GET state`。
 
-Send requests to `http://127.0.0.1:<port>/orchestrator/api/` with `x-orchestrator-request: 1`. The host must be `127.0.0.1:<port>` or `localhost:<port>`. Missing headers or an `Origin` from another site receive 403.
+向 `http://127.0.0.1:<port>/orchestrator/api/` 发送请求，并带 `x-orchestrator-request: 1`。主机必须是 `127.0.0.1:<port>` 或 `localhost:<port>`。缺少请求头或 `Origin` 来自其他站点会收到 403。
 
-API saves have the panel's permissions. They can change execution environment and setup account fields, unlike saves made through the main Session's tools.
+API 保存具有面板的权限。与通过主会话工具进行的保存不同，它们可以更改执行环境和安装账号字段。
 
-Agents may rely on these routes and fields. The other routes in `src/app/api.ts` serve the panel and change with it.
+智能体可以依赖以下路由和字段。`src/app/api.ts` 中的其他路由服务于面板，并随面板变化。
 
-| Request | Answer |
+| 请求 | 答复 |
 | --- | --- |
-| `GET state` | What every page reads: `setup`, with `problem` and `feishuProblem`, each `null` or a setup problem with `place`, `code`, `values` and `detail`, and `accounts` once setup resolved them; `health`, an entry per part, below, with `state` (`starting`, `ready`, `paused` or `error`), `detail` and `at`; `load`, the Executor Sessions `running`, the Tickets `queued` and `maxWorkers`; `paused`; and `masterId` |
-| `GET settings` | `blocks`: `policy`, `eval` and `executor`, each with its `value` and its `revision`; `sources`: the Source instances, each with `id`, `kind`, `installed`, its block's `value`, `{"enabled": …, "config": {…}}`, and `revision`, its kind's form, and its setup `problem` when it has one; `policyVersion`; and `environment`, the execution environment's `root` and `variables` |
-| `GET sources` | Each Source's status: `state` (`missing`, `off`, `error`, `setup`, `starting`, `paused` or `ready`), the `health` of its parts, its setup `problem`, the last day's `stats`, the Triggers it `filtered` in that day, and the messages it `dropped` in that day, newest drop first, each with its `channel`, `preview`, `ticket` (`id` and `title`) when it was for one, its `thread` when the store has it, and `dropped.at` and `dropped.reason`, `channelGone` or `channelIgnored` |
-| `PUT settings/<block>` with `{"value": …, "revision": n}` | Saves one block: `saved`, the block's new `revision`, `policy_changed` and `restarting`. `value` is the whole block, as `GET settings` holds it; a missing key takes its default |
-| `POST executor/pause` with `{"paused": true}` or `false` | Pauses or resumes processing: `paused` |
-| `POST setup/check` | Runs setup again by restarting dsh-superagent: `restarting: true`. Refused when setup has nothing to fix |
-| `POST policy-sync/<source id>` | Syncs that Source's allowed list now: `policy`, the Source's part as saved |
-| `GET prompts`, `PUT prompts` with `{"config", "baseRevision"}` | Reads the prompt configuration: `current`, with its `revision` and `config`, `defaults`, `sections`, the team sections in the order Sessions read them, `skillName`, the pattern of a team skill's name, `builtin`, the names a team skill cannot take, and `skillPrefix`, which Sessions load a skill's name under. Or saves it: the new `revision` |
-| `POST tickets/<id>/retry`, `POST tickets/<id>/stop` | Retries or stops a Ticket, as the panel does |
+| `GET state` | 每个页面读取的内容：`setup`，含 `problem` 和 `feishuProblem`，各自为 `null` 或带 `place`、`code`、`values` 和 `detail` 的安装问题；安装解析后的 `accounts`；`health`，每个部分一个条目（见下文），含 `state`（`starting`、`ready`、`paused` 或 `error`）、`detail` 和 `at`；`load`，即执行器会话 `running`、工单 `queued` 和 `maxWorkers`；`paused`；以及 `masterId` |
+| `GET settings` | `blocks`：`policy`、`eval` 和 `executor`，各自含 `value` 和 `revision`；`sources`：来源实例，各自含 `id`、`kind`、`installed`、其块的 `value`（`{"enabled": …, "config": {…}}`）、`revision`、其类型的表单，以及有安装问题时的 `problem`；`policyVersion`；以及 `environment`，即执行环境的 `root` 和 `variables` |
+| `GET sources` | 每个来源的状态：`state`（`missing`、`off`、`error`、`setup`、`starting`、`paused` 或 `ready`）、其各部分 `health`、安装 `problem`、过去一天的 `stats`、该日它 `filtered` 的触发器，以及该日它 `dropped` 的消息（最新丢弃在前，每条含 `channel`、`preview`、属于工单时的 `ticket`（`id` 和 `title`）、存储中存在时的 `thread`，以及 `dropped.at` 和 `dropped.reason`、`channelGone` 或 `channelIgnored`） |
+| `PUT settings/<block>`，带 `{"value": …, "revision": n}` | 保存一个块：`saved`、该块的新 `revision`、`policy_changed` 和 `restarting`。`value` 是整个块，与 `GET settings` 中的形式一致；缺失的键取默认值 |
+| `POST executor/pause`，带 `{"paused": true}` 或 `false` | 暂停或恢复处理：`paused` |
+| `POST setup/check` | 通过重启 dsh-superagent 重新运行安装：`restarting: true`。没有可修复项时拒绝 |
+| `POST policy-sync/<source id>` | 立即同步该来源的允许名单：`policy`，即保存的来源部分 |
+| `GET prompts`、`PUT prompts`，带 `{"config", "baseRevision"}` | 读取提示词配置：`current`（含 `revision` 和 `config`）、`defaults`、`sections`（团队段落，按会话读取顺序）、`skillName`（团队技能名称的模式）、`builtin`（团队技能不能使用的名称）和 `skillPrefix`（会话加载技能名称时使用的前缀）。或保存它：新的 `revision` |
+| `POST tickets/<id>/retry`、`POST tickets/<id>/stop` | 重试或停止工单，与面板操作相同 |
 
-Health entries are grouped by responsibility:
+健康条目按职责分组：
 
-| Entry | Reports |
+| 条目 | 报告内容 |
 | --- | --- |
-| `runtime` | The application itself |
-| `models` | Sessions waiting on a model-budget retry |
-| `evals` | Unavailable Evals from the last hour with no later judgement or dismissal |
-| `assessment`, `launch`, `delivery`, `relay`, `notice`, `reply` | Stored work described in [003 Execution](003-execution.md); delivery counts waiting work, while reply covers Channel messages |
-| `worker` | Executor Session event handling; appears after its first failure |
-| `github`, `feishu`, `history` | Source polling, events and history recovery |
-| `sync:<source id>` | Allowed-list synchronization |
+| `runtime` | 应用本身 |
+| `models` | 等待模型预算重试的会话 |
+| `evals` | 过去一小时内没有后续判断或忽略的未完成评估 |
+| `assessment`, `launch`, `delivery`, `relay`, `notice`, `reply` | [003 执行](003-execution.md) 中描述的已存储工作；delivery 计数等待中的工作，reply 涵盖渠道消息 |
+| `worker` | 执行器会话事件处理；首次失败后出现 |
+| `github`, `feishu`, `history` | 来源轮询、事件和历史恢复 |
+| `sync:<source id>` | 允许名单同步 |
 
-A refusal has a status and `error`, its English text:
+拒绝会带状态码和 `error`，其英文文本：
 
-- 400: an invalid value (`issues`, each with its `path`), a failed account check (`setup`), a fixed refusal (`code` and `values`), or a body that is not JSON or is too large.
-- 404: something that does not exist.
-- 409: a stale revision.
-- 500: anything else.
+- 400：无效值（`issues`，各自含 `path`）、账号检查失败（`setup`）、固定拒绝（`code` 和 `values`），或请求体不是 JSON 或过大。
+- 404：不存在的内容。
+- 409：过时的修订号。
+- 500：其他任何情况。
 
-The blocks:
+各块：
 
-- `source:github`, `source:feishu`: `{"enabled": true, "config": {…}}`. GitHub's config has `repository` and `cli`, and the switches `observeIssues`, `observePulls`, `observeComments` and `observeCi`, off by default, which receive every new Issue, new pull request and comment in the repository and the default branch's CI; Feishu's has `cli`, `chats` as `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]` (or `"all"`), `directMessages`, and `otherChats` as `"none"` or `"mentions"`.
-- `policy`: `{"rules": […], "sources": {"github": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "feishu": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}}}`. `bots` lists the bots whose messages may become inferred candidates. An `admission` row is keyed by chat id, `other` or `direct` for Feishu, and by `issues`, `pulls`, `comments` or `ci` for GitHub; an unset cell takes its default (see [002 Authorization](002-authorization.md)).
-- `eval`: `mode`, `timeoutSeconds` and `model`.
-- `executor`: `model`, `maxWorkers`, `directory`, `prepare` and `blockedCommands`. The processing pause is a setting of its own, `paused`, which `POST executor/pause` sets.
+- `source:github`、`source:feishu`：`{"enabled": true, "config": {…}}`。GitHub 的配置有 `repository` 和 `cli`，以及开关 `observeIssues`、`observePulls`、`observeComments` 和 `observeCi`，默认关闭，用于接收仓库中的每个新 Issue、新拉取请求和评论，以及默认分支的 CI；飞书的配置有 `cli`、`chats`（形式为 `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]`，或 `"all"`）、`directMessages`，以及 `otherChats`（`"none"` 或 `"mentions"`）。
+- `policy`：`{"rules": […], "sources": {"github": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "feishu": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}}}`。`bots` 列出其消息可以成为推断候选的机器人。`admission` 行以群 id、飞书的 `other` 或 `direct`，以及 GitHub 的 `issues`、`pulls`、`comments` 或 `ci` 为键；未设置的单元格取默认值（见 [002 授权](002-authorization.md)）。
+- `eval`：`mode`、`timeoutSeconds` 和 `model`。
+- `executor`：`model`、`maxWorkers`、`directory`、`prepare` 和 `blockedCommands`。处理暂停是独立的设置 `paused`，由 `POST executor/pause` 设置。
 
-Changing a repository or CLI runs the corresponding setup check first. A failed check returns 400 with details in `setup`. A successful account change, or any save while setup is pending, returns `restarting: true`. The API is temporarily unavailable while the application restarts.
+更改仓库或 CLI 会先运行对应的安装检查。检查失败返回 400，详情在 `setup` 中。成功的账号更改，或安装待定时进行的任何保存，返回 `restarting: true`。应用重启期间 API 暂时不可用。
 
 ```sh
 api=http://127.0.0.1:3082/orchestrator/api
@@ -251,71 +248,71 @@ curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json
   -d "{\"value\": {\"enabled\": true, \"config\": {\"repository\": \"acme/widgets\", \"cli\": \"$HOME/.local/bin/gh-agent\"}}, \"revision\": $rev}"
 ```
 
-## Setup checks
+## 安装检查
 
-Setup uses the DeepSeek Harness subprocess service, as worker shells do. It removes environment variables whose names contain KEY, PASSWORD, SECRET or TOKEN.
+安装使用 DeepSeek Harness 的子进程服务，与执行器 shell 相同。它会移除名称包含 KEY、PASSWORD、SECRET 或 TOKEN 的环境变量。
 
-Setup verifies the GitHub repository and the agent's push access, writes the worker environment, and checks that git uses only the agent credentials for github.com. A Feishu setup failure disables only the Feishu Source; a GitLab setup failure disables only the GitLab Source.
+安装会验证 GitHub 仓库和智能体的推送权限，写入执行器环境，并检查 git 对 github.com 只使用智能体凭据。飞书安装失败只禁用飞书来源；GitLab 安装失败只禁用 GitLab 来源。
 
-The process environment that setup writes:
+安装写入的进程环境：
 
-- **Command shims** in `<stateDir>/worker-bin`, first on `PATH`: `gh` runs the agent's CLI; `lark-cli` runs the bot's CLI; blocked commands fail. A shim removes its own directory from `PATH` before it runs its target.
-- **git configuration** in `<stateDir>/worker-gitconfig`: replaces the operator's global and system git configuration. It selects the agent CLI as the github.com credential helper, rewrites GitHub SSH addresses to HTTPS and defines Git LFS filters. Personal git settings such as an HTTP proxy do not apply. No commit identity is set here, git never prompts for credentials, and `GH_TOKEN` and `GITHUB_TOKEN` are removed.
+- **命令垫片** 位于 `<stateDir>/worker-bin`，在 `PATH` 最前面：`gh` 运行智能体的 CLI；`lark-cli` 运行机器人的 CLI；被阻止的命令会失败。垫片在运行目标之前会从 `PATH` 中移除自己的目录。
+- **git 配置** 位于 `<stateDir>/worker-gitconfig`：替换操作者的全局和系统 git 配置。它选择智能体 CLI 作为 github.com 的凭据助手，把 GitHub SSH 地址改写为 HTTPS，并定义 Git LFS 过滤器。HTTP 代理等个人 git 设置不生效。这里不设置提交身份，git 从不提示凭据，并会移除 `GH_TOKEN` 和 `GITHUB_TOKEN`。
 
-A file in `worker-bin` or `worker-gitconfig` that dsh-superagent did not write stops setup. A Ticket directory inside a git repository whose own configuration adds credentials fails the Ticket.
+`worker-bin` 或 `worker-gitconfig` 中不是由 dsh-superagent 写入的文件会阻止安装。位于 git 仓库内、且该仓库自身配置添加了凭据的工单目录会使工单失败。
 
-## Try it
+## 试用
 
-From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat. For GitLab, mention `@<agent username>` in an Issue or merge request of the configured project.
+从允许名单上的 GitHub 账号，打开一个 Issue 或发布包含 `@<agent login> <request>` 的评论。在一个轮询间隔内（默认一分钟），概览应显示一个工单。智能体会确认请求，在自己的会话和目录中工作，并在原对话中交付。对于飞书，在已配置的群中 @ 机器人。对于 GitLab，在已配置项目的 Issue 或合并请求中 @ 智能体用户名。
 
-## Upgrade
+## 升级
 
-1. Wait until no Executor is in the middle of a turn.
-2. Back up `<stateDir>/orchestrator.sqlite`.
-3. Run `git pull && pnpm install && pnpm build`.
-4. Run `scripts/dsh-superagent.mjs restart` and inspect its status.
+1. 等到没有执行器正处在回合中间。
+2. 备份 `<stateDir>/orchestrator.sqlite`。
+3. 运行 `git pull && pnpm install && pnpm build`。
+4. 运行 `scripts/dsh-superagent.mjs restart` 并检查其状态。
 
-A restart ends running Assignments and starts replacements with recovery notes. Team text and overridden prompt parts are retained; parts without overrides follow the new defaults. Review parts marked **Default updated** after upgrading.
+重启会结束运行中的派工，并带恢复备注启动替代派工。团队文本和被覆盖的提示词部分会保留；没有覆盖的部分跟随新默认值。升级后审阅标记为 **默认内容已更新** 的部分。
 
-A database migrated by a newer version cannot be opened by an older one. Rollback therefore requires the pre-upgrade backup. After upgrading DeepSeek Harness itself, restart the running instance so the panel loads matching artifacts.
+被较新版本迁移过的数据库无法被旧版本打开。因此回滚需要升级前的备份。升级 DeepSeek Harness 本身之后，重启运行中的实例，以便面板加载匹配的产物。
 
-### Agent presets
+### 智能体预设
 
-The worker and router presets move shell commands to the background after 5 seconds. A Session cannot load without its preset. Keep the `dsh-superagent-worker` and `dsh-superagent-router` rows in `cordis.patch.yml` while their Sessions are in use; otherwise resume fails with `agent-preset/not-found`.
+执行器和路由预设会在 5 秒后把 shell 命令转入后台。会话没有其预设就无法加载。在其会话使用期间，请保留 `cordis.patch.yml` 中的 `dsh-superagent-worker` 和 `dsh-superagent-router` 行；否则恢复会以 `agent-preset/not-found` 失败。
 
-## Troubleshooting
+## 故障排查
 
-Setup problems appear on the overview with a link to the fix, in the panel's language; the log and the API show the English text below.
+安装问题会以面板语言显示在概览上，并链接到修复处；日志和 API 显示下面的英文文本。
 
-| Symptom | Cause and fix |
+| 现象 | 原因与修复 |
 | --- | --- |
-| `The agent GitHub CLI is not set.` | Set the agent's CLI on the GitHub card |
-| `The agent GitHub CLI was not found.` | Set the wrapper's absolute path, or a command name on `PATH` |
-| `The agent GitHub CLI cannot read its account` | Sign the wrapper in with `auth login` |
-| `@… cannot read …` or `@… cannot push to …` | Give the agent account write access to the repository |
-| `The GitHub Source names no repository.` | Set the repository, `owner/name`, on the GitHub card |
-| A Ticket fails with `The prepare command failed: …` | The output names the cause, such as a wrong clone path; fix the command, then retry the Ticket |
-| `git does not read the github.com credential configuration dsh-superagent writes` | Install git 2.32 or later |
-| A Ticket fails with `The git configuration of the repository in … sets …` | Remove the named credential or `http.*.extraheader` settings from the clone's `.git/config` |
-| `… was not written by dsh-superagent` | Move the named file out of `<stateDir>/worker-bin` or `<stateDir>/worker-gitconfig`, or choose another `stateDir` |
-| `The agent GitLab CLI is not set.` / `was not found.` | Set `glab` or its absolute path on the GitLab card |
-| `The agent GitLab CLI cannot read its account.` | Run `glab auth login --hostname gitlab.com` as the agent, or set `GITLAB_TOKEN` |
-| `@… cannot read … on GitLab.` | Set `project` to `group/project`, and give the account access to the project |
-| `@… needs Developer access to … on GitLab.` | Raise the account to Developer (30) or higher; Reporter cannot comment |
-| `The agent GitLab CLI did not return …` | Check `glab api projects/<group%2Fproject>` by hand; a proxy or hostname mismatch can hide the project |
-| A GitLab note is not received | Check that the Source is on, the author is allowed, and the note mentions `@<agent username>` unless **Receive comments in the project** is on. System notes and the agent's own notes are ignored |
-| `The bot lark-cli allows user identities` | Point the Feishu Source at a bot-only configuration, as in Feishu bot above |
-| `The bot lark-cli does not work.` or `The bot identity of app … is …` | Check the configuration's app id and secret |
-| `The Feishu bot is not a member of the chat.` | Add the bot to the chat in the chat's settings; the next attempt succeeds |
-| `Feishu event consumer exited (…, ready=false): …` | The app is not subscribed to `im.message.receive_v1` over the long connection, or its bot configuration lacks the message permission; the text after the colon is lark-cli's own message |
-| `Feishu event consumer did not become ready within 45 seconds` | lark-cli cannot open the long connection; run `lark-cli event consume im.message.receive_v1 --as bot` by hand as the operator to see its message, and check the network or proxy |
-| A Feishu read or reply fails with a `99991…` code or `Access denied … scopes` | Grant the permission the message names in the developer console, then publish the app version |
-| `status` exits 2 | A part reports an error, which a restart does not fix: `errors` names each part, as listed under Management API, with its detail; each part clears its own entry once it works again |
-| `status` exits 3 | Setup waits: `setup` says what is missing, and the overview links to the setting that fixes it |
-| `status` exits 1 | The service does not run, runs twice, does not answer, or its runtime reports an error; the output and the newest log say which |
-| `… timed out after 90 s`, `… was stopped by …`, `… exited with code …` or `… could not run: …` | A CLI failed without printing why; run the named program by hand as the operator's user to see its own message |
-| The panel says dsh-superagent is not answering | It is restarting, or did not start because of its configuration; the DeepSeek Harness log names the cause |
-| `dsh-superagent configuration has keys it does not use` (log) | Remove the named keys; the message says where each value lives now |
-| The log says the plugin is incompatible with the running dsh | Install a DeepSeek Harness version within the `engines.dsh` range |
-| The panel shows "Failed to load plugins" after a DeepSeek Harness upgrade | Restart the running instance |
-| Nothing happens after a mention | Check that the author is on the Source's allowed list, the Source is on, and processing is not paused. On GitHub, a mention added by editing an Issue's body is not received; mention the agent in a comment |
+| `The agent GitHub CLI is not set.` | 在 GitHub 卡片上设置智能体的 CLI |
+| `The agent GitHub CLI was not found.` | 设置包装脚本的绝对路径，或 `PATH` 上的命令名 |
+| `The agent GitHub CLI cannot read its account` | 用 `auth login` 登录该包装脚本 |
+| `@… cannot read …` 或 `@… cannot push to …` | 授予智能体账号对仓库的写权限 |
+| `The GitHub Source names no repository.` | 在 GitHub 卡片上设置仓库 `owner/name` |
+| 工单以 `The prepare command failed: …` 失败 | 输出会指明原因，例如错误的克隆路径；修复命令，然后重试工单 |
+| `git does not read the github.com credential configuration dsh-superagent writes` | 安装 git 2.32 或更高版本 |
+| 工单以 `The git configuration of the repository in … sets …` 失败 | 从克隆的 `.git/config` 中移除所指的凭据或 `http.*.extraheader` 设置 |
+| `… was not written by dsh-superagent` | 把所指文件移出 `<stateDir>/worker-bin` 或 `<stateDir>/worker-gitconfig`，或选择另一个 `stateDir` |
+| `The agent GitLab CLI is not set.` / `was not found.` | 在 GitLab 卡片上设置 `glab` 或其绝对路径 |
+| `The agent GitLab CLI cannot read its account.` | 以智能体身份运行 `glab auth login --hostname gitlab.com`，或设置 `GITLAB_TOKEN` |
+| `@… cannot read … on GitLab.` | 把 `project` 设为 `group/project`，并授予账号对该项目的访问权限 |
+| `@… needs Developer access to … on GitLab.` | 把账号提升到 Developer（30）或更高；Reporter 无法评论 |
+| `The agent GitLab CLI did not return …` | 手动检查 `glab api projects/<group%2Fproject>`；代理或主机名不匹配可能隐藏项目 |
+| 收不到 GitLab 评论 | 检查来源已开启、作者在允许名单上，并且评论 @ 了智能体（除非开启了 **接收项目中的评论**）。系统评论和智能体自己的评论会被忽略 |
+| `The bot lark-cli allows user identities` | 把飞书来源指向仅机器人配置，如上面的飞书机器人一节 |
+| `The bot lark-cli does not work.` 或 `The bot identity of app … is …` | 检查配置中的应用 id 和密钥 |
+| `The Feishu bot is not a member of the chat.` | 在群设置中把机器人加入该群；下次尝试会成功 |
+| `Feishu event consumer exited (…, ready=false): …` | 应用未通过长连接订阅 `im.message.receive_v1`，或其机器人配置缺少消息权限；冒号后的文本是 lark-cli 自己的消息 |
+| `Feishu event consumer did not become ready within 45 seconds` | lark-cli 无法打开长连接；以操作者身份手动运行 `lark-cli event consume im.message.receive_v1 --as bot` 查看其消息，并检查网络或代理 |
+| 飞书读取或回复以 `99991…` 错误码或 `Access denied … scopes` 失败 | 在开发者控制台中授予消息所指的权限，然后发布应用版本 |
+| `status` 以 2 退出 | 某个部分报告错误，重启无法修复：`errors` 会列出每个部分及其详情（见管理 API）；每个部分恢复正常后会清除自己的条目 |
+| `status` 以 3 退出 | 安装等待中：`setup` 说明缺少什么，概览链接到修复它的设置 |
+| `status` 以 1 退出 | 服务未运行、运行了两份、没有响应，或其运行时报告错误；输出和最新日志会说明是哪一种 |
+| `… timed out after 90 s`、`… was stopped by …`、`… exited with code …` 或 `… could not run: …` | CLI 失败但没有打印原因；以操作者用户身份手动运行所指程序查看其自己的消息 |
+| 面板提示 dsh-superagent 没有响应 | 它正在重启，或因其配置未能启动；DeepSeek Harness 日志会指明原因 |
+| `dsh-superagent configuration has keys it does not use`（日志） | 移除所指的键；消息会说明每个值现在位于何处 |
+| 日志说插件与运行中的 dsh 不兼容 | 安装处于 `engines.dsh` 范围内的 DeepSeek Harness 版本 |
+| 升级 DeepSeek Harness 后面板显示“Failed to load plugins” | 重启运行中的实例 |
+| @ 之后没有任何反应 | 检查作者在来源的允许名单上、来源已开启、处理未暂停。在 GitHub 上，通过编辑 Issue 正文添加的 @ 不会被接收；请在评论中 @ 智能体 |

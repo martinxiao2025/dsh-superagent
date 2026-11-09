@@ -1,4 +1,4 @@
-/** Application composition root and lifecycle manager for dsh-superagent. */
+/** dsh-superagent 的应用组合根和生命周期管理器。 */
 import { Service, type Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -47,14 +47,14 @@ import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
 
-// Source plugins interact with dsh-superagent exclusively through the `SourceHost` service interface.
+// 来源插件仅通过 `SourceHost` 服务接口与 dsh-superagent 交互。
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
 const now = (): string => new Date().toISOString()
 
 /**
- * Composition root of dsh-superagent that connects `Store`, `Setup`, `Engine`, `SourceRegistry`, `Effects`, `Outbox`, `Passes`, `Sessions`, `Settings`, `Prompts`, `DshExecutor`, and `MasterAssessor`.
- * Exposes the `SourceHost` service on the Cordis context for source plugins and coordinates startup, setup checks, HTTP route registration, and graceful shutdown.
- * Locks the state directory before opening SQLite so concurrent processes cannot corrupt or double-migrate state.
+ * dsh-superagent 的组合根，连接 `Store`、`Setup`、`Engine`、`SourceRegistry`、`Effects`、`Outbox`、`Passes`、`Sessions`、`Settings`、`Prompts`、`DshExecutor` 和 `MasterAssessor`。
+ * 在 Cordis 上下文中为来源插件暴露 `SourceHost` 服务，并协调启动、初始化检查、HTTP 路由注册和优雅关闭。
+ * 在打开 SQLite 之前锁定状态目录，使并发进程无法破坏状态或重复迁移。
  */
 export class Runtime extends Service implements SourceHost {
   readonly store: Store
@@ -82,12 +82,12 @@ export class Runtime extends Service implements SourceHost {
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
-  /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
+  /** 当主会话工具正在执行引擎命令时非零，用于抑制自触发的领域事件通知。 */
   private quiet = 0
   constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
     super(ctx, 'orchestrator')
     const runtime = this
-    // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
+    // 在打开数据库之前锁定状态目录，使其他进程无法并发迁移或写入。
     mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
     const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort() }
     const release = lockSync(machine.stateDir, { stale: 30_000, onCompromised: compromised })
@@ -107,9 +107,9 @@ export class Runtime extends Service implements SourceHost {
       const board = this.board
       const effects = this.effects = new Effects(store, board)
       const sources = this.sources = new SourceRegistry(() => store.settings(), board, kind => {
-        // Sync source member lists once startup completes when a source plugin loads dynamically.
+        // 当来源插件动态加载时，在启动完成后同步一次来源成员列表。
         if (kind.policy?.sync) void this.ready?.then(() => this.settings.syncable().includes(kind.kind) ? this.settings.sync(kind.kind) : undefined)
-          .catch(() => { /* sync() records its failure in health. */ })
+          .catch(() => { /* sync() 会把失败记录到健康状态中。 */ })
         return () => {}
       })
       const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
@@ -136,22 +136,22 @@ export class Runtime extends Service implements SourceHost {
       const policy = () => settingsPolicy(store.settings(), sources)
       const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
         outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
-          // Notify the main Session only about domain events it did not initiate itself.
+          // 仅向主会话通知并非由其自身发起的领域事件。
           const notice = this.quiet ? undefined : eventNotice(event, id => store.tickets.get(id))
           if (notice) sessions.notify(...notice)
-          // A person's message that reached an open ticket is the ticket's; the main Session hears of it in the same transaction,
-          // and of one for an ended ticket once it resumes, unless it routed the message there itself.
+          // 到达未结束工单的人的消息属于该工单；主会话会在同一事务中得知，
+          // 对于已结束工单则在恢复后得知，除非是主会话自己将消息路由到那里。
           const followed = !this.quiet && (event.type === 'trigger.received' || event.type === 'ticket.resumed' || event.type === 'trigger.followup')
           const followup = followed ? followupNotice(store, sources, event.data.triggerId) : undefined
           if (followup) sessions.relay(followup.id, followup.text)
-          // Notify the ticket's conversations whenever it ends via a pull request.
+          // 当工单通过拉取请求结束时，通知该工单的所有会话。
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
           if (ended && setup.configured()) {
             const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
             for (const message of pullEndNotices(ended, request, setup.deployment.repository)) outbox.send(message)
           }
         } })
-      // Update the `evals` health entry on every pass if an evaluation failed as unavailable within the last hour.
+      // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
       const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
       const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
       const passes = this.passes = new Passes({ engine: { receive: trigger => engine.receive(trigger), evaluateDue }, effects,
@@ -166,22 +166,22 @@ export class Runtime extends Service implements SourceHost {
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
     } catch (error) {
-      // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
+      // 如果初始化失败，释放数据库和状态锁，以便进程内重启可以重新获取它们。
       try { opened?.close() } finally { release() }
       throw error
     }
   }
   get health(): Readonly<Record<string, Health>> { return this.board.all }
-  /** Aborted when dsh-superagent stops or loses its state directory lock, cancelling running reads and subprocesses. */
+  /** dsh-superagent 停止或失去状态目录锁时触发中止，取消正在运行的读取和子进程。 */
   get lifetime(): AbortSignal { return this.stopped.signal }
   context(kind: { kind: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
-  /** Resolved deployment; throws while waiting for setup (`!configured()`). */
+  /** 已解析的部署；在等待初始化期间（`!configured()`）抛出异常。 */
   get deployment(): Deployment { return this.setup.deployment }
   configured(): boolean { return this.setup.configured() }
   get setupProblem(): SetupProblem | undefined { return this.setup.problem }
-  /** Why the Feishu bot is unavailable even though the Feishu Source configures a CLI. */
+  /** 为什么即使飞书来源配置了 CLI，飞书机器人仍不可用。 */
   get feishuProblem(): SetupProblem | undefined { return this.setup.feishuProblem }
-  /** Why the GitLab project is unavailable even though the GitLab Source configures a project. */
+  /** 为什么即使 GitLab 来源配置了项目，GitLab 项目仍不可用。 */
   get gitlabProblem(): SetupProblem | undefined { return this.setup.gitlabProblem }
   links(): LinkTarget {
     const resolved = this.setup.configured() ? this.setup.deployment : undefined
@@ -200,10 +200,10 @@ export class Runtime extends Service implements SourceHost {
   pump(): Promise<void> { return this.passes.pump() }
   sendReplies(): Promise<void> { return this.outbox.sent() }
   private closing(): boolean { return this.closingFlag }
-  /** Hold evaluation, dispatch, and outbound delivery while paused or awaiting setup; sources still record incoming triggers. */
+  /** 在暂停或等待初始化期间暂缓评估、调度和出站投递；来源仍会记录传入的触发器。 */
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }
   private async initialize(): Promise<void> {
-    // Register management HTTP routes before setup completes so operators can fix setup problems in the UI.
+    // 在初始化完成前注册管理 HTTP 路由，使操作者可以在界面中修复初始化问题。
     this.disposers.push(registerHttp(this.ctx, this.httpHost()))
     if (!await this.setup.run(this.store.settings())) {
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
@@ -212,8 +212,8 @@ export class Runtime extends Service implements SourceHost {
     this.sessions.install()
     this.executor.install()
     await this.sessions.ensure(this.masterId, this.machine.stateDir, 'dsh-superagent orchestrator', 'orchestrator')
-    for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() records its failure in health. */ })
-    // If stop() was called while awaiting setup, session creation, or policy sync, do not start background loops.
+    for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() 会把失败记录到健康状态中。 */ })
+    // 若在等待初始化、创建会话或策略同步期间调用了 stop()，则不要启动后台循环。
     if (this.closing()) return
     this.executor.resume()
     this.passes.start()
@@ -230,7 +230,7 @@ export class Runtime extends Service implements SourceHost {
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
       checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
   }
-  /** Idempotent stop; concurrent or repeated calls share the same shutdown promise. */
+  /** 幂等停止；并发或重复调用共享同一个关闭 Promise。 */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
   private async shutdown(): Promise<void> {
     this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
@@ -240,14 +240,14 @@ export class Runtime extends Service implements SourceHost {
       const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) agent.cancel({ kind: 'user' }, { keepInbox: true })
       await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])
-      // The workers' jobs and subagents stop too: their ends would start worker turns without the tool limits released below.
+      // 执行器的任务和子代理也会停止：它们的结束会启动执行器轮次，而下面释放的工具限制届时尚未生效。
       await this.executor.shutdown()
       this.executor.dispose()
       this.sessions.dispose()
       for (const dispose of this.disposers.reverse()) dispose()
       await this.ctx.sessionPersistence.flush()
     } finally {
-      // Close the database before releasing the directory lock so another process cannot open the database mid-write; a compromised lock may already be released.
+      // 在释放目录锁之前关闭数据库，使其他进程无法在写入中途打开数据库；已失效的锁可能已经释放。
       this.setup.restore()
       try { this.store.close() } finally {
         const unreleased = (error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release its state directory lock: %s',

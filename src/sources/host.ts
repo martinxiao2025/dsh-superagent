@@ -1,4 +1,4 @@
-/** Host and context interfaces connecting Source plugins to the application; also imported by the web panel, so it must not import Node-only modules. */
+/** 连接来源插件与应用的宿主和上下文接口；Web 面板也会导入，因此不得导入仅限 Node 的模块。 */
 import type { ChannelRef, ReceiveResult, OutboundMessage, Thread, ThreadFact, ThreadRef, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { Deployment } from '../deployment.ts'
@@ -7,7 +7,7 @@ import type { SetupProblem } from '../setup.ts'
 import type { Family, Key } from '../kv.ts'
 import { fill } from '../infra/text.ts'
 
-/** Fixed English health templates (`{name}` placeholders); the panel localizes each `code` in the interface language. */
+/** 固定的英文健康模板（`{name}` 占位符）；面板按界面语言本地化每个 `code`。 */
 export const HEALTH_TEXT = {
   setupPending: 'Waiting for the deployment check',
   sourceOff: 'Off',
@@ -22,46 +22,46 @@ export function health(state: Health['state'], code: HealthCode, values: Record<
 }
 export interface SourceHost {
   readonly sources: SourceRegistry
-  /** Returns the context for one Source kind; its `report` writes only the health entries declared by the kind. */
+  /** 返回某个来源种类的上下文；它的 `report` 只写入该种类声明的健康条目。 */
   context(kind: { kind: string; health: readonly string[] }): SourceContext
 }
-/** Display label, URL, and facts (`null` removes a fact) that a Source publishes on a Thread. */
+/** 来源在线程上发布的显示标签、URL 和事实（`null` 删除某项事实）。 */
 export interface ThreadDescription { label?: string; url?: string; facts?: Record<string, ThreadFact | null> }
-/** Application capabilities exposed to a Source kind for reading state, ingesting triggers, managing threads/tickets, and reporting health. */
+/** 向来源种类暴露的应用能力：读取状态、接收触发器、管理线程/工单以及报告健康。 */
 export interface SourceContext {
   readonly deployment: Deployment
   readonly commands: Commands
   readonly ready: Promise<void>
-  /** True once setup resolved the repository and accounts; Sources poll only then. */
+  /** 设置解析出仓库和账号后为 true；来源只在此时轮询。 */
   configured(): boolean
-  /** Setup problem keeping this Source's account from running; only the Feishu bot check reports one. */
+  /** 使此来源的账号无法运行的设置问题；只有飞书机器人检查会报告。 */
   readonly problem?: SetupProblem | undefined
-  /** Returns a Source's configuration while enabled, or undefined while disabled or uninstalled. */
+  /** 在启用时返回来源的配置，在禁用或未安装时返回 undefined。 */
   config<C extends Record<string, unknown>>(kind: string): C | undefined
-  /** Ingests a trigger into the Engine and schedules the next evaluation pass; callers should await completion before advancing read cursors. */
+  /** 把触发器接入引擎并安排下一次评估；调用方应在推进读取游标前等待完成。 */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
   atomic<T>(work: () => T): T
-  /** Source-scoped KV records (such as read cursors); setting `undefined` removes an entry. */
+  /** 来源作用域的 KV 记录（例如读取游标）；设置 `undefined` 会删除条目。 */
   state: { get<V>(key: Key<V>): V | undefined; set<V>(key: Key<V>, value: V | undefined): void; keys<V>(family: Family<V, never>): Key<V>[] }
   threads: {
     get(key: string): Thread | undefined
     subscribed(source: string): Thread[]
     describe(key: string, description: ThreadDescription): void
-    /** Sets or removes (`undefined`) keys in a Thread's `meta` after rereading it; a missing Thread is left alone. */
+    /** 在重新读取线程后设置或删除（`undefined`）线程 `meta` 中的键；不存在的线程保持不变。 */
     patch(key: string, meta: Record<string, unknown>): void
   }
   tickets: {
     get(id: string): Ticket | undefined
-    /** Open tickets, newest first. */
+    /** 未关闭的工单，最新的在前。 */
     open(): Ticket[]
-    /** Binds an open ticket to follow a Source Thread (`own` when opened by the ticket) so the Thread's close, not a ready report, ends the ticket. */
+    /** 把未关闭的工单绑定为跟随来源线程（工单自己打开时 `own`），由线程关闭而非就绪报告结束工单。 */
     bindThread(id: string, thread: ThreadRef, own: boolean): void
-    /** Reports that a followed Thread closed at `at`; each open ticket following it ends once no `own` Thread remains open and no resumed work is still running. */
+    /** 报告被跟随的线程在 `at` 关闭；每个跟随它的未关闭工单在不再有 `own` 线程未关闭且没有恢复的工作仍在运行时结束。 */
     threadClosed(thread: ThreadRef, outcome: 'merged' | 'closed', at: string): void
   }
-  triggers: { get(id: string): Trigger | undefined; /** The newest Trigger on a Thread. */ latest(thread: string): Trigger | undefined }
+  triggers: { get(id: string): Trigger | undefined; /** 线程上最新的触发器。 */ latest(thread: string): Trigger | undefined }
   notify(message: OutboundMessage): void
-  /** Reports the state of one of this kind's declared health entries; throws for undeclared entry names. */
+  /** 报告此种类声明的某个健康条目的状态；对未声明的条目名抛出。 */
   report(entry: string, health: Health): void
 }
 export const sourceContext = (host: SourceHost, kind: { kind: string; health: readonly string[] }): SourceContext => host.context(kind)

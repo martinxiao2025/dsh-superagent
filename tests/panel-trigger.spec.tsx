@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The Trigger status and a Thread.
+// 触发状态与线程。
 import { act } from 'react'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { en, zh } from '../src/client/locales.ts'
@@ -95,7 +95,7 @@ it('shows a follow-up delivered to its Ticket without an Eval, a hand-back with 
   expect(events()[0]![2]).toBe('The Executor of “修复回归” handed it back for an Eval: Asks for a new page')
 })
 
-/** Simulate a Thread with `count` Triggers 1 minute apart, paged 50 at a time via `before` or `around` cursors. */
+/** 模拟一个线程，其中 `count` 个触发器相隔 1 分钟，通过 `before` 或 `around` 游标每次分页 50 条。 */
 function busyThread(count: number) {
   const minute = (n: number) => new Date(Date.UTC(2026, 8, 1) + n * 60_000).toISOString()
   const thread = { triggers: Array.from({ length: count }, (_, n) => trigger(`m${n}`, minute(n))),
@@ -110,7 +110,7 @@ function busyThread(count: number) {
   }
   return thread
 }
-/** The Triggers the timeline shows, oldest first, by their number. */
+/** 时间线显示的触发器，按从旧到新、以其编号表示。 */
 const shown = () => all('.dt-event .dt-event-text').map(item => Number(item.textContent!.replace('message m', ''))).reverse()
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, n) => from + n)
 
@@ -123,7 +123,7 @@ it('reads back the Triggers between the newest page and the earlier ones it show
   expect(shown()).toEqual(range(70, 119))
   await click(zh.loadEarlier)
   expect(shown()).toEqual(range(20, 119))
-  // Fewer new Triggers than a page holds still join the earlier ones; more leave a gap, which is read back.
+  // 新触发器少于一页时仍会与较早的合并；更多时会留下空隙，需要回读。
   thread.add(10)
   await act(async () => { await vi.advanceTimersByTimeAsync(5000) }); await settle()
   expect(shown()).toEqual(range(20, 129))

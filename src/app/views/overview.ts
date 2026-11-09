@@ -1,4 +1,4 @@
-/** Overview view: active system problems, tickets awaiting human action, executor load, and 24-hour trigger flow. */
+/** 概览视图：活跃的系统问题、等待人员处理的工单、执行器负载，以及 24 小时触发器流。 */
 import { reasonText, ticketStage, type Decision, type Thread } from '../../core/index.ts'
 import type { Health } from '../../sources/host.ts'
 import type { SetupProblem } from '../../setup.ts'
@@ -9,7 +9,7 @@ import { sourceHealth, type HealthMap } from './sources.ts'
 import { ticketRow, type ExecutorLoad } from './tickets.ts'
 import { preview } from './text.ts'
 
-/** Threads whose latest decision since `since` is an undismissed `unavailable` eval and that are neither evaluating nor queued. */
+/** 自 `since` 以来最新决策是未被忽略的 `unavailable` Eval、且既不在评估中也不在排队中的线程。 */
 function unjudged(store: Store, since: string): { thread: Thread; decision: Decision }[] {
   const seen = new Set<string>()
   const queue = { store, owners: ownersOf(store) }
@@ -22,7 +22,7 @@ function unjudged(store: Store, since: string): { thread: Thread; decision: Deci
     return [{ thread, decision }]
   })
 }
-/** Reports error health when any thread has an undismissed `unavailable` eval from the last hour without a newer decision or active eval. */
+/** 当任一线程在过去一小时内存在未被忽略的 `unavailable` Eval，且之后没有更新的决策或活跃 Eval 时，报告错误健康状态。 */
 export function evalsHealth(store: Store, now = Date.now()): Health {
   const since = new Date(now - 3_600_000).toISOString()
   const open = unjudged(store, since)
@@ -32,8 +32,8 @@ export function evalsHealth(store: Store, now = Date.now()): Health {
     + `the latest on ${latest.threadKey}: ${reasonText(latest.reason)}` }
 }
 /**
- * Builds the operator overview: active system problems, tickets awaiting human action, executor load, and 24-hour trigger flow.
- * @param setup - Setup problem to surface first (where setup stopped, or a Source paused by setup).
+ * 构建运维概览：活跃的系统问题、等待人员处理的工单、执行器负载，以及 24 小时触发器流。
+ * @param setup - 优先展示的安装问题（安装停止的位置，或被安装暂停的来源）。
  */
 export function overview(host: ViewHost, health: HealthMap, policyVersionValue: string, load: ExecutorLoad, setup?: SetupProblem) {
   const { store, sources } = host
@@ -43,16 +43,16 @@ export function overview(host: ViewHost, health: HealthMap, policyVersionValue: 
   const evaluating = store.threads.active().filter(thread => thread.evaluating)
   const instances = sources.instances()
   const running = instances.filter(instance => instance.enabled && instance.installed).map(instance => sourceHealth(sources, instance, health))
-  // Exclude source-owned and policy-sync health entries so only core runtime errors surface as `runtime-error`.
+  // 排除来源自身与策略同步的健康项，使只有核心运行时错误以 `runtime-error` 呈现。
   const sourceParts = new Set(instances.flatMap(instance => sources.kind(instance.kind)?.health ?? []))
   const problems = [
     ...(setup ? [{ kind: 'setup' as const, ...setup }] : []),
     ...(running.length ? [] : [{ kind: 'no-source' as const }]),
-    // Only allowed senders can originate work, so empty allowlists mean no request can ever become a ticket.
+    // 只有被允许的发送者才能发起工作，因此允许列表为空意味着任何请求都不可能成为工单。
     ...(anyoneAllowed(settings) ? [] : [{ kind: 'no-allowed' as const }]),
     ...running.flatMap(source => source.health.filter(item => item.state === 'error').map(item => ({ kind: 'source-error' as const, source: { id: source.id, title: source.title, health: item } }))),
     ...(settings.paused ? [{ kind: 'executor-paused' as const }] : []),
-    // Unavailable Evals behind the `evals` health entry are listed individually as `eval-unavailable` below.
+    // `evals` 健康项背后的不可用 Eval 会在下方逐条列为 `eval-unavailable`。
     ...Object.entries(health).filter(([name, item]) => item.state === 'error' && !sourceParts.has(name) && !name.startsWith('sync:')
       && name !== 'evals')
       .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail })),

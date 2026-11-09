@@ -1,6 +1,6 @@
 /**
- * In-memory LRU cache bounded by total UTF-16 code units, always retaining the most recently inserted entry.
- * Runtime uses separate instances to cache paginated resource snapshots for `orchestrator_read` and resolved Feishu message links for search and cards.
+ * 以 UTF-16 码元总数为上限的内存 LRU 缓存，始终保留最近插入的条目。
+ * 运行时使用独立实例，为 `orchestrator_read` 缓存分页资源快照，并为搜索和卡片缓存已解析的飞书消息链接。
  */
 export class TextCache {
   private readonly texts = new Map<string, string>()
@@ -22,6 +22,6 @@ export class TextCache {
       this.size -= value.length
     }
   }
-  /** Entries ordered from least to most recently used. */
+  /** 条目按从最久未使用到最近使用的顺序排列。 */
   entries(): IterableIterator<[string, string]> { return this.texts.entries() }
 }

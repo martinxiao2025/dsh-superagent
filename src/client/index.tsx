@@ -1,4 +1,4 @@
-/** Browser plugin entry point registering the sidebar icon, main management panel, and Plugin Manager config view. */
+/** 浏览器插件入口，注册侧边栏图标、主管理面板与插件管理器配置视图。 */
 import { useCallback, useEffect, useRef } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -27,7 +27,7 @@ function HammerIcon({ size }: SidebarPanelIconOwnerProps) {
   </svg>
 }
 
-/** Mounted panel wrapper; cancels any pending Session navigation when a new one starts or the panel unmounts. */
+/** 已挂载的面板包装器；当新的会话导航开始或面板卸载时，取消任何待处理的会话导航。 */
 function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
   const pending = useRef<AbortController>(undefined)
   useEffect(() => () => { pending.current?.abort() }, [])
@@ -46,7 +46,7 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
 }
 
 export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']
-/** Registers the panel, sidebar icon, and Plugin Manager config view; `configForms` is optional (without it, machine settings are read-only). */
+/** 注册面板、侧边栏图标与插件管理器配置视图；`configForms` 可选（缺少时机器设置为只读）。 */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-superagent: dictionaries')
   const t = ctx.locale.bind(NS)

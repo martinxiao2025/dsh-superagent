@@ -1,4 +1,4 @@
-/** Loopback-only management HTTP routes with same-origin enforcement for the web panel. */
+/** 仅限回环地址的管理 HTTP 路由，对 Web 面板强制同源校验。 */
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -30,7 +30,7 @@ import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 
 export interface HttpHost {
   readonly store: Store
-  /** Feishu message links resolved since startup, used by search to match AppLink URLs. */
+  /** 启动以来已解析的飞书消息链接，搜索用它来匹配 AppLink URL。 */
   readonly sourceLinks: Pick<TextCache, 'entries'>
   readonly sources: SourceRegistry
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'preview' | 'save' | 'defaultChanged'>
@@ -41,9 +41,9 @@ export interface HttpHost {
   readonly health: Record<string, Health>
   readonly machine: Machine
   readonly masterId: string
-  /** Resolves once startup finishes or setup determines what is still missing. */
+  /** 当启动完成或初始化确定仍缺什么时完成。 */
   readonly ready: Promise<void>
-  /** Resolved deployment; throws if read while waiting for setup (`!configured()`). */
+  /** 已解析的部署；在等待初始化期间读取（`!configured()`）会抛出异常。 */
   readonly deployment: Deployment
   readonly setupProblem?: SetupProblem | undefined
   readonly feishuProblem?: SetupProblem | undefined
@@ -56,8 +56,8 @@ export interface HttpHost {
   models(): Promise<ModelCatalog>
 }
 /**
- * Represents a client-facing 400 or 404 error raised during management route parsing or lookup.
- * Route handlers throw it when request bodies are malformed or target records are missing, and registerHttp serializes its status and message in the HTTP response.
+ * 表示管理路由解析或查找期间抛出的面向客户端的 400 或 404 错误。
+ * 当请求体格式错误或目标记录缺失时，路由处理器会抛出它，registerHttp 会在 HTTP 响应中序列化其状态码和消息。
  */
 class RouteError extends Error { constructor(readonly status: 400 | 404, message: string) { super(message) } }
 async function readBody(req: IncomingMessage, maxBytes = 128 * 1024): Promise<unknown> {
@@ -78,7 +78,7 @@ export function sameOrigin(req: Pick<IncomingMessage, 'headers'>, port: number):
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false
   return req.headers['x-orchestrator-request'] === '1' && (req.headers.origin === undefined || req.headers.origin === `http://${host}`)
 }
-/** Maps errors to HTTP status codes and structured payloads that the panel localizes in the interface language. */
+/** 将错误映射为 HTTP 状态码和结构化载荷，面板会按界面语言对其进行本地化。 */
 function failure(error: unknown): [number, Record<string, unknown>] {
   if (error instanceof z.ZodError) {
     const issues = error.issues.map(issue => ({ path: issue.path.join('.'), message: issue.message }))
@@ -104,7 +104,7 @@ function setupView(runtime: HttpHost) {
       gitlab: resolved.gitlab ? { project: resolved.gitlab.project, login: resolved.gitlab.login } : null } : null,
   }
 }
-/** Build the `/orchestrator/api/state` response consumed by the management panel and `scripts/dsh-superagent status` (`docs/006-deployment.md`). */
+/** 构建管理面板和 `scripts/dsh-superagent status` 使用的 `/orchestrator/api/state` 响应（`docs/006-deployment.md`）。 */
 export function stateView(runtime: HttpHost) {
   const settings = runtime.store.settings()
   return { setup: setupView(runtime), load: { ...executorLoad(runtime.store, runtime.executor.activeCount()),
@@ -115,7 +115,7 @@ const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources:
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
   problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem, gitlabProblem: runtime.gitlabProblem })
 export type StateView = ReturnType<typeof stateView>
-/** Builds a ticket's detail view; `environment` is empty while waiting for setup because it requires the resolved deployment. */
+/** 构建工单详情视图；在等待初始化期间 `environment` 为空，因为它需要已解析的部署。 */
 function ticketPage(runtime: HttpHost, id: string) {
   const detail = ticketDetail(views(runtime), id), ticket = runtime.store.tickets.get(id)
   if (!detail || !ticket) throw new RouteError(404, 'Ticket not found')
@@ -125,8 +125,8 @@ export type TicketPageView = ReturnType<typeof ticketPage>
 function promptsView(runtime: HttpHost, revision: number | undefined, offset: number) {
   const current = runtime.prompts.current()
   const shown = revision === undefined || revision === current.revision ? current : runtime.prompts.version(revision)
-  // Each built-in part with the key of its text, which an override records as its base, and for the overrides shown whose
-  // built-in text changed since, the text they were edited from when known.
+  // 每个内置部分及其文本的键（覆盖项会把它记录为基准），以及对于所展示的覆盖项，
+  // 若其内置文本此后发生变化，则为已知的其编辑来源文本。
   const parts = Object.entries(builtInParts()).map(([key, part]) => ({ key, ...part, base: builtInBase(part.text) }))
   return { masterId: runtime.masterId, current: shown, defaults: defaultPrompts(), sections: TEAM_SECTIONS, skillName: SKILL_NAME.source,
     builtin: Object.keys(sourceSkills), skillPrefix: SKILL_PREFIX, parts, defaultChanged: runtime.prompts.defaultChanged(shown.config),

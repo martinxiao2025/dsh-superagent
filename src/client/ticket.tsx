@@ -1,4 +1,4 @@
-/** Ticket detail page: stage and actions, Mandate details, undelivered/delivered Inputs, subscribed Threads, and Assignments. */
+/** 工单详情页：阶段与操作、委托详情、未送达/已送达的输入、已订阅线程，以及派工。 */
 import { useState, type ReactNode } from 'react'
 import { ApiError, usePoll, type TicketPageView } from './api.ts'
 import { DisclosureRow, Dot, Icon, Tag, type IconName } from './controls.tsx'
@@ -51,7 +51,7 @@ function Assignments({ ticket }: { ticket: TicketPageView }) {
     <div className="dt-row-main">
       <div className="dt-row-title">{t('assignmentNumber', { number: ticket.assignments.length - index })}</div>
       <div className="dt-row-meta">
-        {/* A running Assignment whose worker reported a non-progress state has ended its turn; show that report as its tag and end its span there. */}
+        {/* 正在运行的派工若其工作进程上报了非进展状态，则表明该回合已结束；将这份上报显示为其标签，并在此结束其时间段。 */}
         {item.turnEndedAt && item.report ? <Tag tone="neutral">{report(item.report.state)}</Tag> : <Tag tone={item.state === 'running'
           ? 'info'
           : 'neutral'}>{valueLabel(t, 'assignment', item.state)}</Tag>}
@@ -76,7 +76,7 @@ function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: stri
     return item.name === 'sender' ? item.value : t('yes')
   }
   const { legacy } = ticket.basis
-  // Omit `sender` when it matches `actor`, which is already shown on the status line.
+  // 当 `sender` 与 `actor` 相同时省略 `sender`，因为后者已显示在状态行上。
   const facts = ticket.basis.facts.filter(item => !(item.name === 'sender' && item.value === actor))
   const direction = decision?.direction
   const rows: [string, ReactNode][] = decision ? [
@@ -146,7 +146,7 @@ export function TicketPage({ id }: { id: string }) {
       {channel && <div className="dt-banner-actions">
         <ActionLink href={channel.url} icon="message">{t('answerIn', { source: valueLabel(t, 'source', channel.source) })}</ActionLink>
       </div>}</div>}
-    {/* Ordinary progress stays in the Session/Channels; only a report that halted work (blocked/failed) is shown here. */}
+    {/* 普通进展保留在会话/渠道中；这里只显示导致工作中止的上报（阻塞/失败）。 */}
     {data.actions.retry && data.summary && <p className={`dt-banner${failed ? ' dt-danger' : ''}${failedText ? ' dt-mono' : ''}`}>
       <span className="dt-banner-label">{t(failed ? 'failedPrefix' : 'blockedPrefix')}</span>{data.summary}
     </p>}
@@ -163,7 +163,7 @@ export function TicketPage({ id }: { id: string }) {
         context={thread.context} />)}</ul>
     </Section>}
     <div className="dt-details">
-      {/* A single Assignment adds nothing beyond the status line; list Assignments only once work has been resumed or handed over. */}
+      {/* 单个派工在状态行之外无需额外展示；仅在工作已恢复或交接后才列出派工。 */}
       {data.assignments.length > 1 && <Details icon="queue" title={`${t('term.assignment')} · ${data.assignments.length}`} open><Assignments
         ticket={data} /></Details>}
       {data.environment.length > 0 && <Details icon="settings" title={t('term.environment')}>

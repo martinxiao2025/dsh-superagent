@@ -54,7 +54,7 @@ describe('gate', () => {
   it('grants explicit strength when the sender is allowed in its Source\'s part and the Source marked the Trigger addressed', () => {
     expect(policy.gate(feishu(), thread(), [])).toMatchObject({ admissible: true, strength: 'explicit', basis: { via: 'addressed', source: 'feishu', sender: 'Alice', addressed: 'mention', scope: { chatId: CHAT } } })
     expect(policy.gate(feishu({ addressed: 'direct', meta: { chatId: 'p2p', direct: true, mentioned: false } }), thread(), [])).toMatchObject({ admissible: true, strength: 'explicit', basis: { addressed: 'direct' } })
-    // GitHub logins compare without case; the entry's id names the sender when it has no display name.
+    // GitHub 登录名不区分大小写比较；当条目没有显示名时，其 id 作为发送者名称。
     expect(policy.gate(github('alice', 'mention'), thread(), [])).toMatchObject({ admissible: true, strength: 'explicit', basis: { source: 'github', sender: 'Alice' } })
   })
   it('checks each Source\'s own list: a Feishu id allows nothing on GitHub', () => {
@@ -69,7 +69,7 @@ describe('gate', () => {
     expect(policy.gate(unaddressed({ ...quiet, actor: { source: 'feishu', id: 'ou_guest' } }), thread(['ticket']), [])).toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'followup' } })
     expect(policy.gate(unaddressed(quiet), thread(['ticket']), [])).toMatchObject({ admissible: true, strength: 'explicit', basis: { via: 'followup', sender: 'Alice' } })
     expect(policy.gate(github('someone'), thread(), [ticket])).toMatchObject({ admissible: true, strength: 'inferred' })
-    // A Thread a ticket follows only for context lends no follow-up: the admission table decides, as on any Thread.
+    // 工单仅为上下文而跟随的线程不提供后续消息：如任何线程一样，由准入表决定。
     const context = { ...thread(['ticket']), context: ['ticket'] }
     expect(policy.gate(unaddressed(quiet), context, [ticket])).toMatchObject({ admissible: false })
   })
@@ -103,7 +103,7 @@ describe('admission table', () => {
     expect(policy.gate(inChat(OBSERVED, MEMBER, false), thread(), [])).toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'admission', row: OBSERVED, cell: 'listedUnaddressed', observation: { mode: 'auto' } } })
     expect(policy.gate(inChat(CHAT, STRANGER), thread(), [])).toEqual({ admissible: false, reason: 'not_a_member' })
     expect(policy.gate(feishu({ actor: { source: 'feishu', id: STRANGER }, addressed: 'direct', meta: { chatId: 'p2p', direct: true, mentioned: false } }), thread(), [])).toEqual({ admissible: false, reason: 'not_a_member' })
-    // A listed sender who addresses the agent makes an explicit request whatever the table says.
+    // 名单中的发送者若向智能体发话，无论表怎么说都会构成明确请求。
     expect(setup(withTable({ [CHAT]: { unlistedAddressed: 'ignore' } })).policy.gate(inChat(CHAT), thread(), [])).toMatchObject({ admissible: true, strength: 'explicit' })
   })
   it('makes an unlisted sender\'s mention explicit or inferred as the row says, and an inferred one waits for a mode that assesses', () => {
@@ -116,7 +116,7 @@ describe('admission table', () => {
   })
   it('ignores a listed sender\'s unaddressed message where the row says so, and never reads the table for messages the chat does not receive', () => {
     expect(setup(withTable({ [OBSERVED]: { listedUnaddressed: 'ignore' } })).policy.gate(inChat(OBSERVED, MEMBER, false), thread(), [])).toEqual({ admissible: false, reason: 'admission_ignored' })
-    // An @-only chat receives no unaddressed message, so even an inferred cell does not admit one.
+    // 仅 @ 的群聊不接收未点名的消息，因此即使是推断单元格也不接纳它。
     expect(setup(withTable({ [CHAT]: { listedUnaddressed: 'inferred' } })).policy.gate(inChat(CHAT, MEMBER, false), thread(), [])).toEqual({ admissible: false, reason: 'no_mention' })
     expect(setup(withTable({ [CHAT]: { unlistedUnaddressed: 'inferred' } })).policy.gate(inChat(CHAT, STRANGER, false), thread(), [])).toEqual({ admissible: false, reason: 'not_a_member' })
   })
@@ -139,7 +139,7 @@ describe('admission table', () => {
       const open = setup(withTable({ [CHAT]: { unlistedAddressed: 'explicit' } }, {}, mode))
       expect(open.policy.gate(inChat(CHAT, STRANGER), thread(['ticket']), [])).toMatchObject({ admissible: true, strength: 'explicit',
         basis: { via: 'admission', cell: 'unlistedAddressed' } })
-      // A cell that is not explicit leaves the follow-up inferred, while Eval is on.
+      // 非明确的单元格使后续消息保持为推断，前提是评估开启。
       const strict = setup(withTable({ [CHAT]: { unlistedAddressed: 'ignore' } }, {}, mode))
       expect(strict.policy.gate(inChat(CHAT, STRANGER), thread(['ticket']), [])).toMatchObject(mode === 'off'
         ? { admissible: false } : { admissible: true, strength: 'inferred', basis: { via: 'followup' } })
@@ -174,7 +174,7 @@ describe('revalidating a Mandate from the admission table', () => {
   ]
   const cases = origins.flatMap(origin => [true, false].flatMap(listed => (['off', 'observe', 'auto'] as const).flatMap(mode => [true, false].flatMap(rule =>
     (['all', 'mentions', 'none'] as const).flatMap(scope => [true, false].map(holds => ({ ...origin, listed, mode, rule, scope, holds })))))))
-  /** docs/002: the Thread must still be received; a listed sender who addresses the agent is explicit; a sender listed since takes the listed cell. */
+  /** docs/002：线程仍须被接收；名单中向智能体发话的发送者是明确的；此后列入名单的发送者采用已列入单元格。 */
   function expected({ cell, strength, listed, mode, rule, scope, holds }: typeof cases[number]): boolean {
     if (scope === 'none') return false
     if (cell === 'unlistedAddressed' && listed) return true
@@ -183,7 +183,7 @@ describe('revalidating a Mandate from the admission table', () => {
     return strength === 'explicit' || (mode === 'auto' && rule)
   }
   it.each(cases)('$cell ($strength), listed now $listed, mode $mode, rule on $rule, chat receives $scope, cell holds $holds', item => {
-    // The row gives each cell the strength the Mandate was accepted with, or, when it no longer holds, ignore.
+    // 该行为每个单元格给出 Mandate 被接受时的强度，或在不再成立时给出忽略。
     const grant = (cell: Cell) => !item.holds ? 'ignore' : cell === 'unlistedAddressed' ? item.strength : 'inferred'
     const chats = item.scope === 'none' ? [] : [{ chatId: CHAT, listen: item.scope }]
     const settings = SettingsSchema.parse({
@@ -211,7 +211,7 @@ describe('revalidate and version', () => {
     expect(setup(nobody).policy.revalidate(mandate)).toBe(false)
     const silent = { ...base, sources: { feishu: feishuSource({ chats: [], directMessages: true }) } }
     expect(setup(silent).policy.revalidate(mandate)).toBe(false)
-    // A Mandate from before the gate recorded how it admitted a Trigger holds while its sender is listed and the Source listens.
+    // 在准入关口之前记录其如何接纳触发器的 Mandate，在其发送者仍在名单中且来源仍在监听期间有效。
     const listed: MandateBasis = { via: 'listed', source: 'feishu', scope: { chatId: CHAT, direct: false }, sender: 'Alice' }
     expect(setup(silent).policy.revalidate({ ...mandate, basis: listed })).toBe(false)
     expect(policy.revalidate({ ...mandate, basis: listed })).toBe(true)
@@ -353,12 +353,12 @@ describe('policy effects', () => {
   const explicit = ticket('t2', { strength: 'explicit', actor: { source: 'feishu', id: 'ou_alice' }, basis: { via: 'listed', source: 'feishu' } })
   it('tells a ticket how a change bears on it, and leaves the others alone', () => {
     const rules = (copy: object, visual: object = {}) => ({ ...base, policy: { ...base.policy, rules: [{ ...base.policy.rules[0]!, ...copy }, { ...base.policy.rules[1]!, ...visual }] } })
-    // A rule the ticket was not accepted under changes nothing for it.
+    // 工单未在其下被接受的规则不会对它造成任何改变。
     expect(policyEffects([inferred, explicit], base, rules({}, { enabled: false }), scope).size).toBe(0)
     expect(policyEffects([inferred], base, rules({ instruction: 'Fix typos only.' }), scope).get('t1'))
       .toEqual({ rules: [{ id: 'copy', name: 'Copy', change: 'changed', instruction: 'Fix typos only.' }] })
     expect(policyEffects([inferred], base, rules({ enabled: false }), scope).get('t1')).toEqual({ rules: [{ id: 'copy', name: 'Copy', change: 'disabled' }] })
-    // Another sender on the list, as a member sync adds, bears on no ticket; taking the requester off it does.
+    // 名单上的另一位发送者（例如成员同步新增的）不影响任何工单；把请求者从名单移除则会影响。
     const allowed = (list: { id: string }[]) => ({ ...base, policy: { ...base.policy, sources: { ...base.policy.sources, feishu: { ...base.policy.sources.feishu!, allowed: list } } } })
     expect(policyEffects([inferred, explicit], base, allowed([{ id: 'ou_alice' }, { id: 'ou_bob' }]), scope).size).toBe(0)
     expect(policyEffects([explicit], base, allowed([]), scope).get('t2')).toEqual({ requesterAllowed: false, requester: { source: 'feishu', id: 'ou_alice' } })
@@ -369,7 +369,7 @@ describe('policy effects', () => {
     const rule = ticket('t3', { strength: 'inferred', actor: { source: 'feishu', id: 'ou_alice' },
       basis: { via: 'listed', source: 'feishu', rules: ['copy'], observation: {} } })
     const effects = policyEffects([rule, explicit], auto, observe, scope)
-    // Not a sender's removal: the person who wrote it may still start work.
+    // 这不是发送者被移除：写下它的人仍可启动工作。
     expect(effects.get('t3')).toEqual({ proactive: false })
     expect(effects.has('t2')).toBe(false)
     const bot = ticket('t4', { strength: 'explicit', actor: { source: 'feishu', id: 'cli_ci_bot' }, basis: { via: 'listed', source: 'feishu' } })
@@ -384,7 +384,7 @@ describe('policy effects', () => {
     expect(settingsPolicy(mode('auto'), scope()).revalidate(followup.mandate)).toBe(true)
     for (const settings of [mode('observe'), mode('off'), disabled]) expect(settingsPolicy(settings, scope()).revalidate(followup.mandate)).toBe(false)
     expect(policyEffects([followup], mode('auto'), mode('observe'), scope).get('t5')).toEqual({ proactive: false })
-    // An explicit follow-up holds whatever the mode.
+    // 明确的后续消息在任何模式下都成立。
     const explicitFollowup = ticket('t6', { ...followup.mandate, strength: 'explicit', actor: { source: 'feishu', id: 'ou_alice' } })
     expect(settingsPolicy(mode('off'), scope()).revalidate(explicitFollowup.mandate)).toBe(true)
   })
@@ -397,7 +397,7 @@ describe('policy effects', () => {
       basis: { via: 'admission', cell: 'unlistedUnaddressed', source: 'feishu', scope: { chatId: chat }, row: chat, rules: ['copy'],
         observation: { mode: 'auto' } } })
     expect(policyEffects([proactive], table('inferred'), table('inferred'), observed).size).toBe(0)
-    // A weaker cell takes the work from its sender, whom the effect names; a mode change only stops inferred work.
+    // 较弱的单元格会从其发送者手中接管工作，效果会点名该发送者；模式变更只会停止推断的工作。
     expect(policyEffects([proactive], table('inferred'), table('ignore'), observed).get('t3'))
       .toEqual({ requesterAllowed: false, requester: { source: 'feishu', id: 'ou_guest' } })
     expect(policyEffects([proactive], table('inferred'), table('inferred', 'observe'), observed).get('t3')).toEqual({ proactive: false })
@@ -421,7 +421,7 @@ describe('bots and events without a sender', () => {
     const { policy } = setup(observing({ observeComments: true }))
     expect(policy.gate(comment, thread(), [])).toMatchObject({ admissible: true, strength: 'inferred',
       basis: { via: 'bot', source: 'github', sender: 'dependabot[bot]', row: 'comments', observation: { mode: 'auto' } } })
-    // A bot that addresses the agent still makes no explicit request; on a Thread with tickets it is no follow-up either.
+    // 向智能体发话的机器人仍不构成明确请求；在已有工单的线程上，它也不是后续消息。
     expect(policy.gate({ ...comment, addressed: 'mention' }, thread(['ticket']), [ticket])).toMatchObject({ strength: 'inferred',
       basis: { via: 'bot', addressed: 'mention' } })
     expect(policy.gate({ ...comment, actor: { source: 'github', id: 'renovate[bot]' } }, thread(), [])).toEqual({ admissible: false,
@@ -444,7 +444,7 @@ describe('bots and events without a sender', () => {
     const branch = setup(observing({ observeCi: true }, { admission })).policy.gate(ci({ branch: 'main' }), thread(), [])
     expect(branch).toMatchObject({ admissible: true, strength: 'inferred',
       basis: { via: 'admission', cell: 'unlistedUnaddressed', row: 'ci', observation: { mode: 'auto' } } })
-    // The cell defaults to ignore, so observing the CI changes nothing until the table says so.
+    // 该单元格默认为忽略，因此观察 CI 不会改变任何东西，直到表这样声明。
     expect(setup(observing({ observeCi: true })).policy.gate(ci({ branch: 'main' }), thread(), [])).toEqual({ admissible: false,
       reason: 'admission_ignored' })
     const pull = setup(observing({ observeCi: true }, { admission })).policy.gate(ci({ number: 9, isPr: true }), thread(), [])
@@ -457,7 +457,7 @@ describe('bots and events without a sender', () => {
       meta: { chatId: OBSERVED, direct: false, mentioned: false } })
     expect(setup(settings).policy.gate(alert, thread(), []))
       .toMatchObject({ admissible: true, strength: 'inferred', basis: { via: 'bot', sender: 'Alerts', row: OBSERVED } })
-    // In a chat the Source receives only mentions in, a bot's message that does not address the agent is not received.
+    // 在来源仅接收提及的群聊中，不向智能体发话的机器人消息不会被接收。
     const unobserved = setup(settings).policy.gate({ ...alert, meta: { chatId: CHAT, direct: false, mentioned: false } }, thread(), [])
     expect(unobserved).toEqual({ admissible: false, reason: 'not_human' })
   })

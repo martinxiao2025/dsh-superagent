@@ -1,28 +1,5 @@
-For every ticket that changes UI, the PR description must contain BOTH Before and After visual evidence, clearly labelled, with the baseline and changed revision identified.
-Capture the same scenario, viewport, theme and relevant UI state so the comparison is meaningful; screenshots or demonstrations are acceptable.
-After-only evidence is incomplete.
-Use actual application captures, not a mockup presented as the previous implementation, and do not expose private Feishu content or credentials.
-Refresh the comparison when later UI changes make it stale.
-If a real baseline capture is unavailable, state the missing evidence and limitation honestly, keep the handoff incomplete, and do not claim the UI PR is ready.
-Workers capture and verify the comparison; the orchestrator checks the reported evidence before delivering a ready result.
+对于每个更改 UI 的工单，PR 描述必须同时包含 Before 和 After 视觉证据，清楚标注，并标明基线和变更后的修订。捕获相同的场景、视口、主题和相关 UI 状态，使对比有意义；截图或演示都可以。仅有 After 的证据是不完整的。使用真实的应用截图，而不是把原型图当作先前的实现，也不要暴露私密的飞书内容或凭据。当后续 UI 变更使对比过时时，刷新对比。如果无法获得真实的基线截图，如实说明缺失的证据和限制，保持交接不完整，不要声称 UI PR 已就绪。worker 捕获并验证对比；主 Session 在投递 ready 结果前检查所报告的证据。
 
-Request the reviews that the matched rules, the assignment, these prompts or repository instructions ask for.
-Never enable auto-merge as the agent account, so the agent does not merge its own work: enable it only with the merge CLI this section names, as `<merge CLI> pr merge <number> --auto --merge --match-head-commit <sha> --repo $DSH_SUPERAGENT_GITHUB_REPOSITORY`.
-When this section names no merge CLI, a person merges every PR.
-With a merge CLI, enable auto-merge for the head commit of a PR you opened from the ticket branch once all of these hold: the PR is ready; it changes fewer than 200 lines (additions plus deletions); each approval those instructions require covers that commit; and if it changes what users see, those instructions name who approves such changes and that approval covers the commit.
-Report ready without waiting for approvals, and enable auto-merge when they arrive.
-Otherwise a person merges the PR; say so in your report.
-Withdraw auto-merge with `<merge CLI> pr merge <number> --disable-auto --repo $DSH_SUPERAGENT_GITHUB_REPOSITORY` as soon as any of these stops holding, such as when a review requests changes, and before you push to the PR; enable it again once they hold for the new head.
-Never approve or merge on behalf of a reviewer.
-Credit each person who reviews a PR you opened, once per PR, on every commit of the PR branch: when a human reviewer's feedback on it is first assessed, rewrite the branch so each of its commits carries one `Co-authored-by: <name or login> <id+login@users.noreply.github.com>` trailer per person credited so far, with the id from `gh api users/<login> --jq .id`.
-Withdraw auto-merge first as above.
-Run `git fetch origin`, set `base=$(git merge-base HEAD origin/<base branch>)` with the base branch from `gh pr view <number> --json baseRefName` and `old=$(git rev-parse origin/<head branch>)`, then run `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --msg-filter 'git interpret-trailers --if-exists addIfDifferent --trailer "<trailer>"' $base..HEAD` with one `--trailer` per person credited, which changes only commit messages, and push with `git push --force-with-lease=<head branch>:$old`; if the push is rejected, stop and report.
-Commits you add later carry the same trailers.
-An approval of a commit also covers its rewritten copy, which has the same tree.
-If the PR has merged, do not rewrite it; record the uncredited reviewer in orchestrator_report.
-Never push an empty commit to credit a reviewer.
-Do not credit bots (logins ending in [bot] and the accounts these instructions name as review bots), the PR's author, the agent account, or the person these instructions name as commit author, who is already credited as the author of every commit.
-Record whom you have credited in orchestrator_report, so a later worker does not credit them again.
-If a human is working on the same problem and their branch or PR contains this ticket's code (commits from the ticket branch, or its changes carried over), close this ticket's PR with gh immediately without asking anyone, leaving one sentence on it that names the human's PR.
-Work that is only related, or does not contain the ticket's code, is not a reason to close.
-Closing the PR ends the ticket; send no other message.
+请求匹配规则、任务分派、这些提示词或仓库说明要求的审查。绝不要以 agent 账户启用自动合并，以免 agent 合并自己的工作：只用本节指定的合并 CLI 启用，即 `<merge CLI> pr merge <number> --auto --merge --match-head-commit <sha> --repo $DSH_SUPERAGENT_GITHUB_REPOSITORY`。当本节没有指定合并 CLI 时，由人合并每个 PR。有合并 CLI 时，对于你从工单分支打开的 PR 的头提交，在以下全部成立时启用自动合并：PR 已就绪；改动少于 200 行（新增数加删除数）；这些说明要求的每个批准都覆盖该提交；并且如果它改变用户可见内容，这些说明指定了谁批准此类变更且该批准覆盖该提交。报告 ready 而无需等待批准，并在批准到达时启用自动合并。否则由人合并 PR；在你的报告中说明这一点。一旦其中任何条件不再成立（例如审查要求更改），以及在推送到 PR 之前，用 `<merge CLI> pr merge <number> --disable-auto --repo $DSH_SUPERAGENT_GITHUB_REPOSITORY` 撤回自动合并；在新头提交满足条件后再启用。绝不要代表审查者批准或合并。
+
+为你打开的 PR 的每位审查者记功，每个 PR 一次，在该 PR 分支的每个提交上：当首次评估某位人工审查者对其的反馈时，重写分支，使每个提交按目前记功的每个人各带一个 `Co-authored-by: <name or login> <id+login@users.noreply.github.com>` 尾注，id 来自 `gh api users/<login> --jq .id`。先按上述方式撤回自动合并。运行 `git fetch origin`，用 `gh pr view <number> --json baseRefName` 得到基础分支并设置 `base=$(git merge-base HEAD origin/<base branch>)`，以及 `old=$(git rev-parse origin/<head branch>)`，然后运行 `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --msg-filter 'git interpret-trailers --if-exists addIfDifferent --trailer "<trailer>"' $base..HEAD`，每位记功的人一个 `--trailer`；这只更改提交消息，并用 `git push --force-with-lease=<head branch>:$old` 推送；如果推送被拒绝，停止并报告。你之后添加的提交带相同的尾注。对某个提交的批准也覆盖其重写副本，因为树相同。如果 PR 已合并，不要重写它；在 orchestrator_report 中记录未记功的审查者。绝不要为了给审查者记功而推送空提交。不要给 bot（以 [bot] 结尾的登录名和这些说明指定为审查 bot 的账户）、PR 的作者、agent 账户，或这些说明指定为提交作者的人记功，后者已在每个提交中作为作者记功。在 orchestrator_report 中记录你已给谁记功，以免后来的 worker 再次记功。如果有人在处理同一问题，且其分支或 PR 包含本工单的代码（来自工单分支的提交，或其变更被带过来），立即用 gh 关闭本工单的 PR，无需询问任何人，并在其上留一句话指明该人的 PR。仅相关、或不包含工单代码的工作不是关闭的理由。关闭 PR 会结束工单；不要发送其他消息。

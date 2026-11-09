@@ -1,9 +1,9 @@
-/** Loads packaged built-in skill definitions and prompt templates from disk. */
+/** 从磁盘加载随包发布的内置技能定义和提示词模板。 */
 import { readFileSync } from 'node:fs'
 import { packagePath } from '../infra/paths.ts'
 /**
- * Reads a packaged text file with normalized Unix line endings.
- * @throws Naming the file when it is missing or whitespace-only, because `dsh-superagent` cannot load without it.
+ * 读取随包发布的文本文件，并规范为 Unix 换行。
+ * @throws 文件缺失或仅含空白时会在错误中指明该文件，因为缺少它 `dsh-superagent` 无法加载。
  */
 function packaged(...parts: string[]): { path: string; text: string } {
   const path = packagePath(...parts)
@@ -23,8 +23,8 @@ function load(name: string) {
 }
 export const bundledSkills = { feishu: load('feishu'), github: load('github'), gitlab: load('gitlab') }
 /**
- * Loads a built-in prompt file (`prompts/<name>.md`). Source `.md` files are written one sentence per line for
- * readable diffs; `promptFile` joins lines within each paragraph with spaces while keeping blank-line paragraph breaks.
+ * 加载内置提示词文件（`prompts/<name>.md`）。源 `.md` 文件把每个中文段落写在一行内，以便 diff 易读；
+ * `promptFile` 会在每个段落内用空格连接各行，同时保留空行分隔的段落。
  */
 export function promptFile(name: string): string {
   const paragraphs = packaged('prompts', `${name}.md`).text.trim().split(/\n(?:[ \t]*\n)+/)

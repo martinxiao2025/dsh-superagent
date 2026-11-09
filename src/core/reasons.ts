@@ -1,6 +1,6 @@
 /**
- * Structured reason codes and templates for decisions, filtered triggers, and ended assignments.
- * Policy gates and source scopes may also emit their own literal reason codes.
+ * 决策、被过滤的触发器和已结束任务分配的结构化原因代码与模板。
+ * 策略门禁和来源范围也可以发出自己的字面量原因代码。
  */
 export const REASONS = {
   said: '{text}',
@@ -25,10 +25,10 @@ export const REASONS = {
   observed: 'Observe mode: would accept ({text})',
 } as const
 export type ReasonCode = keyof typeof REASONS
-/** Reason code and template values; `triggerId` identifies the trigger in a batch that the reason applies to. */
+/** 原因代码与模板值；`triggerId` 标识该原因所针对的批次中的触发器。 */
 export interface Reason { code: ReasonCode | (string & {}); values?: Record<string, string>; triggerId?: string }
 export const said = (text: string): Reason => ({ code: 'said', values: { text } })
-/** Formats reasons in English (prefixed by `triggerId` when present) for agent consumption. */
+/** 以英文格式化原因（存在时以 `triggerId` 为前缀），供智能体使用。 */
 export function reasonText(reasons: readonly Reason[] | Reason | undefined): string {
   return [reasons ?? []].flat().map(reason => {
     const template: string = REASONS[reason.code as ReasonCode] ?? reason.code

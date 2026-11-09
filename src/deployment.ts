@@ -1,4 +1,4 @@
-/** Plugin configuration and startup verification for repository access and agent CLI identities. */
+/** 插件配置，以及针对仓库访问和智能体 CLI 身份启动校验。 */
 import { LIMITS } from './limits.ts'
 import { accessSync, constants, statSync } from 'node:fs'
 import { delimiter, extname, isAbsolute, join } from 'node:path'
@@ -11,10 +11,10 @@ import { spawnArgv } from './infra/commands.ts'
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
-/** A drive-letter or UNC root as Windows writes it, or the POSIX root; a relative path starts with neither. */
+/** Windows 写法的盘符或 UNC 根路径，或 POSIX 根路径；相对路径两者都不以之开头。 */
 const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/])/
 const absolute = (description: string) => s.string().pattern(ABSOLUTE_PATH).description(`${description} Absolute path.`)
-/** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
+/** dsh-superagent 条目的插件配置。易变字段无需重启即可生效，因为 dsh-superagent 在每次使用时读取它们；修改 `stateDir` 会重新挂载插件。 */
 export const Config = s.object({
   stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
   promptMaxChars: s.number().min(LIMITS.promptMaxChars.min).max(LIMITS.promptMaxChars.max).step(1).default(100000)
@@ -37,7 +37,7 @@ const MOVED: Record<string, string> = {
   worktreeRoot: 'the ticket directory of the Execution settings', blockedCommands: 'in the Execution settings',
 }
 
-/** Read machine settings and reject unknown configuration keys (naming where deprecated keys moved). */
+/** 读取机器设置，并拒绝未知配置键（同时指明已弃用键迁移到了何处）。 */
 export function machineOf(config: DeploymentConfig): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
@@ -55,7 +55,7 @@ export const GitlabProjectSchema = z.object({
   project: z.string().trim().regex(/^([A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+)?$/, 'group/project').default(''),
   cli: z.string().trim().default('glab'),
 })
-/** Source configuration keys that affect deployment setup and trigger a restart when changed. */
+/** 影响部署配置、且修改后需要重启的来源配置键。 */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
   github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape), gitlab: Object.keys(GitlabProjectSchema.shape),
 }
@@ -69,27 +69,27 @@ export interface Deployment extends Machine {
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
 export interface GitlabProject { cli: string; project: string; projectId: number; login: string; id: number }
 
-/** Extensions Windows appends to a bare command name, as `cmd` and `where` do; POSIX appends none. */
+/** Windows 会像 `cmd` 和 `where` 那样为裸命令名附加的扩展名；POSIX 不附加任何扩展名。 */
 const EXTENSIONS: readonly string[] = process.platform === 'win32'
   ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : []
-/** Resolve a command name or absolute path to an executable file, ignoring the worker shim directory. */
+/** 把命令名或绝对路径解析为可执行文件，忽略工作单元垫片目录。 */
 export function executable(name: string, path: string, exclude?: string): string {
-  // Windows separates with both `\` and `/`, and resolves a bare name to `gh.exe` or `gh.cmd`; POSIX separates with `/` only.
+  // Windows 用 `\` 和 `/` 两种分隔符，并把裸名字解析为 `gh.exe` 或 `gh.cmd`；POSIX 只用 `/` 分隔。
   if (/[\\/]/.test(name) && !isAbsolute(name)) throw new Error(`${name} must be a command name or an absolute path`)
   const bases = isAbsolute(name) ? [name] : path.split(delimiter).filter(dir => isAbsolute(dir) && !(exclude && sameDirectory(dir, exclude))).map(dir => join(dir, name))
   const candidates = bases.flatMap(base => [base, ...(EXTENSIONS.length && !extname(base) ? EXTENSIONS.map(extension => base + extension) : [])])
   for (const candidate of candidates) {
     try { if (statSync(candidate).isFile()) { accessSync(candidate, constants.X_OK); return candidate } }
-    catch { /* Not an executable file here; try the next PATH directory. */ }
+    catch { /* 此处没有可执行文件；尝试下一个 PATH 目录。 */ }
   }
   throw new Error(`${name} is not an executable file${isAbsolute(name) ? '' : ' on PATH'}`)
 }
 
-/** A startup check: run `argv` and return its standard output, optionally under extra environment entries. */
+/** 一次启动检查：运行 `argv` 并返回其标准输出，可选地在额外的环境变量项下运行。 */
 export type Probe = (argv: string[], env?: Record<string, string>) => Promise<string>
 /**
- * Run startup checks through DSH's worker subprocess service with worker shims removed from PATH so a `gh` wrapper
- * script reaches the real binary. PATH travels as a spawn environment entry because Windows has no `env` command.
+ * 通过 DSH 的工作单元子进程服务运行启动检查，同时从 PATH 中移除工作单元垫片，使 `gh` 包装脚本
+ * 到达真实二进制。PATH 作为 spawn 环境项传递，因为 Windows 没有 `env` 命令。
  */
 export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal): Probe {
   const path = withoutDirectory(process.env.PATH ?? '', workerBin(stateDir))
@@ -101,11 +101,11 @@ const GithubUser = z.object({ login: z.string().regex(/^[A-Za-z0-9-]+$/), id: z.
 const RepositoryAccess = z.object({ name: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), push: z.boolean().nullable() })
 function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   let value: unknown
-  try { value = JSON.parse(text) } catch { return undefined /* Non-JSON output; the caller surfaces the setup failure. */ }
+  try { value = JSON.parse(text) } catch { return undefined /* 非 JSON 输出；由调用方暴露配置失败。 */ }
   const result = schema.safeParse(value)
   return result.success ? result.data : undefined
 }
-/** Returns the first line of CLI output that parses as `schema`, skipping banners or warnings printed before the payload. */
+/** 返回 CLI 输出中第一个能按 `schema` 解析的行，跳过负载之前打印的横幅或警告。 */
 function firstParsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   for (const line of text.split(/\r?\n/)) {
     const value = parsed(schema, line)
@@ -113,7 +113,7 @@ function firstParsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   }
   return undefined
 }
-/** Verify the agent's GitHub CLI identity and push access to the configured repository. */
+/** 校验智能体的 GitHub CLI 身份及其对配置仓库的推送权限。 */
 export async function resolveDeployment(machine: Machine, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
   const { stateDir } = machine
   const accounts = GithubAccountsSchema.parse(github ?? {})
@@ -125,7 +125,7 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
   const text = await probe([cli, 'api', 'user']).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }) })
   const agent = parsed(GithubUser, text)
   if (!agent) throw new SetupError('agentCliNoAccount')
-  // Use the canonical repository name returned by GitHub so renamed repositories match incoming notifications.
+  // 使用 GitHub 返回的规范仓库名，使改名后的仓库也能匹配收到的通知。
   const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
     throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
   }))
@@ -172,8 +172,8 @@ export async function resolveGitlab(machine: Machine, config: unknown, probe: Pr
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })
 const BotInfo = z.object({ bot: z.object({ open_id: z.string().regex(/^ou_[A-Za-z0-9]+$/), app_name: z.string().default('') }) })
 /**
- * Verify that the configured Feishu CLI is authenticated as a bot and restricted to strict mode `bot`.
- * Workers invoke this CLI as `lark-cli`, so a CLI that also permits a user identity would let workers act as that user.
+ * 校验配置的飞书 CLI 已以机器人身份认证，并受限在严格模式 `bot` 下。
+ * 工作单元会以 `lark-cli` 调用该 CLI，若 CLI 同时允许用户身份，工作单元就可能以该用户身份行动。
  */
 export async function resolveFeishuBot(machine: Machine, feishu: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<FeishuBot | undefined> {
   const { cli: name } = FeishuBotSchema.parse(feishu ?? {})
@@ -189,8 +189,8 @@ export async function resolveFeishuBot(machine: Machine, feishu: unknown, probe:
   if (status.identities.bot.status !== 'ready') fail(new SetupError('feishuBotNotReady', { app: status.appId, status: status.identities.bot.status }))
   const mode = /strict-mode:\s*(\w+)/.exec(await run('config', 'strict-mode'))?.[1]
   if (mode !== 'bot') fail(new SetupError('feishuUserIdentity', { mode: mode ?? 'unknown' }))
-  // `--format json` unwraps only `data`, whereas this endpoint returns the payload under `bot`. A CLI may print a
-  // banner before its NDJSON, so the first line that is the bot payload is taken rather than the first line.
+  // `--format json` 只解包 `data`，而此端点把负载放在 `bot` 下。CLI 可能在 NDJSON 前打印
+  // 横幅，因此取第一行属于机器人负载的内容，而不是真正的第一行。
   const info = firstParsed(BotInfo, await run('api', 'GET', '/open-apis/bot/v3/info', '--as', 'bot', '--format', 'ndjson'))
   if (!info) return fail(new SetupError('feishuNoBot'))
   return { cli, appId: status.appId, brand: status.brand, botId: info.bot.open_id, name: info.bot.app_name }

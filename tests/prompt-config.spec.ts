@@ -26,13 +26,13 @@ it('overrides a built-in part, keeping the built-in text it was edited from unti
   const edited = withOverride(defaultPrompts(), part, 'Ours.')
   expect(edited.overrides).toEqual({ 'runtime/shared': { text: 'Ours.', base: 'now' } })
   expect([sectionText(edited, 'part/runtime/shared'), partText(edited, part), partText(defaultPrompts(), part)]).toEqual(['Ours.', 'Ours.', 'Built in.'])
-  // An override edited from an earlier built-in text keeps that base while edited, and takes the current one when re-based.
+  // 编辑自较早内置文本的覆盖项在编辑期间保留该 base，重新设基时采用当前的那份。
   const earlier = { ...defaultPrompts(), overrides: { 'runtime/shared': { text: 'Ours.', base: 'earlier' } } }
   expect(withOverride(earlier, part, 'Ours, edited.').overrides).toEqual({ 'runtime/shared': { text: 'Ours, edited.', base: 'earlier' } })
   const rebased = withOverride(earlier, part, 'Ours.', true)
   expect(rebased.overrides).toEqual({ 'runtime/shared': { text: 'Ours.', base: 'now' } })
   expect(changedSections(rebased, earlier)).toEqual(['part/runtime/shared'])
-  // The editor keeps no overrides as an empty map, which the host stores as none.
+  // 编辑器把没有覆盖项保存为空 map，宿主会将其存为无。
   expect(withOverride(edited, part, 'Built in.')).toEqual(withOverrides(defaultPrompts()))
   expect(withOverride(edited, part, undefined)).toEqual({ ...defaultPrompts(), overrides: {} })
 })

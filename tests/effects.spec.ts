@@ -1,4 +1,4 @@
-/** The durable effect queue: coalescing, per-kind limits, retries with backoff, health and shutdown. */
+/** 持久化效果队列：合并、按类型限制、带退避的重试、健康状态与关闭。 */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -179,7 +179,7 @@ it('queues an effect after a restart behind the ones that waited, for a kind tha
   await vi.waitFor(() => expect(effects.pending('relay', 'first')).toBe(true))
   const drained = effects.drain()
   hold.resolve(); await drained
-  // Sequence numbers continue across restarts so newly queued effects run after existing pending ones.
+  // 序列号跨重启延续，因此新入队的效果会在已存在的待处理项之后运行。
   const next = new Effects(store, new HealthBoard(), () => clock)
   next.enqueue('relay', 'third', relay('c'))
   next.start()

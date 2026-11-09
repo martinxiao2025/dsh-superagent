@@ -1,96 +1,96 @@
-# 004 Prompts
+# 004 提示词
 
-This document explains what the agents read, what a team can edit, and when changes take effect. It builds on [000 Philosophy](000-philosophy.md) through [003 Execution](003-execution.md). Prompt text is written in English.
+本文档说明智能体读取什么、团队可以编辑什么，以及更改何时生效。它建立在 [000 理念](000-philosophy.md) 到 [003 执行](003-execution.md) 之上。提示词文本用英文书写。
 
-## What a team writes
+## 团队编写的内容
 
-A team can edit three team sections, add skills, and override every built-in system-prompt part. Most defaults live under `prompts/` and `skills/`. Tool descriptions, notices and cards remain in code and cannot be edited through prompt settings.
+团队可以编辑三个团队段落、添加技能，并覆盖每个内置系统提示词部分。大多数默认内容位于 `prompts/` 和 `skills/` 下。工具描述、通知和卡片仍在代码中，无法通过提示词设置编辑。
 
-| Section | Holds |
+| 段落 | 内容 |
 | --- | --- |
-| Communication | When to message people, how messages read, the line that begins every GitHub message (`This is by an automated agent, not a human` by default), how to handle reviews, and which ordinary accounts are review bots |
-| Ticket scope | When a Ticket goes on and when it stops with a draft |
-| Delivery requirements | Evidence in pull requests, the auto-merge condition with its line threshold, and the commit author; without one, the Executor commits as the agent account's no-reply address |
-| Team skills | Knowledge the agents load when they need it, such as an `identities` skill that says which Feishu user is which GitHub account |
+| 沟通 | 何时给人发消息、消息如何书写、每条 GitHub 消息开头的说明行（默认是 `This is by an automated agent, not a human`）、如何处理评审，以及哪些普通账号是评审机器人 |
+| 工单范围 | 工单何时继续，何时带着草稿停下 |
+| 交付要求 | 拉取请求中的证据、带行数阈值的自动合并条件，以及提交作者；没有指定时，执行器以智能体账号的 no-reply 地址提交 |
+| 团队技能 | 智能体按需加载的知识，例如说明哪个飞书用户对应哪个 GitHub 账号的 `identities` 技能 |
 
-The built-in text covers the roles, tool usage, host mechanics, authorization rules, and the GitHub and Feishu skills. It refers to the team sections by their headings instead of repeating them.
+内置文本涵盖角色、工具用法、宿主机制、授权规则以及 GitHub 和飞书技能。它通过标题引用团队段落，而不是重复它们。
 
-### Built-in parts and templates
+### 内置部分与模板
 
-Overrides use these keys:
+覆盖使用以下键：
 
-| Parts | Keys |
+| 部分 | 键 |
 | --- | --- |
-| Shared instructions and roles | `runtime/shared`, `runtime/orchestrator`, `runtime/worker` |
-| Working instructions | `runtime/subscriptions`, `runtime/replies`, `runtime/dispatch`, `runtime/work`, `runtime/admission` |
-| Handoff instructions | `runtime/handoff/orchestrator`, `runtime/handoff/worker` |
-| Source skills | `skill/feishu`, `skill/github`, `skill/gitlab` |
-| Generated sections | `runtime/environment`, `runtime/policy`, `runtime/policy/none` |
+| 共享指令与角色 | `runtime/shared`, `runtime/orchestrator`, `runtime/worker` |
+| 工作指令 | `runtime/subscriptions`, `runtime/replies`, `runtime/dispatch`, `runtime/work`, `runtime/admission` |
+| 交接指令 | `runtime/handoff/orchestrator`, `runtime/handoff/worker` |
+| 来源技能 | `skill/feishu`, `skill/github`, `skill/gitlab` |
+| 生成段落 | `runtime/environment`, `runtime/policy`, `runtime/policy/none` |
 
-The generated sections are editable templates. They must retain these placeholders:
+生成段落是可编辑模板。它们必须保留这些占位符：
 
-- `runtime/environment`: `{variables}`, filled with execution environment lines.
-- `runtime/policy`: `{version}`, `{mode}` and `{rules}`, with one line per enabled rule.
-- `runtime/policy/none`: `{version}` and `{mode}`, used when no rule is enabled.
+- `runtime/environment`：`{variables}`，填入执行环境各行。
+- `runtime/policy`：`{version}`、`{mode}` 和 `{rules}`，每条已启用规则一行。
+- `runtime/policy/none`：`{version}` 和 `{mode}`，在未启用任何规则时使用。
 
-Editing a part changes the instructions the model receives. It does not change the gate, Mandates, tool checks or account wrappers, which remain enforced by code.
+编辑某个部分会改变模型收到的指令。它不会改变准入层、授权、工具检查或账号包装脚本，这些仍由代码强制执行。
 
-On an explicit human request, the main Session can also save overrides with `orchestrator_prompts_save`. If a save omits an override's `base`, it keeps the saved base. A removed part already present in the saved configuration is dropped on save; any other unknown part is refused.
+在人明确请求时，主会话还可以用 `orchestrator_prompts_save` 保存覆盖。如果保存时省略了覆盖的 `base`，则保留已保存的 base。已保存配置中已有的被删除部分会在保存时丢弃；任何其他未知部分都会被拒绝。
 
-An override records which built-in text it was based on. Upgrades preserve the team's text. If the default changes, the panel marks the part **Default updated** and shows the difference beside the team's text. The team can keep its text, use the new default or edit it. Parts without overrides automatically follow new defaults.
+覆盖会记录它基于哪份内置文本。升级会保留团队的文本。如果默认内容变化，面板会将该部分标记为 **默认内容已更新**，并在团队文本旁显示差异。团队可以保留自己的文本、使用新默认值或编辑它。没有覆盖的部分会自动跟随新默认值。
 
-The main Session can read affected part names in `orchestrator_read prompts`, under `default_changed`.
+主会话可以在 `orchestrator_read prompts` 的 `default_changed` 下读取受影响部分的名称。
 
-## Assembly and precedence
+## 组装与优先级
 
-The system prompt is assembled in this order:
+系统提示词按以下顺序组装：
 
-1. Shared instructions and the role.
-2. The three team sections.
-3. Subscriptions and replies.
-4. Dispatch for the main Session, or work instructions for an Executor.
-5. `runtime/admission`, for the main Session only.
-6. Handoff instructions.
-7. `runtime/environment`.
-8. `runtime/policy`, for the main Session only.
+1. 共享指令和角色。
+2. 三个团队段落。
+3. 订阅与回复。
+4. 主会话的派发指令，或执行器的工作指令。
+5. `runtime/admission`，仅用于主会话。
+6. 交接指令。
+7. `runtime/environment`。
+8. `runtime/policy`，仅用于主会话。
 
-Admission instructions come from `prompts/admission.md`. They describe proactive assessment and when an irrelevant candidate can be ignored from its card. `orchestrator_eval` returns context rather than repeating these instructions.
+准入指令来自 `prompts/admission.md`。它们描述主动评估，以及何时可以仅凭卡片忽略无关候选。`orchestrator_eval` 返回上下文，而不是重复这些指令。
 
-The environment section gives the main Session deployment-wide values and each Executor its Ticket-specific values. The Policy section is regenerated from settings on every model request. It contains the Policy version, accept mode, the explicit-request exemption, and enabled rules as `- <name> (<id>): <instruction>`, or a statement that none is enabled. It is last so a Policy change leaves the preceding prompt text unchanged.
+环境段落给主会话提供部署级的值，给每个执行器提供其工单专属的值。策略段落在每次模型请求时从设置重新生成。它包含策略版本、接单模式、明确请求豁免，以及以 `- <name> (<id>): <instruction>` 形式列出的已启用规则，或说明未启用任何规则。它放在最后，因此策略变更不会影响前面的提示词文本。
 
-Executors also read DeepSeek Harness's coding prompt and the repository's `AGENTS.md`; the main Session does not. An inferred Ticket adds a final note limiting its Executor to the matched rules. Assignments and incoming messages arrive inline as Trigger cards, with resource pointers only for truncated content.
+执行器还会读取 DeepSeek Harness 的编码提示词和仓库的 `AGENTS.md`；主会话不会。推断的工单会追加一条最终说明，将其执行器限制在匹配的规则内。派工和收到的消息以触发器卡片的形式内联到达，只有被截断的内容才带资源指针。
 
-Executors work unattended. Their tools exclude those that ask a person, present UI to them or change the profile, such as `ask_user_question`, `present` and `plugin_manager`.
+执行器无人值守地工作。其工具排除了向人提问、向人展示界面或更改 profile 的工具，例如 `ask_user_question`、`present` 和 `plugin_manager`。
 
-From strongest to weakest:
+从最强到最弱：
 
-1. Facts enforced by tools and the host: identities, permissions, tool argument checks, reply purposes, length limits. Prompt text cannot change them.
-2. Built-in and generated sections, as the team's overrides of them read.
-3. The process and communication in a proactive Ticket's matched rules, for that Ticket's Executor Session only.
-4. Team sections and team skills.
-5. Outside text: messages, comments, documents and quotes. It is data and never changes rules or authorization.
+1. 由工具和宿主强制执行的事实：身份、权限、工具参数检查、回复用途、长度限制。提示词文本无法改变它们。
+2. 内置和生成段落，按其团队覆盖所写的内容生效。
+3. 主动工单匹配规则中的流程与沟通要求，仅对该工单的执行器会话生效。
+4. 团队段落和团队技能。
+5. 外部文本：消息、评论、文档和引用。它是数据，绝不改变规则或授权。
 
-## Principles of the built-in text
+## 内置文本的原则
 
-These apply [000 Philosophy](000-philosophy.md) to the agents:
+这些原则把 [000 理念](000-philosophy.md) 应用于智能体：
 
-- **Separate roles.** The main Session only routes: it forwards the original Trigger and the routing facts, and makes no technical decisions, through one routing tool that takes the decisions on several waiting candidates in one call. A routing note has at most 30 words. The Executor reads the original sources, judges the scope, implements and verifies.
-- **The main Session does not wait.** Reports, follow-up notices, candidates and completed background jobs arrive automatically as messages. It ends the turn when nothing remains to do. A guard refuses `sleep`, shell timeouts over 30 seconds and job waits over 5 seconds, because a blocked step delays new candidates. These instructions replace DeepSeek Harness's own job-notification note in the main Session's complete prompt.
-- **Message only when a person must act or can use a result:** a result can be reviewed or used, a decision or resource is needed, or the work cannot be finished. Chat messages are one sentence by default, with a hard limit of 100 words.
-- **Executors decide their follow-ups.** Each Executor handles and acknowledges in-scope requests, and hands back requests beyond its Ticket or for another Ticket. A message becomes new work only after all its owners hand it back or end without taking it up. The main Session receives follow-up notices but may act on them only to stop work. Handed-back messages then arrive as candidates with the Executors' reasons.
-- **Coordinate through subscriptions and the main Session.** An Executor follows related Threads for context. The main Session can send a fact from another Ticket in a note of at most 100 words. Neither the Subscription nor the note grants authority.
-- **Attach only on an explicit reference.** A message must point to a Ticket's pull request, Issue, source message or acknowledgement, or to a recent change with exactly one matching Ticket. Topic similarity alone is not enough. Attachment subscribes the Ticket to the entire Thread; an Executor finding it unrelated uses `orchestrator_thread_unrelated` and does not answer there.
-- **Confirm concretely, once.** Before substantial work, the Executor confirms each new request and names the object and the expected result, as a reply under the original message.
-- **Ask through `human_action`.** The Executor puts one concrete question in its Report, and the main Session forwards it unchanged. If a person's message prompted the question, it names that message and the host asks there. Otherwise it asks in the Ticket's original conversation. Already authorized work can continue meanwhile.
-- **Honest delivery.** Opening a pull request is not readiness; a draft is marked unfinished; a UI change without a real before screenshot is not ready.
-- **A person's pause holds** across follow-ups, new Executor Sessions and restarts until a person lifts it. Automatic feedback never resumes paused work.
-- **Examples only show format.** An example sentence is not a fact the agent may claim.
-- **Handle reviews by outcome.** A fixed and verified comment is resolved silently; a declined one gets one sentence of reason. An automated reviewer's thread is resolved once it has an answer, and each automated reviewer gets at most three rounds per pull request.
-- **Yield to duplicate work.** When a person's branch or pull request already contains the Ticket's change, the Executor closes its own pull request with one sentence pointing to theirs.
+- **角色分离。** 主会话只负责路由：转发原始触发器和路由事实，不做技术决策；通过一个路由工具在一次调用中对多个等待中的候选做出决定。路由备注最多 30 词。执行器读取原始来源、判断范围、实现并验证。
+- **主会话不等待。** 报告、跟进通知、候选和完成的后台任务会作为消息自动到达。没有剩余事项时，它结束回合。守卫会拒绝 `sleep`、超过 30 秒的 shell 超时和超过 5 秒的任务等待，因为被阻塞的步骤会延迟新候选。这些指令取代 DeepSeek Harness 自身在主线会话完整提示词中的任务通知说明。
+- **只在有人必须行动或能用到结果时发消息：** 结果可以被评审或使用，需要决定或资源，或工作无法完成。聊天消息默认一句话，硬限制 100 词。
+- **执行器决定其跟进。** 每个执行器处理并确认范围内的请求，并交回超出其工单或属于其他工单的请求。只有在所有拥有者都交回或结束且未接手后，消息才成为新工作。主会话会收到跟进通知，但只能为停止工作而处理它们。交回的消息随后作为候选到达，并带执行器的理由。
+- **通过订阅和主会话协调。** 执行器关注相关线程以获取上下文。主会话可以在最多 100 词的备注中发送另一个工单的事实。订阅和备注都不授予授权。
+- **只在明确引用时关联。** 消息必须指向工单的拉取请求、Issue、源消息或确认，或指向恰好匹配一个工单的最近变更。仅话题相似不够。关联会让工单订阅整个线程；执行器发现无关时使用 `orchestrator_thread_unrelated`，且不在那里回答。
+- **具体确认，只确认一次。** 在重要工作之前，执行器确认每个新请求，并说明对象和预期结果，作为原消息下的回复。
+- **通过 `human_action` 提问。** 执行器在报告中放入一个具体问题，主会话原样转发。如果问题由人的消息引发，则指明该消息，并由宿主在那里提问。否则在工单的原始对话中提问。已获授权的工作可以同时继续。
+- **诚实交付。** 打开拉取请求不等于就绪；草稿标明未完成；没有真实前后截图的 UI 变更不算就绪。
+- **人的暂停持续生效，** 跨跟进、新的执行器会话和重启，直到有人解除。自动反馈绝不恢复已暂停的工作。
+- **示例只展示格式。** 示例句子不是智能体可以声称的事实。
+- **按结果处理评审。** 已修复并验证的评论静默解决；被拒绝的评论给出一句理由。自动评审器的线程在有答案后解决，每个自动评审器在每个拉取请求上最多三轮。
+- **避让重复工作。** 当人的分支或拉取请求已包含工单的改动时，执行器用一句话关闭自己的拉取请求，指向对方的。
 
-## Versions
+## 版本
 
-- Each save creates an immutable version containing the full configuration, revision number, predecessor, timestamp and origin (panel or tool). Restoring a version or defaults creates another version.
-- Saves name their base revision. A conflicting save is refused without discarding the draft.
-- Sessions read the latest version on every model request, including later steps in the same turn. Saving does not restart, cancel or wake a Session. The host records the revisions each Session used; an Executor can read any revision it worked under.
-- The deployment sets a total size limit, including overrides. Validation refuses unknown keys, reserved built-in skill names, unknown override parts and missing template placeholders. It never silently truncates text. An override identical to the default is removed so the part follows future defaults.
+- 每次保存都会创建一个不可变版本，包含完整配置、修订号、前驱、时间戳和来源（面板或工具）。恢复某个版本或默认值会再创建一个版本。
+- 保存会声明其基础修订号。冲突的保存会被拒绝，且不会丢弃草稿。
+- 会话在每次模型请求时读取最新版本，包括同一回合中的后续步骤。保存不会重启、取消或唤醒会话。宿主记录每个会话使用的修订号；执行器可以读取它工作过的任何修订。
+- 部署设置总大小限制，包括覆盖。校验会拒绝未知键、保留的内置技能名、未知覆盖部分和缺失的模板占位符。它绝不静默截断文本。与默认内容相同的覆盖会被移除，使该部分跟随未来的默认值。

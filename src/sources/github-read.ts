@@ -1,4 +1,4 @@
-/** Read-only GitHub repository, conversation, and CI check inspection for assessments and workers. */
+/** 供评估和 worker 使用的 GitHub 仓库、对话和 CI 检查只读查看。 */
 import { z } from 'zod'
 import type { ThreadFact } from '../core/index.ts'
 import { validItems, type Commands, type Tally } from '../infra/commands.ts'
@@ -11,7 +11,7 @@ type Check = Pick<z.infer<typeof CheckSchema>, 'name' | 'status' | 'conclusion'>
 type Status = Pick<z.infer<typeof StatusSchema>, 'context' | 'state'>
 
 export interface CiSnapshot { head: string; checks: Check[]; statuses: Status[] }
-/** Check conclusions and status states that count as failures; `success`, `neutral`, `skipped`, and `stale` do not. */
+/** 视为失败的检查结论和状态；`success`、`neutral`、`skipped` 和 `stale` 不算失败。 */
 const FAILING = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'error'])
 export function ciCounts(snapshot: CiSnapshot): { failed: number; running: number } {
   const statuses = snapshot.statuses ?? []
@@ -44,19 +44,19 @@ export function ciFact(counts: { failed: number; running: number }): ThreadFact 
   return { label: 'CI', value: { zh: '通过', en: 'passed' } }
 }
 
-/** Reads a non-hidden file or directory listing from the repository's default branch via the GitHub API; hidden entries and `node_modules` are rejected. */
+/** 通过 GitHub API 读取仓库默认分支中的非隐藏文件或目录列表；隐藏条目和 `node_modules` 会被拒绝。 */
 export async function readRepositoryPath(commands: Commands, path: string, kind: 'file' | 'directory'): Promise<string> {
   const parts = path.split('/').filter(part => part && part !== '.')
   if (parts.some(part => part === '..' || part.startsWith('.') || part === 'node_modules')) throw new Error('Only non-hidden repository source paths are available')
   const resource = `contents/${parts.map(encodeURIComponent).join('/')}`
   if (kind === 'file') return commands.api(resource, '-H', 'Accept: application/vnd.github.raw')
-  // GitHub returns an entry array for a directory and a single object for a file.
+  // 目录返回条目数组，文件返回单个对象。
   const entries = await commands.api(z.union([z.array(z.looseObject({ name: z.string() })), z.looseObject({})]), resource)
   if (!Array.isArray(entries)) throw new Error(`${path} is not a directory`)
   return entries.map(entry => entry.name).filter(name => !name.startsWith('.') && name !== 'node_modules').sort().join('\n')
 }
 
-/** Reads check runs and commit statuses for a commit without emitting a trigger. */
+/** 读取某个提交的检查运行和提交状态，但不发出触发器。 */
 export async function pullChecks(commands: Commands, head: string, tally?: Tally): Promise<CiSnapshot> {
   const page = z.looseObject({ check_runs: z.array(z.unknown()) })
   const pages = await commands.api(z.array(page), `commits/${head}/check-runs?per_page=100`, '--paginate', '--slurp')
@@ -69,7 +69,7 @@ export async function pullChecks(commands: Commands, head: string, tally?: Tally
     statuses: [...latest].map(([context, state]) => ({ context, state })).sort((a, b) => a.context.localeCompare(b.context)) }
 }
 
-/** Formats a GitHub comment, review, or issue as a model-facing ContextMessage, marking bots and GitHub Apps because bot messages never authorize work. */
+/** 把 GitHub 评论、评审或 Issue 格式化为供模型使用的 ContextMessage，并标记机器人和 GitHub App，因为机器人消息永远不能授权工作。 */
 function githubMessage(item: GithubComment, text: string, id: string): ContextMessage {
   const line = item.line ?? item.original_line
   return { id, from: item.user.login, at: item.created_at ?? item.submitted_at ?? '', text,
@@ -96,11 +96,11 @@ function threadMessages(thread: GithubComment[], id: (comment: GithubComment) =>
 }
 
 /**
- * Reads an Issue or PR, a page of its comments or reviews, a review thread, or a CI snapshot as model-facing
- * `{ id, from, at, text, reply_to?, path?, line?, url }` messages rather than raw GitHub API records.
+ * 把 Issue 或 PR、其一页评论或评审、一个评审线程或 CI 快照读取为供模型使用的
+ * `{ id, from, at, text, reply_to?, path?, line?, url }` 消息，而非 GitHub API 原始记录。
  */
 export async function readGithub(commands: Commands, resource: string): Promise<unknown> {
-  // A commit's CI, such as the default branch's, which no PR names.
+  // 某个提交的 CI，例如默认分支的 CI，没有 PR 引用它。
   const commit = /^github\/commits\/([0-9a-f]{7,40})\/checks$/.exec(resource)
   if (commit) return pullChecks(commands, commit[1]!)
   const match = /^github\/(issues|pulls)\/([1-9]\d*)(?:\/(comments|reviews|checks|thread)(?:\/([1-9]\d*))?)?$/.exec(resource)
@@ -139,7 +139,7 @@ export async function readGithub(commands: Commands, resource: string): Promise<
   return { messages, ...tally.skipped ? { skipped: tally.skipped } : {},
     ...listed.length === 20 ? { next_resource: `github/${kind}/${number}/${section}/${Number(page) + 1}` } : {} }
 }
-/** Reads one page of an Issue or PR conversation (with the Issue/PR description first on page 1), using comment URLs as message IDs. */
+/** 读取 Issue 或 PR 对话的一页（第 1 页最先包含 Issue/PR 描述），并使用评论 URL 作为消息 ID。 */
 async function conversationPage(commands: Commands, number: number, page: number) {
   const messages: ContextMessage[] = []
   if (page === 1) {
@@ -153,13 +153,13 @@ async function conversationPage(commands: Commands, number: number, page: number
   return { messages, next_resource: listed.length === 100 ? String(page + 1) : null, ...tally.skipped ? { skipped: tally.skipped } : {} }
 }
 /**
- * Context reader for a GitHub Trigger: reads the review thread for an inline review comment (whose first comment is its
- * root and parent), or the Issue/PR conversation by page otherwise (whose first page is its root and parent).
+ * GitHub 触发器的上下文读取器：行内评审评论读取其评审线程（其第一条评论即根和父），
+ * 否则按页读取 Issue/PR 对话（其第一页即根和父）。
  */
 export const githubThreadContext: ThreadContext<unknown> = {
   messageId: trigger => trigger.url ?? '',
   read: async (commands, trigger, part, cursor) => {
-    // The default branch's CI has no conversation; its Trigger is its context.
+    // 默认分支的 CI 没有对话；其触发器本身就是上下文。
     if (typeof trigger.meta.branch === 'string') {
       const message = { id: trigger.url ?? trigger.id, from: 'CI', at: trigger.at, text: trigger.text, bot: true as const }
       return { messages: [message], body: { status: 'branch_ci', messages: [message] }, status: 'branch_ci' }

@@ -1,16 +1,16 @@
-/** Component health registry displayed in the overview and source status panels. */
+/** 组件健康登记表，在总览和来源状态面板中显示。 */
 import type { Health } from '../sources/host.ts'
 
 export interface HealthEntry {
   get(): Health | undefined
   set(health: Health): void
-  /** Unregisters the entry from the board (such as when a Source kind unregisters); subsequent `set` calls become no-ops. */
+  /** 从登记板注销该条目（例如某种来源类型被注销时）；之后的 `set` 调用变为空操作。 */
   release(): void
 }
 
 /**
- * Central registry of component health entries, enforcing single-writer ownership per entry name.
- * Claimed by Runtime, Effects, Sessions, DshExecutor, Settings, and SourceRegistry, and read by management HTTP routes.
+ * 组件健康条目的中央登记表，按条目名称强制单一写入者所有权。
+ * 由 Runtime、Effects、Sessions、DshExecutor、Settings 和 SourceRegistry 认领，并由管理 HTTP 路由读取。
  */
 export class HealthBoard {
   private readonly entries: Record<string, Health> = {}

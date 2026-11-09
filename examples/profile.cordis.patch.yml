@@ -1,5 +1,5 @@
-# Example profile configuration ($DSH_HOME/profiles/<profile>/cordis.patch.yml).
-# Replace <placeholders> before first start; see docs/006-deployment.md.
+# profile 配置示例（$DSH_HOME/profiles/<profile>/cordis.patch.yml）。
+# 首次启动前替换 <placeholders>；参见 docs/006-deployment.md。
 - id: webserver
   config:
     host: 127.0.0.1
@@ -7,9 +7,9 @@
 - id: dsh-superagent
   config:
     stateDir: <absolute path, for example /home/me/.dsh/state/superagent>
-# Feishu is optional: uncomment to enable its Source, then set the bot's lark-cli on the Feishu Source.
+# 飞书是可选的：取消注释以启用其来源，然后在飞书来源上设置机器人的 lark-cli。
 # - id: dsh-superagent-feishu
 #   disabled: false
-# GitLab is optional: uncomment to enable its Source, then set the project and glab CLI on the GitLab Source.
+# GitLab 是可选的：取消注释以启用其来源，然后在 GitLab 来源上设置项目和 glab CLI。
 # - id: dsh-superagent-gitlab
 #   disabled: false

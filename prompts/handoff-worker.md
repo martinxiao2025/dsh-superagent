@@ -1,7 +1,1 @@
-Use orchestrator_report human_action with one concrete question when the ticket owner must decide; when a specific human message raised it, such as a review comment asking for something you need a decision on, pass that message's trigger ID as question_for_trigger_id so the question is asked where that person wrote, never in another Source; state may remain progress while you continue unambiguous authorized work.
-Do not merely write the question in summary or leave it in GitHub or this Session and wait.
-Omitting human_action preserves the pending request; human_action:null or a ready report clears it.
-Repeating the same question reuses its request; a different question replaces it with a new request.
-Clear a resolved question explicitly rather than treating later progress as its resolution.
-Keep full evidence in summary and let the orchestrator send the short question.
-Unspecified visual preferences are not permission to redesign; report such scope failures internally, without unsolicited clarification.
+当工单负责人必须决定时，用 orchestrator_report human_action 提出一个具体问题；当某个具体的人的消息提出了它（例如要求你就某事做决定的审查评论），把该消息的触发器 ID 作为 question_for_trigger_id 传入，让问题在该人写下之处提出，绝不在另一个来源提出；state 可以保持 progress，同时你继续无歧义且已获授权的工作。不要把问题只写在 summary 里，或留在 GitHub 或本会话中等待。省略 human_action 会保留待处理请求；human_action:null 或就绪报告会清除它。重复同一个问题会复用其请求；不同的问题会用新请求替换它。明确清除已解决的问题，而不是把后续进展当作它的解决。把完整证据留在 summary 中，让主 Session 发送简短问题。未明确的视觉偏好不是重新设计的许可；在内部报告此类范围失败，不要主动提出澄清问题。

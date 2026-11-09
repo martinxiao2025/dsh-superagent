@@ -1,7 +1,7 @@
 /**
- * Windows compatibility of the bundle: drive letters and backslashes are absolute paths, executables are
- * resolved with PATHEXT, worker shims run through cmd.exe, and the worker probe and the prepare command use
- * the platform's shell instead of POSIX-only `env` and `sh`. Skipped elsewhere, where those assumptions hold.
+ * 打包产物的 Windows 兼容性：盘符和反斜杠路径是绝对路径，可执行文件通过 PATHEXT 解析，
+ * worker 垫片经 cmd.exe 运行，worker 探测和 prepare 命令使用平台 shell 而非仅 POSIX 的 `env` 和 `sh`。
+ * 在其他平台上跳过，因为那里的这些假设成立。
  */
 import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -20,7 +20,7 @@ const windows = process.platform === 'win32'
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'windows-compat-')) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
-/** Runs a batch file the way a worker shell would, through cmd's `call`, without treating it as a POSIX script. */
+/** 按 worker shell 的方式运行批处理文件：通过 cmd 的 `call`，而不是把它当作 POSIX 脚本。 */
 const batch = (file: string, args: string[] = []) => exec(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'call', file, ...args])
 
 describe.skipIf(!windows)('Windows compatibility', () => {

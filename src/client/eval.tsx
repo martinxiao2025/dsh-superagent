@@ -1,4 +1,4 @@
-/** Eval status view (Decision log) and Eval settings group (Policy rules, per-Source admission, and assessor settings). */
+/** 评估状态视图（决策日志）与评估设置分组（策略规则、按来源准入以及评估器设置）。 */
 import { useState } from 'react'
 import { ADMISSION_DEFAULTS, ADMISSION_OPTIONS, type Admission, type AdmissionCell } from '../admission.ts'
 import type { AdmissionRowView } from '../sources/kind.ts'
@@ -75,7 +75,7 @@ function SourcePart({ source, part, saved, dirty, onChange, reload }: {
   const policy = source.policy!
   const sync = policy.sync
   const run = useAction(() => call('POST policy-sync/:id', { id: source.id }), { reload })
-  // Syncing saves the Policy block, so require unsaved edits to be saved or discarded first.
+  // 同步会保存策略区块，因此要求先保存或丢弃未保存的编辑。
   const syncNow = () => { if (dirty) notify(t('syncNeedsSave')); else void run.run() }
   return <div className="dt-part">
     {policy.fields.map(field => <SourceField key={field.key} field={field} value={part[field.key]} saved={saved[field.key]} fact={undefined}
@@ -106,7 +106,7 @@ function AdmissionTable({ rows, labels, table, explicit, onChange }: {
   const set = (row: string, cell: AdmissionCell, value: Admission) => onChange({ ...table, [row]: { ...table[row], [cell]: value } })
   const select = (row: AdmissionRowView, cell: AdmissionCell) => {
     const value = table[row.id]?.[cell] ?? ADMISSION_DEFAULTS[cell]
-    // Reserve a fixed-width slot for the warning icon so selecting a value never shifts column widths.
+    // 为警告图标保留固定宽度的位置，避免选择值导致列宽跳动。
     return <td key={cell}><span className="dt-admission-cell">
       <select className="dt-select" aria-label={`${name(row)} · ${t(`admissionCell.${cell}`)}`} value={value} onChange={event => set(row.id,
         cell, event.target.value as Admission)}>
@@ -148,7 +148,7 @@ function PolicyBlock() {
     setExpanded(new Set([...expanded, rule.id]))
     edit({ rules: [...policy.rules.slice(0, at), rule, ...policy.rules.slice(at)] })
   }
-  // Expand all rules when native form validation fails inside a collapsed rule.
+  // 当折叠的规则内部原生表单校验失败时，展开所有规则。
   const reveal = (target: EventTarget) => { if (target instanceof Element
     && target.closest('.dt-rules')) setExpanded(new Set(policy.rules.map(rule => rule.id))) }
   const part = (id: string) => (policy.sources[id] ?? { allowed: [] }) as Part

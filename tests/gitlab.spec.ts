@@ -30,7 +30,7 @@ const mr = (time = at()): GitlabItem => ({ id: 201, iid: 3, title: 'Fix the padd
   created_at: time, updated_at: time, web_url: MR_URL, author: { id: 2, username: 'carol' }, source_branch: 'fix', target_branch: 'main' })
 const note = (body: string, time = at(), id = 1): GitlabNote => ({ id, body, system: false,
   author: { id: 1, username: 'alice' }, created_at: time, updated_at: time })
-/** 假 glab：按 `api <path>` 路由读取 JSON fixture，支持 page/per_page、POST 回帖和 404。 */
+/** 伪造的 glab：按 `api <path>` 路由读取 JSON 夹具，支持 page/per_page、POST 回帖和 404。 */
 const glabBody = (fixture: string, calls: string, project: string): string => `
 const fs = require('node:fs')
 const args = argv
@@ -69,7 +69,7 @@ if (value && Array.isArray(value.pages)) { console.log(JSON.stringify(value.page
 console.log(JSON.stringify(value === undefined ? [] : value))
 return 0
 `
-/** 搭建 GitLab Source 的离线宿主；所有 CLI 调用都落到假 glab，且可以逐轮改写路由。 */
+/** 搭建 GitLab 来源的离线宿主；所有 CLI 调用都落到假 glab，且可以逐轮改写路由。 */
 function host(config: Record<string, unknown> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gitlab-'))
   const fixture = join(dir, 'glab.json')

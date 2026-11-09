@@ -20,7 +20,7 @@ function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }:
   const assessor: Assessor = { request: vi.fn(candidate => { requests.push(candidate) }), release: vi.fn() }
   const launches: [Ticket, Assignment][] = []
   const deliveries = new Set<string>()
-  /** Inputs the Executor handed to a running assignment, as [ticket id, input id]. */
+  /** 执行器交给运行中任务的输入，形式为 [工单 id, 输入 id]。 */
   const delivered: [string, string][] = []
   const executor: Executor = {
     start: vi.fn((ticket, assignment) => { launches.push([ticket, assignment]) }), deliver: vi.fn(ticket => { deliveries.add(ticket.id) }), stop: vi.fn(),
@@ -42,7 +42,7 @@ function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }:
   }
   const engine = new Engine({ repo, scope, policy: () => policy, assessor, executor, outbox: queued,
     ...emit ? { emit } : {}, ...prepareTicket ? { prepareTicket } : {}, now: () => new Date(Date.UTC(2026, 8, 23, 0, 0, clock)).toISOString() })
-  /** Simulate the executor starting queued assignments (unless `launch` is false) and delivering pending ticket inputs. */
+  /** 模拟执行器启动排队的任务（`launch` 为 false 时不启动）并投递待处理的工单输入。 */
   function settle({ launch = true } = {}) {
     for (;;) {
       const next = launch ? launches.shift() : undefined
@@ -57,7 +57,7 @@ function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }:
     }
   }
   const pump = () => { engine.evaluateDue(); settle() }
-  /** Simulate the worker's Session taking the delivered Trigger Inputs it has not yet read into a step. */
+  /** 模拟执行器会话把它尚未读取的已投递触发器输入纳入一步。 */
   const read = (ticketId: string) => engine.inputsRead(ticketId, repo.tickets.get(ticketId)!.inputs.flatMap(input =>
     input.kind === 'trigger' && input.readAt === null ? [input.id] : []))
   const decide = (candidate: Candidate, outcome: Outcome) => engine.decide(candidate.triggers[0]!.id, { ...outcome, evalId: candidate.evalId })
@@ -161,21 +161,21 @@ describe('eval', () => {
   it('counts an Eval\'s deadline from its delivery, queues its Triggers again twice when it expires, then records it unavailable', async () => {
     const h = harness()
     h.engine.receive(trigger('1')); h.pump()
-    // A candidate the assessor's Session has not taken does not expire.
+    // 评估器会话尚未领取的候选不会过期。
     h.tick(600); h.pump()
     expect(h.engine.candidate('1')?.evalId).toBe(h.requests[0]!.evalId)
     const deliver = () => { h.engine.candidateDelivered(h.requests.at(-1)!.evalId) }
     deliver()
     h.tick(59); h.pump()
     expect(h.requests).toHaveLength(1)
-    // Expired, it records nothing and queues the Trigger for a fresh Eval, twice.
+    // 过期后它不记录任何内容，并把触发器重新排入一次新的评估，共两次。
     h.tick(2); h.pump()
     expect(h.repo.decisions.byThread('chat:t1')).toEqual([])
     expect(h.assessor.release).toHaveBeenCalledWith(h.requests[0]!.evalId)
     expect(h.requests.map(item => item.triggers.map(each => each.id))).toEqual([['1'], ['1']])
     deliver(); h.tick(61); h.pump()
     expect(h.requests).toHaveLength(3)
-    // The third expiry is recorded unavailable.
+    // 第三次过期会记录为不可用。
     deliver(); h.tick(61); h.pump()
     expect(h.repo.decisions.byThread('chat:t1')).toEqual([expect.objectContaining({ kind: 'unavailable', reason: [{ code: 'timeout' }] })])
     expect(h.repo.threads.get('chat:t1')).toMatchObject({ pending: [] })
@@ -194,12 +194,12 @@ describe('subscription fan-out', () => {
     expect(ticket.undelivered).toEqual([])
     expect(h.delivered).toEqual([[ticket.id, ticket.inputs[0]!.id]])
     expect(h.repo.triggers.disposition('2')).toEqual({ fanout: [ticket.id], at: expect.any(String) })
-    // No Eval, so no Decision and no timeout, and the Thread's queue stays free for a new request.
+    // 没有评估，就没有决策和超时，线程的队列也可空出来接收新请求。
     expect([h.requests.length, h.repo.threads.get('chat:t1')!.pending, h.repo.decisions.byThread('chat:t1').length]).toEqual([requests, [],
       1])
     h.tick(600); h.engine.evaluateDue()
     expect(h.repo.decisions.byThread('chat:t1')).toHaveLength(1)
-    // A bot's message there still goes to Eval, which the gate does not admit.
+    // 那里机器人的消息仍会进入评估，只是门禁不会接纳它。
     h.engine.receive(trigger('3', { human: false })); h.pump()
     expect(h.repo.decisions.byThread('chat:t1').at(-1)).toMatchObject({ kind: 'ignore', triggerIds: ['3'] })
   })
@@ -221,7 +221,7 @@ describe('subscription fan-out', () => {
     const decision = accepted(h)
     h.engine.report(decision.ticketId!, { state: 'ready', summary: 'done' })
     h.engine.receive(trigger('2', { human: false })); h.pump()
-    // The Executor reads its threads again when it resumes, so bots and CI neither wake nor queue on an ended ticket.
+    // 执行器恢复时会重新读取其线程，因此机器人和 CI 既不会唤醒已结束的工单，也不会在其上排队。
     expect(h.repo.tickets.get(decision.ticketId!)).toMatchObject({ ended: expect.anything(), undelivered: [] })
     expect(h.executor.start).toHaveBeenCalledOnce()
   })
@@ -272,7 +272,7 @@ describe('subscription fan-out', () => {
     const first = accepted(h).ticketId!
     const second = accepted(h, '2', 't2').ticketId!
     h.engine.receive(trigger('3', { threads: [{ source: 'chat', id: 't2' }] }))
-    // A follow-up of the second ticket goes to the first only once the second's worker hands it back.
+    // 第二张工单的后续消息只有在第二张工单的执行器交回后，才会转到第一张。
     h.engine.handback(second, '3', 'It is about the first fix')
     h.engine.attach(first, '3')
     expect(h.repo.threads.get('chat:t2')!.subscriptions).toEqual([second, first])
@@ -297,7 +297,7 @@ describe('resume and stop', () => {
     const h = harness()
     const ticketId = await ended(h, 'executor')
     const decisions = h.repo.decisions.byThread('chat:t1').length
-    // It resumes as the message arrives, before any Eval of it.
+    // 消息到达时它便恢复，早于对该消息的任何评估。
     h.engine.receive(trigger('2', { actor: guest }))
     expect(h.repo.tickets.get(ticketId)!.ended).toBeUndefined()
     h.pump()
@@ -306,7 +306,7 @@ describe('resume and stop', () => {
     expect(ticket.mandate.policyVersion).toBe('v1')
     expect(ticket.inputs.map(input => input.kind)).toEqual(['trigger', 'resumed'])
     expect(h.executor.start).toHaveBeenCalledTimes(2)
-    // The message still reaches Eval as a follow-up, but no reopen Decision is needed or possible.
+    // 该消息仍作为后续消息进入评估，但不需要也不可能产生续做决策。
     expect(h.repo.decisions.byThread('chat:t1').filter(decision => decision.kind !== 'ignore')).toHaveLength(decisions)
   })
   it('resumes an ended ticket an earlier version left with a person\'s message waiting, on the next pass', async () => {
@@ -346,7 +346,7 @@ describe('resume and stop', () => {
   it('stops a live ticket only on an explicit instruction and ends it by the human', async () => {
     const h = harness()
     const decision = accepted(h)
-    // Follow-ups that reached the ticket: the gate judges them when the main Session acts on one, a guest's as inferred.
+    // 已到达工单的后续消息：主会话对其中一条采取行动时由门禁判断，访客的按推断处理。
     h.engine.receive(trigger('2', { actor: guest })); h.pump()
     expect(h.engine.decide('2', { kind: 'stop', ticketId: decision.ticketId!, reason: 'x' })).toMatchObject({ kind: 'ignore',
       strength: 'inferred', reason: [{ code: 'stopNotExplicit' }] })
@@ -361,7 +361,7 @@ describe('follow-ups', () => {
     const h = harness()
     accepted(h)
     h.engine.receive(trigger('2', { actor: guest })); h.engine.receive(trigger('3', { actor: guest }))
-    // As an older version left them: both queued for Eval; a person sent the second there again.
+    // 按旧版本留下的状态：两者都已排入评估；真人又把第二条送进了评估。
     const thread = h.repo.threads.get('chat:t1')!
     h.repo.threads.save({ ...thread, pending: ['2', '3'] })
     h.engine.reevaluate('3'); h.pump()
@@ -385,8 +385,7 @@ describe('follow-ups', () => {
     const decision = accepted(h)
     h.engine.receive(trigger('2', { actor: guest })); h.pump()
     h.engine.stopTicket(decision.ticketId!, 'not needed')
-    // The follow-up held no Eval while the ticket decided it, so the next request is assessed at once rather than after a
-    // timeout, together with the follow-up, which the stop let go of before its worker took it up.
+    // 工单处理期间该后续消息并未占用评估，因此下一个请求会立即被评估，而不是等到超时后，并与该后续消息一起评估；后者在执行器接手前已被停止操作放行。
     h.engine.receive(trigger('3')); h.pump()
     expect(h.requests.at(-1)!.triggers.map(item => item.id)).toEqual(['2', '3'])
   })
@@ -405,7 +404,7 @@ describe('hand-back', () => {
     expect(h.engine.handback(ticketId, '3', 'A guest asks for more')).toBe(true); h.pump()
     expect(h.requests.at(-1)).toMatchObject({ strength: 'inferred', triggers: [{ id: '3' }] })
     expect(h.repo.threads.get('chat:t1')!.subscriptions).toContain(ticketId)
-    // Only a message that reached the ticket can go back.
+    // 只有到达工单的消息才能被交回。
     h.engine.receive(trigger('4', { threads: [{ source: 'chat', id: 'elsewhere' }] }))
     expect(() => h.engine.handback(ticketId, '4', 'Not mine')).toThrow(new UserError('notReached'))
   })
@@ -417,10 +416,10 @@ describe('hand-back', () => {
     h.engine.receive(trigger('2')); h.engine.reevaluate('2')
     h.engine.receive(trigger('3', { human: false })); h.engine.receive(trigger('4', { threads: [{ source: 'chat', id: 'issue' }] })); h.pump()
     for (const candidate of h.requests.slice(-2)) h.decide(candidate, { kind: 'ignore', reason: 'chat' })
-    // Each went to Eval without the ticket, and its Decision stands.
+    // 两者都在没有工单的情况下进入了评估，其决策依然有效。
     for (const id of ['2', '3', '4']) expect(h.engine.handback(ticketId, id, 'Not this ticket')).toBe(false)
     expect([h.repo.threads.get('chat:t1')!.pending, h.repo.threads.get('chat:issue')!.pending]).toEqual([[], []])
-    // The hand-back is recorded all the same, so the main Session does not attach the message back.
+    // 交回记录仍会被写入，因此主会话不会把该消息再附加回去。
     expect(h.repo.triggers.disposition('4')!.handbacks).toEqual([{ ticketId, reason: 'Not this ticket', at: expect.any(String) }])
     expect(() => h.engine.attach(ticketId, '4')).toThrow(new UserError('handedBackHere'))
   })
@@ -429,7 +428,7 @@ describe('hand-back', () => {
     const ticketId = accepted(h).ticketId!
     h.engine.receive(trigger('2', { threads: [{ source: 'chat', id: 'x' }] })); h.pump()
     h.engine.attach(ticketId, '2'); h.settle()
-    // Routed to the ticket, it is not new work as well.
+    // 被路由到工单后，它就不再同时算作新工作。
     expect(() => h.engine.decide('2', { kind: 'accept', title: 'Y', scope: 'small', reason: 'requested' }))
       .toThrow(new UserError('workerDecides', { tickets: ticketId }))
     expect(h.engine.handback(ticketId, '2', 'Asks for another change')).toBe(true)
@@ -447,7 +446,7 @@ describe('context threads and notes', () => {
     h.engine.report(ticketId, { state: 'dropped', summary: 'nothing to do' })
     h.engine.receive(trigger('3', { threads: [{ source: 'chat', id: 'issue' }] }))
     expect(h.repo.tickets.get(ticketId)!.ended).toBeDefined()
-    // Attached by the main Session, the Thread is the ticket's own, and a person's later message there resumes it.
+    // 由主会话附加后，该线程就属于该工单，真人之后在其中的消息会恢复它。
     h.engine.attach(ticketId, '3'); h.settle()
     expect(h.repo.threads.get('chat:issue')).toMatchObject({ context: [] })
     h.engine.report(ticketId, { state: 'dropped', summary: 'nothing to do' })
@@ -463,8 +462,7 @@ describe('context threads and notes', () => {
     h.engine.receive(trigger('3', { actor: guest })); h.pump()
     expect(h.repo.triggers.disposition('3')).toMatchObject({ fanout: [owner, follower], context: [follower] })
     expect(h.repo.tickets.get(follower)!.inputs.at(-1)).toMatchObject({ triggerId: '3', context: true })
-    // On the follower's own Thread no longer: a message reaching only it goes to Eval, with the guest's that the stopped owner
-    // let go of.
+    // 已不再位于关注者自己的线程上：只到达该线程的消息会进入评估，连同被停止的工单主人放行的访客消息一起。
     h.engine.stopTicket(owner, 'done')
     h.engine.report(follower, { state: 'blocked', summary: 'needs a decision' })
     h.engine.receive(trigger('4')); h.pump()
@@ -487,7 +485,7 @@ describe('context threads and notes', () => {
     const ticketId = accepted(h).ticketId!
     expect(h.engine.note(ticketId, 'The other ticket renamed the API').inputs.at(-1)).toMatchObject({ kind: 'note',
       text: 'The other ticket renamed the API' })
-    // A worker that reported blocked waits for a person: a note does not wake it.
+    // 报告受阻的执行器在等待真人：一条备注不会唤醒它。
     h.settle()
     h.engine.report(ticketId, { state: 'blocked', summary: 'needs a decision' })
     const note = h.engine.note(ticketId, 'Ticket B changed the schema').inputs.at(-1)!
@@ -504,11 +502,11 @@ describe('follow-up owners', () => {
   it('lets the main Session take a follow-up as new work once it stopped the ticket on it', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!
-    // "Stop this, and do Y instead": the stop ends the ticket that decided the message, so the request is the main Session's.
+    // “停止这个，改做 Y”：停止结束了判定该消息的工单，因此该请求归主会话。
     h.engine.receive(trigger('2')); h.settle()
     expect(() => h.engine.decide('2', accept)).toThrow(decides(ticketId))
     expect(h.engine.decide('2', { kind: 'stop', ticketId, reason: 'asked to stop' }).kind).toBe('stop')
-    // At the same moment, the accept is a Decision of its own beside the stop's.
+    // 与此同时，接单本身也是与停止决策并列的一项决策。
     expect(h.engine.decide('2', accept)).toMatchObject({ kind: 'accept', triggerIds: ['2'] })
     expect(h.repo.decisions.byThread('chat:t1').filter(item => item.triggerIds.includes('2')).map(item => item.kind)).toEqual(['stop',
       'accept'])
@@ -530,12 +528,12 @@ describe('follow-up owners', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!
     h.engine.report(ticketId, { state: 'progress', summary: 'working' })
-    // The worker acknowledges one of two messages, and its final report was on its way before it took up the other.
+    // 执行器确认了两条消息中的一条，而它的最终报告在它接手另一条之前就已发出。
     h.tick(1); h.engine.receive(trigger('2')); h.engine.receive(trigger('3')); h.settle()
     h.engine.reply({ purpose: 'acknowledgement', ticketId, triggerId: '2', text: 'On it' })
     h.engine.report(ticketId, { state: 'dropped', summary: 'nothing to do' })
     expect(h.repo.threads.get('chat:t1')!.pending).toEqual(['3'])
-    // The ticket no longer counts as having reached it, so its candidate names no ticket that gave no reason.
+    // 该工单不再算作已到达它，因此其候选不会指名任何未给出原因的工单。
     expect([h.repo.triggers.disposition('2')!.fanout, h.repo.triggers.disposition('3')!.fanout]).toEqual([[ticketId], []])
   })
   it('keeps a ticket open after its pull request merged while its worker is on a person\'s message it took up after its last report',
@@ -545,14 +543,14 @@ describe('follow-up owners', () => {
       const ticketId = accepted(h).ticketId!
       h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-9' }, true)
       h.engine.report(ticketId, { state: 'ready', summary: 'PR ready' })
-      // A person asks for one more change, which the worker takes up or has not yet, and the pull request merges meanwhile.
+      // 真人又要求再改一处，执行器或已接手或尚未接手，而拉取请求在此期间合并了。
       h.tick(1); h.engine.receive(trigger('2')); h.settle()
       if (taken) h.engine.reply({ purpose: 'acknowledgement', ticketId, triggerId: '2', text: 'On it' })
       h.engine.threadClosed({ source: 'gh', id: 'pr-9' }, 'merged', '2026-09-23T00:00:01Z')
-      // One it has not taken up leaves the merge to end the ticket, and goes to Eval.
+      // 执行器尚未接手的那条消息让合并来结束工单，并进入评估。
       expect([h.repo.tickets.get(ticketId)!.ended?.outcome, h.repo.threads.get('chat:t1')!.pending]).toEqual(taken ? [undefined, []]
         : ['merged', ['2']])
-      // The worker's ready report ends it as the pull request did.
+      // 执行器的就绪报告像拉取请求那样结束了它。
       if (taken) h.engine.report(ticketId, { state: 'ready', summary: 'Done' })
       expect(h.repo.tickets.get(ticketId)!.ended).toMatchObject({ outcome: 'merged' })
     }
@@ -561,14 +559,14 @@ describe('follow-up owners', () => {
     for (const resumed of [false, true]) {
       const h = harness()
       const ticketId = accepted(h).ticketId!
-      // The ticket ends before its worker took up a person's message, which goes to Eval; a later message may resume it.
+      // 工单在执行器接手真人的消息之前就结束了，该消息进入评估；之后的消息可以恢复工单。
       h.engine.report(ticketId, { state: 'progress', summary: 'working' })
       h.tick(1); h.engine.receive(trigger('2')); h.settle()
       h.engine.report(ticketId, { state: 'dropped', summary: 'nothing to do' })
       if (resumed) { h.tick(1); h.engine.receive(trigger('3')) }
       h.pump()
       h.tick(1); h.engine.attach(ticketId, '2'); h.settle()
-      // Its worker gets the message again, and an ended ticket resumes for it.
+      // 其执行器再次收到该消息，已结束的工单因而恢复。
       const copies = h.repo.tickets.get(ticketId)!.inputs.filter(input => input.kind === 'trigger' && input.triggerId === '2')
       expect(h.delivered).toContainEqual([ticketId, copies[1]?.id])
       expect(h.repo.tickets.get(ticketId)!.ended).toBeUndefined()
@@ -581,7 +579,7 @@ describe('follow-up owners', () => {
       const ticketId = accepted(h).ticketId!
       if (read === 'context') h.engine.followForContext(ticketId, { source: 'chat', id: 'issue' })
       h.tick(1); h.engine.receive(trigger('2', { threads: [{ source: 'chat', id: read === 'context' ? 'issue' : 't1' }] })); h.settle()
-      // The worker reports after reading it and drops the ticket; a person sends a follow-up it had to Eval from the panel.
+      // 执行器读完它后报告并丢弃工单；真人从面板发送一条不得不进入评估的后续消息。
       h.tick(1); h.engine.report(ticketId, { state: 'progress', summary: 'read it' })
       h.engine.report(ticketId, { state: 'dropped', summary: 'nothing to do' })
       if (read === 'report') h.engine.reevaluate('2')
@@ -621,8 +619,7 @@ describe('follow-up owners', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!
     h.engine.report(ticketId, { state: 'ready', summary: 'done' })
-    // A person's thanks resumes the ticket, and its worker takes it into a step first, a moment after its Assignment started,
-    // as the Executor delivers it; a request comes while it reports that nothing is left.
+    // 真人的感谢恢复了工单，其执行器在其任务启动片刻后先把它纳入一步，同时执行器正在投递；此时它报告已无剩余工作，而一个请求随之到达。
     h.tick(1); h.engine.receive(trigger('2'))
     h.tick(1); h.engine.assignmentStarted(ticketId, h.repo.tickets.get(ticketId)!.assignments.at(-1)!.id)
     h.tick(1); h.settle(); h.read(ticketId)
@@ -631,8 +628,7 @@ describe('follow-up owners', () => {
     expect(h.repo.threads.get('chat:t1')!.pending).toEqual(['3'])
   })
   it('sends a follow-up its ticket let go to Eval after a stop on it was refused, but not the one a stop ended it on', () => {
-    // A guest's stop is refused, and the worker drops the ticket; a member's stop ends it, and the main Session, which stopped
-    // it, decides the rest of the message itself.
+    // 访客的停止被拒绝，执行器丢弃工单；成员发起的停止会结束它，而发起停止的主会话自行判定该消息的其余部分。
     for (const actor of [guest, member]) {
       const h = harness()
       const ticketId = accepted(h).ticketId!
@@ -660,8 +656,7 @@ describe('follow-up owners', () => {
     h.engine.attach(ticketId, '2'); h.settle()
     h.engine.receive(trigger('3', elsewhere)); h.settle()
     expect(() => h.engine.decide('3', accept)).toThrow(decides(ticketId))
-    // The worker finds the attached thread is not its ticket's, and answers nothing there: the message the main Session
-    // attached goes back with the later one, and each candidate says why.
+    // 执行器发现附加的线程并不属于其工单，于是不在那里作答：主会话附加的消息随之后那条一起被交回，每个候选都说明原因。
     h.engine.markUnrelated(ticketId, 'chat:x', 'about something else')
     expect(h.repo.threads.get('chat:x')!.pending).toEqual(['2', '3'])
     expect(h.repo.triggers.disposition('3')!.handbacks).toEqual([{ ticketId, reason: 'about something else', at: expect.any(String) }])
@@ -679,7 +674,7 @@ describe('follow-up owners', () => {
     expect(h.repo.triggers.disposition('3')!.fanout).toEqual([first, second])
     expect(h.engine.handback(first, '3', 'for the other ticket')).toBe(false)
     expect(h.repo.threads.get('chat:t1')!.pending).toEqual([])
-    // The main Session may neither take nor dismiss it while the second ticket's worker decides it.
+    // 第二张工单的执行器还在判定它时，主会话既不能接单也不能忽略。
     expect(() => h.engine.decide('3', accept)).toThrow(decides(second))
     expect(() => h.engine.decide('3', { kind: 'ignore', reason: 'chat' })).toThrow(decides(second))
     expect(h.engine.handback(second, '3', 'neither ticket')).toBe(true)
@@ -707,7 +702,7 @@ describe('interrupted assignments', () => {
     h.engine.report(waiting, { state: 'waiting', summary: 'done for now' })
     h.engine.receive(trigger('3', { threads: [{ source: 'chat', id: 't2' }] }))
     vi.mocked(h.executor.start).mockClear(); vi.mocked(h.executor.deliver).mockClear()
-    // The Executor reports each Assignment that was running; a fact about one that no longer runs is dropped.
+    // 执行器报告每个正在运行的任务；关于已不再运行任务的事实会被丢弃。
     for (const id of [interrupted, waiting]) h.engine.assignmentInterrupted(id, runningAssignment(h.repo.tickets.get(id)!)!.id)
     h.engine.assignmentInterrupted(interrupted, first.id)
     const ticket = h.repo.tickets.get(interrupted)!
@@ -716,7 +711,7 @@ describe('interrupted assignments', () => {
     expect(ticket.inputs).toEqual([expect.objectContaining({ kind: 'text', text: expect.stringContaining('The host restarted') })])
     expect(ticket.undelivered).toEqual([ticket.inputs[0]!.id])
     expect(h.executor.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: interrupted }), ticket.assignments[1])
-    // A worker that waits keeps its Session and gets what waits for it.
+    // 等待中的执行器保留其会话，并获得等待它的内容。
     expect(h.repo.tickets.get(waiting)!.assignments).toHaveLength(1)
     expect(h.executor.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: waiting }), expect.objectContaining({ state: 'running' }))
   })
@@ -738,14 +733,14 @@ describe('pause', () => {
     h.engine.candidateDelivered(h.requests[0]!.evalId)
     const deadline = Date.parse(h.repo.threads.get('chat:t1')!.evaluating!.deadline)
     h.tick(30); h.setPaused(true); h.pump()
-    // Paused past the deadline, the Eval waits.
+    // 暂停超过截止时间时，评估继续等待。
     h.tick(300); h.pump()
     expect(h.engine.candidate('1')).toBeDefined()
     h.setPaused(false); h.pump()
     expect(Date.parse(h.repo.threads.get('chat:t1')!.evaluating!.deadline)).toBe(deadline + 300_000)
     h.tick(29); h.pump()
     expect(h.engine.candidate('1')).toBeDefined()
-    // Expired, it queues the Trigger again for a fresh Eval.
+    // 过期后，它把触发器再次排入新的评估。
     h.tick(1); h.pump()
     expect(h.engine.candidate('1')?.evalId).not.toBe(h.requests[0]!.evalId)
     expect(h.repo.decisions.byThread('chat:t1')).toEqual([])
@@ -786,7 +781,7 @@ describe('worker reports', () => {
     const replaced = h.engine.report(ticketId, { state: 'progress', summary: 'other question', question: 'Which size?' })
     expect(replaced.attention).toMatchObject({ question: 'Which size?' })
     expect(replaced.attention).not.toHaveProperty('triggerId')
-    // The replaced question is withdrawn from the outbox if its message has not gone out yet.
+    // 若被替换的问题对应的消息尚未发出，则从发件箱撤回。
     expect(h.withdrawn).toEqual([key('attention-reply', asked.attention!.id)])
     const cleared = h.engine.report(ticketId, { state: 'progress', summary: 'answered', question: null })
     expect(cleared).not.toHaveProperty('attention')
@@ -799,7 +794,7 @@ describe('worker reports', () => {
       h.engine.report(ticketId, { state: 'progress', summary: 'asking', question: 'Merge it?' })
       if (follows) h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-9' }, false)
       if (follows) h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-10' }, true)
-      // Work resumed after both closed ends with its ready report, using the latest close outcome.
+      // 两者都关闭后恢复的工作以就绪报告结束，并采用最新的关闭结果。
       if (closed) {
         h.engine.threadClosed({ source: 'gh', id: 'pr-9' }, 'closed', '2026-09-22T00:00:00Z')
         h.engine.threadClosed({ source: 'gh', id: 'pr-10' }, 'merged', '2026-09-22T00:00:01Z')
@@ -855,7 +850,7 @@ describe('attach', () => {
     const ticketId = accepted(h).ticketId!
     h.engine.receive(trigger('2', { actor: guest })); h.pump()
     expect(h.delivered.map(([, input]) => input)).toEqual([key('input', ticketId, 'trigger', '2')])
-    // The follow-up reached the ticket without an Eval, and is its worker's to judge; sent to Eval again by a person, it is judged there.
+    // 该后续消息未经评估就到达了工单，由执行器判断；真人再次送入评估后，就在那里判断。
     expect(h.engine.candidate('2')).toBeUndefined()
     expect(() => h.engine.attach(ticketId, '2')).toThrow(new UserError('workerDecides', { tickets: ticketId }))
     expect(h.engine.reevaluate('2')).toBe(true); h.pump()
@@ -865,7 +860,7 @@ describe('attach', () => {
     expect(h.delivered.map(([, input]) => input)).toEqual(attached.inputs.map(input => input.id))
     expect(h.engine.candidate('2')).toBeUndefined()
     expect(h.repo.decisions.byThread('chat:t1').at(-1)).toMatchObject({ kind: 'ignore', reason: [{ code: 'routed', values: { ticket: ticketId } }] })
-    // A note for a message that still waits for the worker goes out with it, as for one a person sent to Eval at once.
+    // 仍等待执行器的消息，其备注会随该消息一起发出，与真人立即送入评估的情况相同。
     h.engine.receive(trigger('5', { actor: guest })); h.engine.reevaluate('5')
     expect(h.engine.attach(ticketId, '5', 'Same fix again').inputs.at(-1)).toMatchObject({ triggerId: '5', note: 'Same fix again' })
     h.settle()
@@ -904,8 +899,7 @@ describe('direct decisions', () => {
     expect(h.repo.threads.get('chat:t1')).toMatchObject({ pending: [] })
     expect(h.repo.threads.get('chat:t1')).not.toHaveProperty('evaluating')
     expect(h.engine.decide('1', { kind: 'accept', title: 'Again', scope: 'small', reason: 'routed' })).toEqual(decision)
-    // A guest's follow-up reached that ticket without an Eval: its worker decides it, and only what the worker hands back can
-    // become new work, under the gate's authority, inferred.
+    // 访客的后续消息未经评估就到达了该工单：由执行器判定，只有执行器交回的内容才可能成为新工作，且按门禁的权限以推断强度处理。
     h.engine.receive(trigger('2', { actor: guest })); h.pump()
     const ticketId = decision.ticketId!
     expect(() => h.engine.decide('2', { kind: 'accept', title: 'Fix', scope: 'small', reason: 'rule', rules: ['r1'] }))
@@ -941,7 +935,7 @@ describe('direct decisions', () => {
     const h = harness()
     const decision = accepted(h)
     h.engine.receive(trigger('2', { actor: guest })); h.engine.reevaluate('2'); h.engine.reevaluate('1'); h.pump()
-    // The member's replayed request lends the guest's message no authority.
+    // 成员重放的请求不会给访客的消息赋予任何权限。
     expect(h.engine.candidate('1')).toBeUndefined()
     expect(h.engine.candidate('2')).toMatchObject({ strength: 'inferred', triggers: [{ id: '2' }] })
     expect(() => h.engine.decide('2', { kind: 'accept', title: 'Other', scope: 'small', reason: 'routed' })).toThrow(new UserError('notExplicit'))
@@ -956,7 +950,7 @@ describe('direct decisions', () => {
     expect(second.ticketId).not.toBe(first.ticketId)
     expect(h.repo.tickets.get(second.ticketId!)!.origin).toEqual({ triggerId: '2', triggerIds: ['2'] })
     expect(h.outbox.find(message => message.id === key('ack', '2'))).toMatchObject({ text: 'On it', kind: 'acknowledgement' })
-    // The replayed request still answers with the ticket it started.
+    // 重放的请求仍以它启动的工单作为答复。
     expect(h.engine.decide('1', { kind: 'accept', title: 'Again', scope: 'small', reason: 'again' })).toEqual(first)
   })
 
@@ -968,7 +962,7 @@ describe('automatic input', () => {
     const bot = (id: string) => trigger(id, { human: false })
     h.engine.receive(bot('2'))
     h.engine.report(ticketId, { state: 'blocked', summary: 'needs a decision' })
-    // Both pending and subsequent automated inputs stay queued on the ticket without waking the worker.
+    // 待处理的以及后续的自动输入都留在工单上排队，不会唤醒执行器。
     h.engine.receive(bot('3')); h.settle()
     expect(h.repo.tickets.get(ticketId)).toMatchObject({ undelivered: [], inputs: [expect.objectContaining({ triggerId: '2' }), expect.objectContaining({ triggerId: '3' })] })
     expect(h.delivered).toEqual([])
@@ -983,7 +977,7 @@ describe('automatic input', () => {
     h.engine.report(ticketId, { state: 'blocked', summary: 'needs a decision' })
     expect(waitsForPerson(ticket())).toBe(true)
     expect(ticketStage(ticket())).toEqual({ stage: 'person', action: 'blocked' })
-    // The worker has the person's reply, so the stale blocked report no longer holds the ticket.
+    // 执行器已拿到真人的回复，因此过时的受阻报告不再持有工单。
     h.tick(1); h.engine.receive(trigger('2', { actor: guest })); h.settle()
     expect(waitsForPerson(ticket())).toBe(false)
     expect(ticketStage(ticket())).toEqual({ stage: 'working' })
@@ -1011,7 +1005,7 @@ describe('replies', () => {
   it('acknowledges a person\'s message that reached an open ticket once, and refuses others', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!
-    // The acknowledgement of the accept stays; a later request for one reuses it.
+    // 接单的确认会保留；之后再有请求时复用它。
     expect(h.engine.reply({ purpose: 'acknowledgement', ticketId, triggerId: '1', text: 'On it' })).toEqual({ id: key('ack', '1'), status: 'pending', reused: true })
     expect(h.outbox.map(message => message.text)).toEqual(['ok'])
     h.engine.receive(trigger('2', { actor: guest }))
@@ -1036,13 +1030,13 @@ describe('replies', () => {
     expect(() => h.engine.reply({ purpose: 'result', ticketId, text: 'Done' })).toThrow(new UserError('notReady'))
     h.engine.report(ticketId, { state: 'progress', summary: 'asking', question: 'Which color?', askedBy: '2' })
     expect(() => h.engine.reply({ purpose: 'attention', ticketId, question: 'Which size?', text: 'x' })).toThrow(new UserError('notAttention'))
-    // Without an open question there is nothing to ask, whether or not a question is named.
+    // 没有未解决的问题就无需提问，无论是否指名了问题。
     const quiet = accepted(h, '9', 't9').ticketId!
     expect(() => h.engine.reply({ purpose: 'attention', ticketId: quiet, text: 'Anything to send.' })).toThrow(new UserError('notAttention'))
     expect(() => h.engine.reply({ purpose: 'attention', ticketId: quiet, question: '', text: 'Anything to send.' })).toThrow(new UserError('notAttention'))
     const attention = h.repo.tickets.get(ticketId)!.attention!
     expect(h.engine.reply({ purpose: 'attention', ticketId, question: 'Which color?', text: 'Which color?' }).id).toBe(key('attention-reply', attention.id))
-    // A question goes where the message that raised it was written.
+    // 问题会发到提出它的消息所在的位置。
     expect(h.outbox.at(-1)!.channel).toEqual(asked.channel)
     h.engine.report(ticketId, { state: 'ready', summary: 'Done' })
     expect(h.engine.reply({ purpose: 'result', ticketId, text: 'Done' })).toMatchObject({ status: 'pending' })
@@ -1053,20 +1047,20 @@ describe('ticket commands', () => {
   it('ends a ticket by the same rule on a close and on a ready report: once no PR it opened is open, as the latest of them ended', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!
-    // It started from someone's PR and opened its own.
+    // 它从别人的 PR 开始，并开启了自己的 PR。
     h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-5' }, false)
     h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-7' }, true)
     h.engine.threadClosed({ source: 'gh', id: 'pr-7' }, 'merged', '2026-09-23T00:00:00Z')
     expect(h.repo.tickets.get(ticketId)!.ended).toMatchObject({ outcome: 'merged' })
-    // A person's comment resumes it; its ready report ends it again as its own PR did, though the one it started from is open.
+    // 真人的评论恢复它；其就绪报告又像它自己的 PR 那样结束它，尽管它起始于的那个 PR 仍处于打开状态。
     h.tick(10); h.engine.receive(trigger('2', { threads: [{ source: 'gh', id: 'pr-5' }] })); h.settle()
     expect(h.repo.tickets.get(ticketId)).not.toHaveProperty('ended')
     h.engine.report(ticketId, { state: 'ready', summary: 'Answered' })
     expect(h.repo.tickets.get(ticketId)!.ended).toMatchObject({ outcome: 'merged' })
-    // The PR it started from closing later changes nothing.
+    // 它起始于的 PR 之后关闭不会带来变化。
     h.engine.threadClosed({ source: 'gh', id: 'pr-5' }, 'closed', '2026-09-23T00:00:30Z')
     expect(h.repo.tickets.get(ticketId)!.ended).toMatchObject({ outcome: 'merged' })
-    // A ticket that opened no PR ends when the one it follows closes, as it did.
+    // 未开启任何 PR 的工单，在其关注的 PR 关闭时结束，如同它已经发生的那样。
     const other = accepted(h, '3', 't3').ticketId!
     h.engine.bindThread(other, { source: 'gh', id: 'pr-8' }, false)
     h.engine.report(other, { state: 'ready', summary: 'Pushed to their branch' })
@@ -1080,7 +1074,7 @@ describe('ticket commands', () => {
     h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-7' }, true)
     expect(h.engine.unsubscribe('gh:pr-7')).toBe(true)
     expect(h.repo.tickets.get(ticketId)).not.toHaveProperty('follows')
-    // Its ready report completes it, since it follows no Thread now.
+    // 它的就绪报告会完成它，因为它现在不再关注任何线程。
     h.engine.report(ticketId, { state: 'ready', summary: 'Done' })
     expect(h.repo.tickets.get(ticketId)!.ended).toMatchObject({ outcome: 'completed' })
   })
@@ -1095,16 +1089,16 @@ describe('ticket commands', () => {
     expect(h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-9' }, false)).toMatchObject({ follows: [{ thread: 'gh:pr-9', own: false }] })
     h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-10' }, true)
     expect(h.repo.threads.get('gh:pr-9')!.subscriptions).toEqual([ticketId])
-    // The Thread it started from closes while its own is open: it records the close and works on.
+    // 它起始于的线程在其自身线程仍打开时关闭：它会记录该关闭并继续工作。
     expect(close('pr-9', 'closed', '2026-09-23T00:00:00Z')).toEqual([])
     expect(h.repo.tickets.get(ticketId)).toMatchObject({ follows: [{ thread: 'gh:pr-9', closed: { outcome: 'closed' } }, { thread: 'gh:pr-10' }] })
     expect(h.repo.tickets.get(ticketId)).not.toHaveProperty('ended')
-    // Its own closes too: it ends as that one did, when it did, once.
+    // 它自己的也关闭了：它按那次关闭的方式和时点结束，且只结束一次。
     expect(close('pr-10', 'merged', '2026-09-23T00:00:01Z')).toEqual([ticketId])
     expect(h.repo.tickets.get(ticketId)).toMatchObject({ ended: { by: 'executor', outcome: 'merged', at: '2026-09-23T00:00:01.000Z' } })
     expect(close('pr-10', 'merged', '2026-09-23T00:00:01Z')).toEqual([])
     expect(() => h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-11' }, true)).toThrow(new UserError('ticketEnded'))
-    // A ticket retried after its PR closed but before the close was reported works on until it reports ready.
+    // PR 已关闭但关闭尚未报告时重试的工单会继续工作，直到它报告就绪。
     const other = accepted(h, '2', 't2').ticketId!
     h.engine.bindThread(other, { source: 'gh', id: 'pr-12' }, true)
     h.engine.report(other, { state: 'failed', summary: 'tests fail' })
@@ -1164,7 +1158,7 @@ describe('retry after a failed delivery', () => {
     const h = harness()
     const ticketId = accepted(h).ticketId!
     h.engine.report(ticketId, { state: 'failed', summary: 'tests fail' })
-    // A person's answer goes to the failed worker, and delivering it fails.
+    // 真人的答复会发给失败的执行器，而投递它失败了。
     h.tick(5); h.engine.receive(trigger('2'))
     const answered = h.repo.tickets.get(ticketId)!
     expect(answered.undelivered).toHaveLength(1)
@@ -1181,7 +1175,7 @@ describe('Evals across Policy versions, revoked Mandates and mixed batches', () 
     const h = harness()
     h.engine.receive(trigger('1')); h.pump()
     const candidate = h.requests.at(-1)!
-    // An upgrade changes the version without a Policy change being reported.
+    // 升级会改变版本，但不会报告策略变更。
     h.setVersion('v2')
     expect(h.decide(candidate, { kind: 'accept', title: 'Fix', scope: 'small', reason: 'r' })).toMatchObject({ kind: 'unavailable', reason: [{ code: 'policyChanged' }] })
     expect(h.repo.threads.get('chat:t1')).toMatchObject({ pending: ['1'] })
@@ -1222,7 +1216,7 @@ describe('Evals across Policy versions, revoked Mandates and mixed batches', () 
 })
 describe('gaps', () => {
   it('takes a mixed batch\'s strength, actor and basis from its strongest admissible Trigger, the latest of equal strength', () => {
-    // A guest's message is admitted as inferred, as on a Thread a ticket follows.
+    // 访客的消息按推断强度被接纳，就像在工单关注的线程上一样。
     const gate: Policy['gate'] = t => t.actor.id === 'alice' ? { admissible: true, strength: 'explicit', basis: { via: 'listed' } }
       : { admissible: true, strength: 'inferred', basis: { via: 'followup' } }
     for (const order of [['guest', 'alice'], ['alice', 'guest']]) {
@@ -1288,7 +1282,7 @@ describe('gaps', () => {
     expect(h.engine.reply({ purpose: 'result', ticketId, text: 'Done' })).toMatchObject({ reused: false })
     expect(h.engine.reply({ purpose: 'result', ticketId, text: 'Done' })).toMatchObject({ reused: true })
     expect(h.outbox).toHaveLength(sent + 1)
-    // A ticket whose PR closed unmerged, or that a person stopped, has no result to send.
+    // PR 未合并即关闭、或被人停止的工单，没有结果可发送。
     const closed = accepted(h, '5', 't5').ticketId!
     h.engine.bindThread(closed, { source: 'gh', id: 'pr-1' }, true)
     h.engine.threadClosed({ source: 'gh', id: 'pr-1' }, 'closed', '2026-09-23T00:01:00Z')
@@ -1306,7 +1300,7 @@ describe('gaps', () => {
     h.tick(30); h.engine.candidateDelivered(evalId)
     expect(h.repo.threads.get('chat:t1')!.evaluating!.deadline).toBe(deadline)
     expect(h.engine.reevaluate('1')).toBe(false)
-    // A Trigger that arrives meanwhile queues behind the expired one, and the fresh Eval takes both in that order.
+    // 此间到达的触发器排在过期触发器之后，新的评估按该顺序接收两者。
     h.tick(1); h.engine.receive(trigger('2', { actor: guest }))
     h.tick(30); h.engine.evaluateDue()
     expect(h.repo.threads.get('chat:t1')!.evaluating!.triggerIds).toEqual(['1', '2'])
@@ -1317,7 +1311,7 @@ describe('final review', () => {
   it('ignores an Eval an earlier version left holding only a Trigger that started a ticket, instead of recording it unavailable', () => {
     const h = harness()
     const decision = accepted(h)
-    // An earlier version could leave an Eval holding the Trigger after it started a ticket.
+    // 旧版本可能在评估启动工单后仍让它持有触发器。
     const thread = h.repo.threads.get('chat:t1')!
     h.repo.threads.save({ ...thread, evaluating: { id: 'old-eval', threadKey: 'chat:t1', triggerIds: ['1'], primary: '1', strength: 'explicit', actor: member,
       basis: { via: 'listed' }, policyVersion: 'v1', startedAt: '', deadline: '2999-01-01T00:00:00.000Z' } })
@@ -1362,7 +1356,7 @@ describe('final review: close times', () => {
     h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-1' }, true)
     h.tick(30)
     const before = h.repo.tickets.get(ticketId)!.updatedAt
-    // GitHub gives whole seconds, and the PR merged before the ticket's last change.
+    // GitHub 只精确到整秒，且 PR 在工单最后一次改动之前就已合并。
     h.engine.threadClosed({ source: 'gh', id: 'pr-1' }, 'merged', '2026-09-23T00:00:05Z')
     const ended = h.repo.tickets.get(ticketId)!
     expect(ended.ended).toMatchObject({ at: '2026-09-23T00:00:05.000Z', outcome: 'merged' })
@@ -1378,7 +1372,7 @@ describe('model-surface review', () => {
     h.tick(1); h.engine.receive(trigger('2', { human: false, actor: { source: 'chat', id: 'ci' }, threads: [{ source: 'chat', id: 'ci' }] }))
     h.engine.attach(ticketId, '2')
     expect(h.repo.tickets.get(ticketId)!.ended).toBeDefined()
-    // A person's message resumes it, with what waited.
+    // 真人的消息连同等待的内容一起恢复它。
     h.tick(1); h.engine.receive(trigger('3'))
     expect(h.repo.tickets.get(ticketId)!.ended).toBeUndefined()
   })
@@ -1390,7 +1384,7 @@ describe('follow-up review: turn ends', () => {
     const ticketId = accepted(h).ticketId!
     h.engine.bindThread(ticketId, { source: 'gh', id: 'pr-9' }, true)
     h.engine.report(ticketId, { state: 'ready', summary: 'PR ready' })
-    // A person thanks the worker, which reads it in a turn and leaves it; another message comes after that turn.
+    // 真人向执行器致谢，执行器在一轮中读取后搁置；该轮之后又来了另一条消息。
     h.tick(1); h.engine.receive(trigger('2')); h.settle(); h.read(ticketId)
     h.tick(1); h.engine.turnEnded(ticketId, runningAssignment(h.repo.tickets.get(ticketId)!)!.id)
     h.tick(1); h.engine.receive(trigger('3')); h.settle()
@@ -1404,7 +1398,7 @@ describe('follow-up review: turn ends', () => {
     h.engine.report(ticketId, { state: 'ready', summary: 'PR ready' })
     h.tick(1); h.engine.receive(trigger('2')); h.settle()
     h.engine.reply({ purpose: 'acknowledgement', ticketId, triggerId: '2', text: 'On it' })
-    // It answers another question in a progress report while it works on the message.
+    // 它在处理该消息的同时，在进度报告中回答了另一个问题。
     h.tick(1); h.engine.report(ticketId, { state: 'progress', summary: 'Answered the other question' })
     merge(h)
     expect(h.repo.tickets.get(ticketId)!.ended).toBeUndefined()
@@ -1448,7 +1442,7 @@ describe('follow-up review: turn ends and deliveries', () => {
     h.tick(1); h.engine.receive(trigger('2'))
     const ticket = () => h.repo.tickets.get(ticketId)!, assignmentId = runningAssignment(ticket())!.id
     const [inputId] = ticket().undelivered
-    // The turn ends while the message is on its way; it reaches the worker after, and a person stops the ticket in that turn.
+    // 消息正在投递途中时该轮结束；它随后到达执行器，而真人在该轮中停止了工单。
     h.tick(1); h.engine.turnEnded(ticketId, assignmentId)
     h.tick(1); h.engine.inputsDelivered(ticketId, assignmentId, [inputId!])
     h.tick(1); h.engine.stopTicket(ticketId, 'not needed')
@@ -1462,7 +1456,7 @@ describe('follow-up review: delivery times', () => {
     h.tick(1); h.engine.receive(trigger('2'))
     const ticket = () => h.repo.tickets.get(ticketId)!, assignmentId = runningAssignment(ticket())!.id
     const [inputId] = ticket().undelivered
-    // The Executor reports the worker waiting while the message is on its way; it reaches the worker after, and a person stops.
+    // 消息在途中时，执行器上报的状态为等待；消息随后到达执行器，而真人在此期间停止了它。
     h.tick(1); h.engine.report(ticketId, { state: 'waiting', summary: 'Waiting for input' })
     h.tick(1); h.engine.inputsDelivered(ticketId, assignmentId, [inputId!])
     h.tick(1); h.engine.stopTicket(ticketId, 'not needed')
@@ -1484,7 +1478,7 @@ describe('routing review', () => {
 })
 
 describe('what a worker read', () => {
-  /** A ticket that ended, resumed by a person's message `2`, whose new Assignment started; its Inputs wait for delivery. */
+  /** 一个已结束的工单，被真人的消息 `2` 恢复，其新任务已启动；它的输入等待投递。 */
   function resumed() {
     const h = harness()
     const ticketId = accepted(h).ticketId!
@@ -1497,8 +1491,7 @@ describe('what a worker read', () => {
   }
   it('sends to Eval a message that woke a ticket and reached its worker only after a progress report, at a dropped report', () => {
     const { h, ticketId, assignmentId, note, message, pending } = resumed()
-    // Delivering the message fails at first; the worker reports progress, and the retry hands the message over while it
-    // writes that nothing is left.
+    // 该消息的投递起初失败；执行器报告进度，重试在它写下已无剩余内容时把消息交了出去。
     h.engine.inputsDelivered(ticketId, assignmentId, [note])
     h.engine.deliveryFailed(ticketId, assignmentId, 'Session busy')
     h.tick(1); h.engine.report(ticketId, { state: 'progress', summary: 'Looking' })
@@ -1508,7 +1501,7 @@ describe('what a worker read', () => {
   })
   it('counts a message that woke a ticket as read by a later dropped report once its worker\'s Session took it into a step', () => {
     const { h, ticketId, assignmentId, note, message, pending } = resumed()
-    // The Session takes it into the step its arrival starts, before the Executor records the delivery.
+    // 会话在消息到达所开启的那一步中接收它，早于执行器记录投递。
     h.engine.inputsRead(ticketId, [message])
     h.engine.inputsDelivered(ticketId, assignmentId, [note, message])
     h.tick(1); h.engine.report(ticketId, { state: 'progress', summary: 'Looking' })
@@ -1543,7 +1536,7 @@ describe('what a worker read', () => {
       const ticketId = accepted(h).ticketId!
       h.engine.report(ticketId, { state: 'progress', summary: 'working' })
       h.tick(1); h.engine.receive(trigger('2')); h.settle(); h.read(ticketId)
-      // The Assignment starts again with a recovery note, in the same Session, which holds the message.
+      // 任务在同一个会话中以恢复备注重新启动，该会话持有该消息。
       h.tick(1); h.engine.assignmentInterrupted(ticketId, runningAssignment(h.repo.tickets.get(ticketId)!)!.id); h.settle()
       if (reported) { h.tick(1); h.engine.report(ticketId, { state: 'progress', summary: 'Recovered' }) }
       h.tick(1); h.engine.stopTicket(ticketId, 'not needed')
@@ -1570,11 +1563,11 @@ describe('read claims review: retries', () => {
     const ticketId = accepted(h).ticketId!
     const ticket = () => h.repo.tickets.get(ticketId)!
     const inputOf = (triggerId: string) => ticket().inputs.find(input => input.kind === 'trigger' && input.triggerId === triggerId)!.id
-    // A follow-up reaches the worker, and the ticket ends before any step took it, which sends it to Eval.
+    // 后续消息到达执行器，而工单在任何步骤接手它之前就结束了，于是它被送入评估。
     h.tick(1); h.engine.receive(trigger('2')); h.settle()
     h.tick(1); h.engine.report(ticketId, { state: 'dropped', summary: 'nothing to do' })
     expect(h.repo.threads.get('chat:t1')!.pending).toEqual(['2'])
-    // A person's message resumes the ticket; its worker reports blocked before a step took the message, and a person retries.
+    // 真人的消息恢复了工单；其执行器在任何步骤接手该消息之前报告受阻，真人随后重试。
     h.tick(1); h.engine.receive(trigger('3')); h.settle()
     h.tick(1); h.engine.report(ticketId, { state: 'blocked', summary: 'Which page?' })
     h.tick(1); h.engine.retryTicket(ticketId)
@@ -1588,11 +1581,11 @@ describe('read claims review: restarts', () => {
     const ticket = () => h.repo.tickets.get(ticketId)!
     const inputOf = (triggerId: string) => ticket().inputs.find(input => input.kind === 'trigger' && input.triggerId === triggerId)!.id
     h.tick(1); h.engine.receive(trigger('2')); h.settle()
-    // The host restarts mid-work before a step took the message, which a cancel may have dropped: the new Assignment gets it.
+    // 宿主在步骤接手该消息之前的工作中途重启，取消可能已丢弃该消息：新任务会收到它。
     h.tick(1); h.engine.assignmentInterrupted(ticketId, runningAssignment(ticket())!.id)
     expect(ticket().undelivered[0]).toBe(inputOf('2'))
     h.settle()
-    // That Assignment blocks before a step took it, and a person retries: the retry's Assignment gets it too.
+    // 该任务在步骤接手它之前受阻，真人重试：重试的任务也会收到它。
     h.tick(1); h.engine.report(ticketId, { state: 'blocked', summary: 'Which page?' })
     h.tick(1); h.engine.retryTicket(ticketId)
     expect(ticket().undelivered).toEqual([inputOf('2')])
@@ -1603,18 +1596,18 @@ describe('ignores from the card', () => {
   it('marks the ignore of an inferred candidate that no assessment judged, unlike an assessed one or an explicit candidate\'s', () => {
     const h = harness()
     accepted(h)
-    // A guest's message sent to Eval is an inferred candidate, which the main Session ignores from its card.
+    // 被送入评估的访客消息是推断候选，主会话从卡片上忽略它。
     h.engine.receive(trigger('2', { actor: guest })); h.engine.reevaluate('2'); h.pump()
     expect(h.requests.at(-1)).toMatchObject({ strength: 'inferred' })
     expect(h.engine.decide('2', { kind: 'ignore', reason: 'Plain chat.' }).reason).toEqual([{ code: 'ignoredFromCard' }, said('Plain chat.')])
-    // An assessment's ignore keeps its rule judgments, without the mark.
+    // 评估的忽略会保留其规则判定，但不带标记。
     h.engine.receive(trigger('3', { actor: guest })); h.engine.reevaluate('3'); h.pump()
     expect(h.decide(h.requests.at(-1)!, { kind: 'ignore', reason: 'Plain chat.', audit: { rule_assessments: [] } }))
       .toMatchObject({ reason: [said('Plain chat.')], audit: { rule_assessments: [] } })
-    // An explicit candidate is always routed from its card.
+    // 显式候选总是从卡片上路由。
     h.engine.receive(trigger('4', { threads: [{ source: 'chat', id: 't9' }] })); h.pump()
     expect(h.engine.decide('4', { kind: 'ignore', reason: 'Thanks.' }).reason).toEqual([said('Thanks.')])
-    // Accepting an inferred candidate still takes an assessment's matched rules.
+    // 接受推断候选仍会采用评估中匹配到的规则。
     h.engine.receive(trigger('5', { actor: guest })); h.engine.reevaluate('5'); h.pump()
     expect(() => h.engine.decide('5', { kind: 'accept', title: 'Fix', scope: 'small', reason: 'chat' })).toThrow(new UserError('notExplicit'))
   })

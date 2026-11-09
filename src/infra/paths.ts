@@ -1,4 +1,4 @@
-/** Resolves packaged asset paths from either the source tree or the compiled lib/ output. */
+/** 解析打包资源的路径，兼容源码树和编译后的 lib/ 输出。 */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,7 +11,7 @@ export function packageRoot(): string {
     const manifest = join(directory, 'package.json')
     if (existsSync(manifest)) {
       try { if ((JSON.parse(readFileSync(manifest, 'utf8')) as { name?: string }).name === 'dsh-superagent') return cached = directory }
-      catch { /* A foreign package.json on the way up is not this package. */ }
+      catch { /* 向上层遇到的 package.json 不属于本包。 */ }
     }
     directory = dirname(directory)
   }

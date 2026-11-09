@@ -1,26 +1,25 @@
-# dsh-superagent bundle layer: inserts the plugins without configuration, and the agent presets its Sessions run under. The
-# profile supplies the `dsh-superagent` entry's stateDir (see docs/006-deployment.md and examples/profile.cordis.patch.yml); the plugin
-# refuses to start without stateDir.
+# dsh-superagent 插件包层：在不带配置的情况下插入各插件，以及其各会话运行的智能体预设。profile
+# 提供 `dsh-superagent` 条目的 stateDir（参见 docs/006-deployment.md 和 examples/profile.cordis.patch.yml）；没有
+# stateDir 时插件拒绝启动。
 - insert:
     - id: dsh-superagent
       name: dsh-superagent
     - id: dsh-superagent-github
       name: dsh-superagent/github-watch
-    # Optional Feishu Source; requires configuring a bot CLI after enabling.
+    # 可选的飞书来源；启用后需要配置机器人 CLI。
     - id: dsh-superagent-feishu
       name: dsh-superagent/feishu-watch
       disabled: true
-    # Optional GitLab Source; requires configuring a project and a glab CLI after enabling.
+    # 可选的 GitLab 来源；启用后需要配置项目和 glab CLI。
     - id: dsh-superagent-gitlab
       name: dsh-superagent/gitlab-watch
       disabled: true
-    # The agent preset of every Executor Session (WORKER_PRESET in src/app/sessions.ts); the main Session has its own, below.
-    # It is DSH's `standard` preset with only what a worker needs, and a shell whose foreground command moves to a background job
-    # after 5 seconds, so a long command does not hold back a person's message, which the Session takes at its next step. Left
-    # out: questions to a person, presenting, plan mode, the plugin manager and market, scheduling, goals, workflows, web fetch,
-    # and forked subagents, which would run under this preset; spawned subagents run under `standard`, whose shell moves a
-    # command to a background job only after 60 seconds, as a subagent's jobs are killed when it ends. A preset row has no
-    # setting that hides it from the preset picker, so its name and description say whom it is for.
+    # 每个执行器会话的智能体预设（src/app/sessions.ts 中的 WORKER_PRESET）；主会话有自己的预设，见下方。
+    # 它是 DSH 的 `standard` 预设，只保留执行器需要的内容，并让前台命令在 5 秒后转入后台任务，
+    # 因此长命令不会挡住人的消息，会话会在下一步接收它。省略了：向人提问、展示、计划模式、
+    # 插件管理器与市场、调度、目标、工作流、web fetch，以及分叉子代理（它们会在该预设下运行）；
+    # 派生的子代理在 `standard` 下运行，其 shell 只在 60 秒后把命令转入后台任务，因为子代理结束时其任务会被终止。
+    # 预设行没有可在预设选择器中隐藏它的设置，因此其名称和说明会写明它面向谁。
     - id: dsh-superagent-worker-preset
       name: '@deepseek-ai/dsh-agent-preset'
       config:
@@ -39,7 +38,7 @@
               maxBytes: 65536
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
-          # A foreground command waits at most 5 s, then the shell tool moves it to a background job.
+          # 前台命令最多等待 5 秒，随后 shell 工具把它转入后台任务。
           - id: shell
             name: cordis:group
             group: true
@@ -70,7 +69,7 @@
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:
               sampleOverCapGlobResults: false
-          # A wait for a job ends after 5 s too; the job's end wakes the worker with its result.
+          # 任务等待同样在 5 秒后结束；任务结束时会用其结果唤醒执行器。
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
             config:
@@ -122,10 +121,10 @@
             config:
               fetch: false
               searchTimeoutMs: 60000
-    # The agent preset of the main Session (ROUTER_PRESET in src/app/sessions.ts). The worker's 5-second shell and job waits, so a command or a wait does not hold back the next candidates, and
-    # only what the main Session uses: no subagents, web, file search or writes, todo list, questions to a person, presenting,
-    # plan mode, plugin manager, scheduling, goals or workflows. No persona: the main Session's prompt is complete, so it has
-    # no other section.
+    # 主会话的智能体预设（src/app/sessions.ts 中的 ROUTER_PRESET）。采用执行器的 5 秒 shell 和任务等待，因此命令或等待
+    # 不会挡住后续候选；只保留主会话使用的内容：没有子代理、web、文件搜索或写入、待办列表、向人提问、展示、
+    # 计划模式、插件管理器、调度、目标或工作流。没有 persona：主会话的提示词是完整的，因此
+    # 没有其他部分。
     - id: dsh-superagent-router-preset
       name: '@deepseek-ai/dsh-agent-preset'
       config:

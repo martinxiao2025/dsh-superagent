@@ -1,36 +1,36 @@
-# 008 Cookbook
+# 008 操作手册
 
-This cookbook shows how to extend dsh-superagent. It uses the terms in [001 Domain model](001-domain.md) and [002 Authorization](002-authorization.md), and the components in [007 Architecture](007-architecture.md).
+本操作手册说明如何扩展 dsh-superagent。它使用 [001 领域模型](001-domain.md) 和 [002 授权](002-authorization.md) 中的术语，以及 [007 架构](007-architecture.md) 中的组件。
 
-## Add a Source
+## 新增一个来源
 
-This recipe implements a Source kind called `webhook`. It reads an imaginary message queue through an invented CLI, `hookq`, and converts messages to Triggers. All other interfaces are part of dsh-superagent.
+本示例实现一个名为 `webhook` 的来源 kind。它通过一个虚构的 CLI `hookq` 读取虚构的消息队列，并把消息转换为触发器。其他所有接口都是 dsh-superagent 的一部分。
 
-The implementation has four responsibilities: translate events, define receiving and authorization rules, provide replies and context, and maintain a polling loop. The numbered steps build those pieces in order.
+实现有四部分职责：转换事件、定义接收与授权规则、提供回复和上下文，以及维护轮询循环。以下编号步骤按顺序构建这些部分。
 
-The example assumes this CLI contract:
+示例假设如下 CLI 契约：
 
-- `hookq pull --after <n> --json` prints the messages after position `n`, oldest first: `{"me": "<the agent's id on the queue>", "items": […], "next": <position>}`. An item has `id`, `conversation`, `thread` (the id of the message that started its thread, absent on that message), `sender` with `id` and `bot`, `mentions_me`, `text`, `at` and `url`.
-- `hookq reply --conversation <id> --to <message id> --key <key> --text <text>` replies under a message, once per key. For a conversation that was deleted it fails with `{"error": {"code": 410, "message": "…"}}` on standard error.
-- `hookq thread --conversation <id> --root <message id> --json`, with `--after <cursor>` for a later page, prints a page of a thread, oldest first: `{"items": […], "next": "<cursor>"}`, without `next` on the last page.
+- `hookq pull --after <n> --json` 打印位置 `n` 之后的消息，最旧在前：`{"me": "<the agent's id on the queue>", "items": […], "next": <position>}`。条目含 `id`、`conversation`、`thread`（开启其线程的消息 id，该消息本身没有）、含 `id` 和 `bot` 的 `sender`、`mentions_me`、`text`、`at` 和 `url`。
+- `hookq reply --conversation <id> --to <message id> --key <key> --text <text>` 在一条消息下回复，每个 key 只回复一次。对话已删除时，它在标准错误上以 `{"error": {"code": 410, "message": "…"}}` 失败。
+- `hookq thread --conversation <id> --root <message id> --json`，带 `--after <cursor>` 读取后续页，打印线程的一页，最旧在前：`{"items": […], "next": "<cursor>"}`，最后一页没有 `next`。
 
-Put the kind and its plugin entry in `src/sources/webhook.ts`, following `src/sources/github.ts`. If the Source grows, split translation, Channel and polling code into separate modules as the Feishu Source does.
+把该 kind 及其插件入口放在 `src/sources/webhook.ts` 中，参照 `src/sources/github.ts`。如果来源变大，像飞书来源那样把转换、渠道和轮询代码拆到独立模块。
 
-### 1. Map the events onto the domain
+### 1. 把事件映射到领域
 
-Choose stable mappings before writing code. Trigger ids, Thread ids and Channel addresses are persisted, so changing them later can disconnect existing records.
+写代码之前先选定稳定的映射。触发器 id、线程 id 和渠道地址会被持久化，因此之后更改它们可能断开已有记录。
 
-| Concept | For the webhook queue |
+| 概念 | 对应 webhook 队列 |
 | --- | --- |
-| Trigger | One message |
-| Thread | A message and the replies to it in one conversation: `<conversation>:<id of the first message>` |
-| Actor | The sender's id on the queue, as the allowed list names it |
-| Channel address | The conversation and the message a reply goes under |
-| Receiving scope | A conversation, with its own row in the admission table |
+| Trigger | 一条消息 |
+| Thread | 一个对话中的一条消息及其回复：`<conversation>:<第一条消息的 id>` |
+| Actor | 发送者在队列上的 id，允许名单以它指名 |
+| 渠道地址 | 回复所在的对话和消息 |
+| 接收范围 | 一个对话，在准入表中有自己的行 |
 
-### 2. Configuration: schema, fields, facts and health
+### 2. 配置：架构、字段、事实和健康
 
-The module imports what the steps below use:
+模块导入以下步骤使用的内容：
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
@@ -68,35 +68,35 @@ export const webhookKind: SourceKind<WebhookConfig> = {
       label: { zh: '轮询间隔 / 秒', en: 'Polling interval / seconds' } },
   ],
   health: ['webhook'],
-  // find, scope, channel, threadContext, policy and environment follow in the next steps.
+  // find、scope、channel、threadContext、policy 和 environment 在后续步骤中给出。
 }
 ```
 
-- `kind` is the stable Source id. It appears in Trigger `source`, Thread-key prefixes, the `source:webhook` settings block and the Source Policy.
-- `schema` validates stored configuration and supplies defaults. Before an operator saves an instance, the registry creates an enabled instance from those defaults. Make defaults receive nothing; this example defaults to no conversations.
-- `fields` generates the Source settings form without custom panel code. A `rows` field edits entries keyed by its first column; `advanced` hides less common settings. Implement `refreshLabels` if the Source can resolve ids to display names. Save those names under `KV.sources.labels(kind)`. Columns with `choose` and `refresh` can then offer them.
-- Optional `facts(deployment)` displays values derived by setup, such as the account behind a CLI. Setup currently checks only GitHub and Feishu fields listed in `SETUP_FIELDS`, so this example supplies no facts.
-- `health` declares the Source's health entries, initially `starting`. Registration claims each name and refuses collisions with entries such as `runtime`, `reply`, `worker` or effect kinds. Use the kind's name and reserve `sync:<id>` for Policy syncs. An `error` makes the status script exit 2 and the hourly check notify the operator, so report it only when human action may be needed.
+- `kind` 是稳定的来源 id。它出现在触发器的 `source`、线程键前缀、`source:webhook` 设置块和来源策略中。
+- `schema` 校验已存储配置并提供默认值。操作者保存实例之前，registry 用这些默认值创建一个已启用的实例。让默认值不接收任何内容；本示例默认没有对话。
+- `fields` 无需自定义面板代码即可生成来源设置表单。`rows` 字段编辑以其第一列为键的条目；`advanced` 隐藏较少用的设置。如果来源能把 id 解析为显示名称，请实现 `refreshLabels`。把这些名称保存在 `KV.sources.labels(kind)` 下。带 `choose` 和 `refresh` 的列随后可以提供它们。
+- 可选的 `facts(deployment)` 显示安装派生的值，例如某个 CLI 背后的账号。安装目前只检查 `SETUP_FIELDS` 中列出的 GitHub 和飞书字段，因此本示例不提供事实。
+- `health` 声明来源的健康条目，初始为 `starting`。注册会认领每个名称，并拒绝与 `runtime`、`reply`、`worker` 或副作用 kind 等条目冲突。使用该 kind 的名称，并把 `sync:<id>` 留给策略同步。`error` 会让状态脚本以 2 退出，并让每小时检查通知操作者，因此只在可能需要人处理时才报告它。
 
-### 3. Translate a message into a Trigger
+### 3. 把消息转换为触发器
 
-Validate CLI responses before converting them:
+转换之前先校验 CLI 响应：
 
 ```ts
-/** One message as `hookq pull` and `hookq thread` print it. */
+/** 一条消息，形态与 `hookq pull` 和 `hookq thread` 打印的一致。 */
 const MessageSchema = z.looseObject({
   id: z.string().min(1), conversation: z.string().min(1), thread: z.string().optional(),
   sender: z.looseObject({ id: z.string(), bot: z.boolean().default(false) }), mentions_me: z.boolean().default(false),
   text: z.string(), at: z.string(), url: z.string().optional(),
 })
 type QueueMessage = z.infer<typeof MessageSchema>
-/** The answer of `hookq pull`, whose items are read one by one, and of `hookq thread`. */
+/** `hookq pull` 的答复（其条目逐条读取），以及 `hookq thread` 的答复。 */
 const PageSchema = z.looseObject({ me: z.string(), items: z.array(z.unknown()), next: z.number().int() })
 const ThreadPageSchema = z.looseObject({ items: z.array(MessageSchema), next: z.string().optional() })
 ```
 
 ```ts
-/** The Trigger of one queue message; the agent's own messages produce none. */
+/** 一条队列消息的触发器；智能体自己的消息不产生触发器。 */
 export function webhookTrigger(message: QueueMessage, me: string): Trigger | undefined {
   if (message.sender.id === me) return undefined
   const thread = `${message.conversation}:${message.thread ?? message.id}`
@@ -117,22 +117,22 @@ export function webhookTrigger(message: QueueMessage, me: string): Trigger | und
 }
 ```
 
-- **Stable ids.** Derive the Trigger id from the queue id through `key`. `Engine.receive` returns `duplicate` for stored ids, and duplicate accepts create only one Ticket. Re-reading messages is therefore safe. To treat edits as new events, include an edit version in the id, as GitHub does with comment `updated_at`.
-- **Threads.** The first Thread is primary and owns the Eval. Additional Threads add Correlation context. The Source chooses the id; its full key is `webhook:<id>`.
-- **Sender.** Use Source-native ids in `actor`. Set `human: false` for bots and CI. Listed bots can only become inferred candidates. An empty actor id, as for CI, uses the admission cell for unlisted, unaddressed senders. Set `addressed` to `mention` or `direct` only when the message actually addresses the agent; this gives an allowed person's message explicit strength. Never produce a Trigger for the agent's own message.
-- **Reply destination and metadata.** `channel` identifies where replies go; `url` links to the source message. `channel.thread` groups messages for ordered delivery: a Ticket's later messages wait behind its earlier ones until an earlier message has failed three times. Other Tickets do not wait. Keep Source-specific fields in `meta`, such as the receiving conversation and Thread root. Both `meta` and `text` are untrusted data, not authorization.
+- **稳定的 id。** 通过 `key` 从队列 id 派生触发器 id。对已存储的 id，`Engine.receive` 返回 `duplicate`，重复接受只创建一个工单。因此重复读取消息是安全的。若要把编辑视为新事件，请在 id 中包含编辑版本，就像 GitHub 对评论 `updated_at` 所做的那样。
+- **线程。** 第一个线程是主线程，拥有评估。其他线程补充关联上下文。来源选择 id；其完整键是 `webhook:<id>`。
+- **发送者。** 在 `actor` 中使用来源原生 id。对机器人和 CI 设置 `human: false`。名单中的机器人只能成为推断候选。空的 actor id（如 CI）使用针对未列入名单、未对智能体说话的发送者的准入单元格。只有当消息确实对智能体说话时，才把 `addressed` 设为 `mention` 或 `direct`；这会让允许名单上的人的消息具有明确强度。绝不为智能体自己的消息产生触发器。
+- **回复目的地与元数据。** `channel` 指明回复的去处；`url` 链接到来源消息。`channel.thread` 对消息分组以便按序投递：工单较晚的消息会等待较早的消息，直到较早消息连续失败三次。其他工单不等待。把来源特有字段放在 `meta` 中，例如接收对话和线程根。`meta` 和 `text` 都是不可信数据，不是授权。
 
-Agents can read the new kind through `orchestrator_read trigger/<id>` and `thread/<key>`. These expose message text, disposition and neighboring Triggers. A new kind does not automatically receive a built-in skill, resources for original service records or pull-request binding.
+智能体可以通过 `orchestrator_read trigger/<id>` 和 `thread/<key>` 读取新的 kind。它们暴露消息文本、去向和相邻触发器。新的 kind 不会自动获得内置技能、原始服务记录的资源或拉取请求绑定。
 
-Text search works without extra code. Implement `find(query)` when people use Source-specific references such as message ids, URLs or `#12`. Return the Thread keys and search terms those references identify:
+文本搜索无需额外代码即可工作。当人们使用来源特有的引用（例如消息 id、URL 或 `#12`）时，请实现 `find(query)`。返回这些引用所标识的线程键和搜索词：
 
 ```ts
   find: query => ({ threads: [], terms: [...new Set(query.match(/\bm[0-9]+\b/g) ?? [])] }),
 ```
 
-Here a queue message id in the query, such as `m42`, searches the Triggers for it.
+这里查询中的队列消息 id（例如 `m42`）会在触发器中进行搜索。
 
-### 4. What the Source receives: scope
+### 4. 来源接收什么：范围
 
 ```ts
   scope({ meta }, config) {
@@ -142,13 +142,13 @@ Here a queue message id in the query, such as `m42`, searches the Triggers for i
   },
 ```
 
-The Engine calls `scope` through `SourceRegistry` for each incoming Trigger. Out-of-scope messages are stored as filtered with their reason and create no Thread. Pass messages to `receive` rather than silently dropping them in the polling loop, so the panel can explain filtering.
+Engine 对每个到达的触发器通过 `SourceRegistry` 调用 `scope`。范围之外的消息连同其理由存储为已过滤，不创建线程。请把消息传给 `receive`，而不是在轮询循环中静默丢弃，这样面板可以解释过滤。
 
-`observed: true` means the Source receives unaddressed messages in that scope, allowing admission-table decisions for them. `row` identifies the corresponding admission row.
+`observed: true` 表示来源在该范围内接收未对智能体说话的消息，允许对它们使用准入表决定。`row` 标识对应的准入行。
 
-Revalidation calls `scope` with the Mandate's stored metadata. Make it depend only on `meta` and configuration. Resuming requires `listened`, not `observed`. Without `scope`, a kind receives every Trigger it produces but observes none.
+重新校验会用授权中存储的元数据调用 `scope`。让它只依赖 `meta` 和配置。恢复需要 `listened`，而不是 `observed`。没有 `scope` 时，kind 接收它产生的每个触发器，但不观察任何内容。
 
-### 5. Replies: the Channel
+### 5. 回复：渠道
 
 ```ts
   channel: {
@@ -174,17 +174,17 @@ export async function sendWebhook(host: Pick<SourceContext, 'commands'>, message
 }
 ```
 
-- **Idempotent sends.** Outbox calls `SourceRegistry.send`, which invokes `channel.send`. Messages wait while the Source plugin is unloaded. A send may fail after the remote service received it, so retries must not duplicate messages. Use `message.id` as an idempotency key: `hookq` supports `--key`; GitHub stores a hidden comment marker; Feishu accepts an idempotency key.
-- **Permanent versus retryable failure.** Return `sent` on success and `gone` only when delivery is permanently impossible, such as the example's 410. A gone message is retained as dropped and never queued again; it appears in `GET sources` and on the Source page. Throw for other failures so Outbox retries after 5 seconds, doubling to 300 seconds. `CliError.code` is the code reported by the CLI output.
-- **Allowed destinations.** `allowed(address, config)` checks only the saved address and current configuration. Put every required fact in the address; for example, Feishu records whether the chat is direct. A destination no longer listened to is dropped, while a disabled Source leaves messages waiting. Without `allowed`, all addresses are permitted while the Source is enabled.
-- **Links.** `link(address, links)` returns the URL and label the panel displays through `SourceRegistry.link`.
+- **幂等发送。** Outbox 调用 `SourceRegistry.send`，后者调用 `channel.send`。来源插件未加载时消息等待。远程服务可能已收到消息但发送仍失败，因此重试绝不能重复消息。把 `message.id` 用作幂等键：`hookq` 支持 `--key`；GitHub 存储一个隐藏的评论标记；飞书接受幂等键。
+- **永久失败与可重试失败。** 成功时返回 `sent`，只在投递永久不可能时返回 `gone`，例如示例中的 410。已消失的消息保留为已丢弃，永不再次入队；它出现在 `GET sources` 和来源页面上。其他失败请抛出，Outbox 会在 5 秒后重试，翻倍至 300 秒。`CliError.code` 是 CLI 输出报告的错误码。
+- **允许的目的地。** `allowed(address, config)` 只检查已保存的地址和当前配置。把每个必需事实放进地址；例如飞书会记录对话是否为私信。不再被监听的目的地会被丢弃，而关闭的来源会让消息等待。没有 `allowed` 时，来源启用期间所有地址都允许。
+- **链接。** `link(address, links)` 返回面板通过 `SourceRegistry.link` 显示的 URL 和标签。
 
-### 6. Thread context for assessments
+### 6. 评估所需的线程上下文
 
 ```ts
   threadContext: {
     messageId: trigger => String(trigger.meta.messageId ?? ''),
-    // A queue thread is flat: its root, and the message a reply answers, are on its first page, as on GitHub.
+    // 队列线程是扁平的：其根，以及一条回复所答复的消息，都在第一页，与 GitHub 相同。
     read: async (commands, trigger, _part, cursor) => {
       const page = ThreadPageSchema.parse(JSON.parse(await commands.run('hookq', ['thread', '--conversation',
         String(trigger.meta.conversation), '--root', String(trigger.meta.root), '--json', ...(cursor ? ['--after', cursor] : [])])))
@@ -195,21 +195,21 @@ export async function sendWebhook(host: Pick<SourceContext, 'commands'>, message
   },
 ```
 
-Proactive assessment needs the conversation around a Trigger. `orchestrator_eval` reads an initial window; `orchestrator_eval_read` expands pages, the root or the parent message. Implement the optional `threadContext` interface to provide these reads:
+主动评估需要触发器周围的对话。`orchestrator_eval` 读取初始窗口；`orchestrator_eval_read` 展开页面、根或父消息。实现可选的 `threadContext` 接口以提供这些读取：
 
-- `read(commands, trigger, part, cursor, config)` returns a `ContextPart`. Its `messages` use `ContextMessage`: `{id, from, at, text}` plus applicable `bot`, `deleted`, `reply_to`, `url`, `path` and `line` fields. `next` is omitted on the last page. `body` is the content shown to the assessing Session, here the same messages. Optional `status` can describe special results such as Feishu's `chat_neighbours`. `part` is `thread`, `root` or `parent`.
-- `messageId(trigger)` finds the Trigger's own message among them.
-- `images(text)` and `image(…)` are for a kind whose messages carry images, as Feishu's do; the example leaves them out.
+- `read(commands, trigger, part, cursor, config)` 返回一个 `ContextPart`。其 `messages` 使用 `ContextMessage`：`{id, from, at, text}` 以及适用的 `bot`、`deleted`、`reply_to`、`url`、`path` 和 `line` 字段。最后一页省略 `next`。`body` 是展示给评估会话的内容，这里是相同的消息。可选的 `status` 可以描述特殊结果，例如飞书的 `chat_neighbours`。`part` 是 `thread`、`root` 或 `parent`。
+- `messageId(trigger)` 在其中找到触发器自己的消息。
+- `images(text)` 和 `image(…)` 用于消息携带图片的 kind，例如飞书；本示例省略它们。
 
-A kind without `threadContext` gives assessments no Thread context; the Trigger's own text stays readable.
+没有 `threadContext` 的 kind 不会给评估提供线程上下文；触发器自己的文本仍可读取。
 
-If messages reply to earlier messages, add `repliesTo(trigger)`. It returns the corresponding Trigger id, allowing follow-up notices and worker Inputs to show the replied-to message when stored. For example, if `hookq` supplies `reply_to` and translation stores it as `meta.replyTo`:
+如果消息回复更早的消息，请添加 `repliesTo(trigger)`。它返回对应的触发器 id，使跟进通知和执行器输入在已存储时能显示被回复的消息。例如，如果 `hookq` 提供 `reply_to`，转换把它存储为 `meta.replyTo`：
 
 ```ts
   repliesTo: trigger => typeof trigger.meta.replyTo === 'string' ? key('webhook', trigger.meta.replyTo) : undefined,
 ```
 
-### 7. Who may ask: the Source's part of the Policy
+### 7. 谁能发起工作：策略中的来源部分
 
 ```ts
   policy: {
@@ -227,13 +227,13 @@ If messages reply to earlier messages, add `repliesTo(trigger)`. It returns the 
   },
 ```
 
-- `schema` validates the Source Policy, including `allowed` sender ids. Id comparison is case-insensitive. Admission tables are validated separately and shared across kinds. This Policy part is saved at `policy.sources.webhook` and contributes to the Policy version.
-- `fields` generates the form under **Eval → On each Source**, beginning with `allowed`. `explicit` explains how to address the agent. Optional `unnamed: {person, bot}` supplies display labels for opaque ids such as Feishu's `ou_…`; this example omits it because queue ids are readable names.
-- `rows(config)` lists admission scopes and their available cells. Each row id must match the `row` returned by `scope`. Unaddressed-message cells are available only where the Source observes those messages. Kinds without `rows` use default cells.
-- Optional `bots` lists bots eligible for inferred candidacy, using the same entry shape as `allowed`. Without it, no bot is admitted.
-- Optional `sync: {label, ready(part), run(host, part, signal)}` refreshes membership at startup and on **Sync now**. Feishu uses chat membership. Failures appear under `sync:<id>` and retry after one minute, doubling to one hour until successful.
+- `schema` 校验来源策略，包括 `allowed` 发送者 id。id 比较不区分大小写。准入表单独校验，并在各 kind 之间共享。该策略部分保存在 `policy.sources.webhook`，并参与策略版本。
+- `fields` 在 **评估 → 各来源** 下生成表单，从 `allowed` 开始。`explicit` 说明如何对智能体说话。可选的 `unnamed: {person, bot}` 为不透明 id（例如飞书的 `ou_…`）提供显示标签；本示例因为队列 id 就是可读名称而省略它。
+- `rows(config)` 列出准入范围及其可用单元格。每个行 id 必须与 `scope` 返回的 `row` 匹配。未对智能体说话的消息单元格只在来源观察这些消息的地方可用。没有 `rows` 的 kind 使用默认单元格。
+- 可选的 `bots` 列出有资格成为推断候选的机器人，条目形态与 `allowed` 相同。没有它时，不接纳任何机器人。
+- 可选的 `sync: {label, ready(part), run(host, part, signal)}` 在启动时和 **立即同步** 时刷新成员关系。飞书使用群成员关系。失败显示在 `sync:<id>` 下，一分钟后重试，翻倍至一小时，直到成功。
 
-### 8. Variables for the Executor
+### 8. 执行器的变量
 
 ```ts
   environment: {
@@ -245,11 +245,11 @@ If messages reply to earlier messages, add `repliesTo(trigger)`. It returns the 
   },
 ```
 
-Execution settings show declared `variables` beside the prepare command even when the Source is disabled. While enabled, `values` supplies Ticket-specific values using deployment, configuration and the originating Trigger.
+执行设置会在准备命令旁显示已声明的 `variables`，即使来源已关闭。来源启用期间，`values` 使用部署、配置和起始触发器提供工单专属的值。
 
-The prepare command reads environment variables; the worker reads their values in its instructions. Use the `DSH_SUPERAGENT_<KIND>_…` prefix, return an empty value for Tickets from another Source, and never include credentials.
+准备命令读取环境变量；执行器在其指令中读取它们的值。使用 `DSH_SUPERAGENT_<KIND>_…` 前缀，对来自其他来源的工单返回空值，绝不要包含凭据。
 
-### 9. The plugin entry and its loop
+### 9. 插件入口及其循环
 
 ```ts
 export const name = 'dsh-superagent-webhook'
@@ -259,7 +259,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const source = sourceContext(ctx.orchestrator, webhookKind)
     const controller = new AbortController()
-    // DSH ends its process on an unhandled rejection, so a failure that escapes the loop becomes the Source's health.
+    // DSH 遇到未处理的 rejection 会结束进程，因此逃出循环的失败会成为来源的健康状态。
     const running = watch(source, controller.signal)
       .catch((error: unknown) => { source.report('webhook', { state: 'error', detail: String(error) }) })
     return async () => { controller.abort(); await running }
@@ -267,12 +267,12 @@ export function apply(ctx: Context): void {
 }
 ```
 
-The plugin injects `orchestrator`. Its first effect registers the kind and unregisters it on disposal. The second runs the polling loop with a `SourceContext`. Disposal aborts the loop and awaits completion, including during application stop or restart.
+插件注入 `orchestrator`。其第一个 effect 注册该 kind，并在销毁时取消注册。第二个用 `SourceContext` 运行轮询循环。销毁会中止循环并等待完成，包括应用停止或重启期间。
 
 ```ts
 async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
-  // Setup restarts dsh-superagent once it resolves the accounts; until then the Source reads nothing.
+  // 安装解析账号后会重启 dsh-superagent；在那之前来源不读取任何内容。
   if (!ctx.configured()) { ctx.report('webhook', health('paused', 'setupPending')); return }
   let failures = 0
   while (!signal.aborted) {
@@ -286,7 +286,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
         ctx.report('webhook', { state: 'ready', detail: `${read} messages, ${unreadable} unreadable`, at })
       } catch (error) {
         failures += 1
-        // One network failure is retried on the next round; three in a row need a person.
+        // 一次网络失败会在下一轮重试；连续三次才需要人处理。
         if (!signal.aborted && failures >= 3) {
           ctx.report('webhook', health('error', 'pollFailures', { count: String(failures), error: String(error) }))
         }
@@ -296,7 +296,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   }
 }
 
-/** Read the queue after the cursor, take in each message, then move the cursor past them. */
+/** 读取游标之后的队列，接收每条消息，然后把游标移到它们之后。 */
 export async function pollQueue(ctx: SourceContext, signal: AbortSignal): Promise<{ read: number; unreadable: number }> {
   const after = ctx.state.get(KV.webhook.cursor) ?? 0
   const output = await ctx.commands.withSignal(signal).run('hookq', ['pull', '--after', String(after), '--json'])
@@ -318,29 +318,29 @@ export async function pollQueue(ctx: SourceContext, signal: AbortSignal): Promis
 ```
 
 
-- **Setup and the switch.** Wait for `ctx.ready`, and read nothing while `ctx.configured()` is false. Read `ctx.config(kind)` on every round: it is undefined while the Source is off.
-- **Cursors.** Store read positions in `ctx.state` using typed entries in `KV` (`src/kv.ts`), such as `webhook: {cursor: record<number>('webhook-cursor')}`. `tests/store.spec.ts` requires key literals to appear only in that registry. External packages can define keys with exported `record` and `family`. Setting `undefined` removes a record; `ctx.atomic` groups writes in a transaction.
+- **安装与开关。** 等待 `ctx.ready`，在 `ctx.configured()` 为 false 时不读取任何内容。每轮都读取 `ctx.config(kind)`：来源关闭时它为 undefined。
+- **游标。** 使用 `KV`（`src/kv.ts`）中带类型的条目把读取位置存入 `ctx.state`，例如 `webhook: {cursor: record<number>('webhook-cursor')}`。`tests/store.spec.ts` 要求键字面量只出现在该注册表中。外部包可以用导出的 `record` 和 `family` 定义键。把值设为 `undefined` 会删除记录；`ctx.atomic` 把写入分组到一个事务中。
 
-  Advance a cursor only after every covered Trigger has been stored. An interrupted round leaves the cursor unchanged; stable ids make replay safe. For timestamp cursors, `cursorAt(started)` from `src/sources/poll.ts` subtracts five seconds to allow for late remote writes.
-- **Thread metadata.** After receiving a Trigger, call `ctx.threads.describe(key, {label, url, facts})` to populate its display information. `ctx.threads.patch(key, meta)` delegates to `threads.patchMeta`, setting Source-owned keys or removing them when the value is `undefined`. Both ignore absent Threads, including those of filtered Triggers.
-- **Per-item errors.** Count malformed items and continue rather than failing the entire batch. `validItems(item, list, tally)` in `src/infra/commands.ts` supports this pattern. For independently polled Threads, use `pollThreads` from `src/sources/poll.ts`; it records each failure as `pollError`. Its `polled` predicate keeps live subscriptions and a two-week window after the later of the last Trigger and Ticket end.
-- **Health.** Write only declared entries through `ctx.report`. `health(state, code, values)` provides fixed messages such as `setupPending`, `sourceOff` and `pollFailures`. Count consecutive failures before reporting `error`.
-- **Abort.** Pass the signal to `ctx.commands.withSignal(signal)` and to `delay`, and check it between items, so a stop or a restart ends the loop at once.
+  只有在覆盖的触发器全部存储后，才推进游标。被中断的一轮保持游标不变；稳定的 id 使重放安全。对于时间戳游标，`src/sources/poll.ts` 中的 `cursorAt(started)` 会减去五秒，以容纳远程写入的延迟。
+- **线程元数据。** 接收触发器后，调用 `ctx.threads.describe(key, {label, url, facts})` 填充其显示信息。`ctx.threads.patch(key, meta)` 委托给 `threads.patchMeta`，设置来源拥有的键，或在值为 `undefined` 时移除它们。两者都会忽略不存在的线程，包括已过滤触发器的线程。
+- **逐项错误。** 统计格式错误的条目并继续，而不是让整批失败。`src/infra/commands.ts` 中的 `validItems(item, list, tally)` 支持这种模式。对于独立轮询的线程，使用 `src/sources/poll.ts` 中的 `pollThreads`；它把每个失败记录为 `pollError`。其 `polled` 谓词保留存活订阅，以及最后一次触发器与工单结束两者中较晚者之后的两周窗口。
+- **健康。** 只通过 `ctx.report` 写已声明的条目。`health(state, code, values)` 提供固定消息，例如 `setupPending`、`sourceOff` 和 `pollFailures`。报告 `error` 之前先统计连续失败。
+- **中止。** 把信号传给 `ctx.commands.withSignal(signal)` 和 `delay`，并在条目之间检查它，以便停止或重启时立即结束循环。
 
-This example does not send Source-originated notices. A Source that needs them calls `ctx.notify`; Outbox delivers them like other replies.
+本示例不发送来源发起的通知。需要它们的来源调用 `ctx.notify`；Outbox 像其他回复一样投递它们。
 
-It also does not bind Threads to Ticket completion. Use `ctx.tickets.bindThread` and `threadClosed` only when a Source's Thread lifecycle determines whether work is done, as GitHub pull requests do. The Engine still decides when the Ticket ends.
+它也不把线程绑定到工单完成。只有当来源的线程生命周期决定工作是否完成时（例如 GitHub 拉取请求），才使用 `ctx.tickets.bindThread` 和 `threadClosed`。工单何时结束仍由 Engine 决定。
 
-### 10. Register the plugin
+### 10. 注册插件
 
-Build the module as its own entry in `tsdown.config.ts`:
+把模块作为其在 `tsdown.config.ts` 中的独立入口构建：
 
 ```ts
 entry: { index: 'src/index.ts', 'github-watch': 'src/sources/github.ts', 'feishu-watch': 'src/sources/feishu.ts',
   'webhook-watch': 'src/sources/webhook.ts' },
 ```
 
-Then export the built file in `package.json` by adding `"./webhook-watch": "./lib/webhook-watch.js"` to `exports`, and add the plugin to the `insert` list of the bundle's `cordis.patch.yml`, disabled, as Feishu is:
+然后在 `package.json` 中把构建产物加入 `exports`：添加 `"./webhook-watch": "./lib/webhook-watch.js"`，并把插件加入插件包 `cordis.patch.yml` 的 `insert` 列表，像飞书一样设为禁用：
 
 ```yaml
     - id: dsh-superagent-webhook
@@ -348,15 +348,15 @@ Then export the built file in `package.json` by adding `"./webhook-watch": "./li
       disabled: true
 ```
 
-Enable the plugin in a profile's `cordis.patch.yml` with `id: dsh-superagent-webhook` and `disabled: false`. Build and restart. The new Source appears in Sources settings and under **Eval → On each Source**.
+在 profile 的 `cordis.patch.yml` 中用 `id: dsh-superagent-webhook` 和 `disabled: false` 启用插件。构建并重启。新来源会出现在来源设置中，以及 **评估 → 各来源** 下。
 
-Add its module and spec to the module and test tables in [007 Architecture](007-architecture.md). `tests/docs.spec.ts` checks that both indexes are complete.
+把其模块和测试规格加入 [007 架构](007-architecture.md) 的模块表和测试表。`tests/docs.spec.ts` 会检查两个索引是否完整。
 
-### 11. Tests
+### 11. 测试
 
-Create `tests/webhook.spec.ts` using the pattern in `tests/sources.spec.ts`: a real Store in a temporary directory, a `SourceRegistry` with `HealthBoard`, an Engine with stand-in ports, and a `SourceContext` from `sourceContextOf`.
+按照 `tests/sources.spec.ts` 的模式创建 `tests/webhook.spec.ts`：临时目录中的真实 Store、带 `HealthBoard` 的 `SourceRegistry`、带替身端口的 Engine，以及由 `sourceContextOf` 得到的 `SourceContext`。
 
-Mock CLI calls by spying on `Commands.run`. Also spy on `withSignal`, because it normally returns a new `Commands` instance.
+通过监视 `Commands.run` 模拟 CLI 调用。还要监视 `withSignal`，因为它通常返回新的 `Commands` 实例。
 
 ```ts
 function host(overrides: Partial<SourceContextDeps> = {}) {
@@ -365,7 +365,7 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
     sources: { webhook: { enabled: true, config: { conversations: [{ id: 'ops', listen: 'mentions' }] } } },
     policy: { sources: { webhook: { allowed: [{ id: 'alice' }] } } },
   }))
-  // The registry claims the kind's health entries on the board, where the test reads them.
+  // registry 在 board 上认领该 kind 的健康条目，测试从这里读取它们。
   const board = new HealthBoard()
   const sources = new SourceRegistry(() => store.settings(), board)
   sources.register(webhookKind)
@@ -374,12 +374,12 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
     outbox: { send: vi.fn(), status: () => undefined, withdraw: vi.fn() } })
   const commands = new Commands(() => testDeployment(), {}, new AbortController().signal)
   const receive = vi.fn((trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
-  // The Source's own notices go to the outbox, which keeps their receipts and sends nothing here.
+  // 来源自己的通知进入 outbox，后者保留其回执，在这里不发送任何内容。
   const deps: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources,
     deployment: testDeployment(), ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   return { ...deps, store, engine, commands, receive, health: board.all, ctx: sourceContextOf(deps, webhookKind) }
 }
-/** The queue as `hookq` answers it. */
+/** `hookq` 答复的队列内容。 */
 function queue(h: ReturnType<typeof host>, answer: () => unknown) {
   vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
   return vi.spyOn(h.commands, 'run').mockImplementation(async () => JSON.stringify(answer()))
@@ -392,7 +392,7 @@ it('takes in what the queue holds after the cursor, once, and moves the cursor a
   expect(await h.receive.mock.results[0]!.value).toBe('stored')
   expect(await h.receive.mock.results[1]!.value).toBe('filtered')
   expect(h.store.get(KV.webhook.cursor)).toBe(3)
-  // An allowed sender who mentions the agent makes an explicit request.
+  // 名单上的发送者 @ 智能体，构成明确请求。
   expect(h.engine.candidate(key('webhook', 'm1'))?.strength).toBe('explicit')
   await pollQueue(h.ctx, new AbortController().signal)
   expect(await h.receive.mock.results[2]!.value).toBe('duplicate')
@@ -400,26 +400,26 @@ it('takes in what the queue holds after the cursor, once, and moves the cursor a
 })
 ```
 
-`message(id, fields)` builds a queue item. Cover at least:
+`message(id, fields)` 构造一个队列条目。至少覆盖：
 
-- the translation: a stable id, the Thread, the actor, `human` and `addressed`, and no Trigger for the agent's own message;
-- a round: Triggers stored once, one outside the scope `filtered`, the cursor moved after them, an allowed sender's mention evaluated as `explicit`;
-- a round cut short, which keeps its cursor;
-- `send`: `sent`, `gone` for a 410 only, and a throw for any other failure, with the CLI's error built by `commandError`;
-- the Thread context: the messages of a page and the cursor of the next, as `tests/registry.spec.ts` reads a kind's Threads through `SourceRegistry.threadContext`;
-- the plugin: `apply` registers the kind and reports `setupPending` while setup waits, its disposers unregister the kind, and a failure that escapes the loop becomes the Source's health instead of an unhandled rejection;
-- the Source's part of the Policy and its admission rows, as `tests/registry.spec.ts` and `tests/policy.spec.ts` check the Feishu Source's.
+- 转换：稳定的 id、线程、行动者、`human` 和 `addressed`，以及智能体自己的消息不产生触发器；
+- 一轮：触发器只存储一次，一个范围之外的被 `filtered`，游标移到它们之后，名单上发送者的 @ 被评估为 `explicit`；
+- 被提前中断的一轮，其游标保持不变；
+- `send`：`sent`、只在 410 时返回 `gone`，其他任何失败都抛出，CLI 的错误由 `commandError` 构造；
+- 线程上下文：一页的消息和下一页的游标，如同 `tests/registry.spec.ts` 通过 `SourceRegistry.threadContext` 读取某个 kind 的线程；
+- 插件：`apply` 注册该 kind，并在安装等待期间报告 `setupPending`，其销毁函数取消注册该 kind，逃出循环的失败成为来源的健康状态而不是未处理的 rejection；
+- 策略中的来源部分及其准入行，如同 `tests/registry.spec.ts` 和 `tests/policy.spec.ts` 检查飞书来源那样。
 
-### Checklist
+### 检查清单
 
-1. Map Triggers, Threads, actors, Channel addresses and receiving scopes.
-2. Write the kind: `schema`, `fields`, `health`, and `facts` if setup derives any.
-3. Translate events into Triggers with stable ids, and drop the agent's own.
-4. Decide what the Source receives in `scope`, from `meta` alone.
-5. Give it a Channel whose `send` posts each message once and answers `gone` only when the conversation can never receive it.
-6. Give assessments its Thread context, if it can read a Thread.
-7. Give it a part of the Policy with `allowed` and the admission rows.
-8. Register its execution environment variables.
-9. Write the plugin entry and a loop that waits for setup, follows the switch, moves cursors after `receive`, keeps errors per item, reports health and stops on abort; name the cursors in `KV`.
-10. Add the build entry, the export and the `cordis.patch.yml` insert, and list the module and its spec in the tables of 007.
-11. Test it as `tests/sources.spec.ts` tests the other Sources.
+1. 映射触发器、线程、行动者、渠道地址和接收范围。
+2. 编写 kind：`schema`、`fields`、`health`，以及安装会派生值时所需的 `facts`。
+3. 用稳定的 id 把事件转换为触发器，并丢弃智能体自己的消息。
+4. 在 `scope` 中仅依据 `meta` 决定来源接收什么。
+5. 提供渠道，其 `send` 对每条消息只发布一次，并且只在对话永远无法接收时答复 `gone`。
+6. 如果来源能读取线程，为评估提供其线程上下文。
+7. 提供策略中的来源部分，含 `allowed` 和准入行。
+8. 注册其执行环境变量。
+9. 编写插件入口和循环：等待安装、跟随开关、在 `receive` 之后移动游标、逐项保留错误、报告健康并在中止时停止；在 `KV` 中命名游标。
+10. 添加构建入口、导出和 `cordis.patch.yml` 插入项，并在 007 的表格中列出该模块及其测试规格。
+11. 像 `tests/sources.spec.ts` 测试其他来源那样测试它。

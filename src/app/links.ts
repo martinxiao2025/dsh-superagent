@@ -1,4 +1,4 @@
-/** Source message link resolution and candidate card assembly for the main Session. */
+/** 为主会话解析来源消息链接并组装候选卡片。 */
 import type { Candidate, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { readFeishuLink } from '../sources/feishu-read.ts'
@@ -17,7 +17,7 @@ export interface LinkHost {
   readonly lifetime: AbortSignal
 }
 
-/** Resolves and caches a trigger's external message URL, falling back to a readable resource path when lookup fails. */
+/** 解析并缓存触发器的外部消息 URL，查找失败时回退到可读资源路径。 */
 export async function sourceLink(host: LinkHost, trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }> {
   if (trigger.url) return { source_url: trigger.url }
   const ref = feishuRef(trigger)
@@ -32,7 +32,7 @@ export async function sourceLink(host: LinkHost, trigger: Trigger, signal?: Abor
   } catch {
     host.lifetime.throwIfAborted()
     signal?.throwIfAborted()
-    // Optional link enrichment may fail independently of the retained source message.
+    // 可选的链接补全可能独立于已保留的来源消息而失败。
     return { source_url_read: `feishu/${trigger.id}/message` }
   }
   host.links.set(cacheKey, url)
@@ -44,23 +44,23 @@ export function repliedTo({ store, sources }: { store: Pick<Store, 'triggers'>; 
   const parent = sources.repliesTo(trigger)
   return parent === undefined ? undefined : store.triggers.get(parent)
 }
-/** Finds tickets subscribed to threads referenced in `trigger.text` (such as `#12` or URLs) that are not already in `known`. */
+/** 查找订阅了 `trigger.text` 中引用的线程（如 `#12` 或 URL）且尚未包含在 `known` 中的工单。 */
 function referencedTickets(host: LinkHost, trigger: Trigger, known: readonly Ticket[]): Ticket[] {
   const threads = (trigger.text.match(/#\d+|https?:\/\/[^\s)>\]]+/g) ?? []).flatMap(reference => host.sources.find(reference).threads)
   const ids = new Set(threads.flatMap(thread => host.store.threads.get(thread)?.subscriptions ?? []))
   for (const ticket of known) ids.delete(ticket.id)
   return [...ids].flatMap(id => host.store.tickets.get(id) ?? []).slice(0, 4)
 }
-/** Builds the main Session's candidate card with routing metadata, handback history, and related or referenced tickets. */
+/** 构建主会话的候选卡片，包含路由元数据、交还历史和关联或被引用的工单。 */
 export async function candidateCard(host: LinkHost, candidate: Candidate) {
   const primary = candidate.triggers.at(-1)!
   const settings = host.store.settings()
   const delivered = host.store.triggers.disposition(primary.id)?.fanout ?? []
   const referenced = referencedTickets(host, primary, candidate.tickets)
-  // Triggers that a worker Session handed back as outside its ticket's scope, with the worker's reason.
+  // 执行器会话以超出工单范围为由交还的触发器，附带执行器给出的原因。
   const handedBack = candidate.triggers.flatMap(trigger => (host.store.triggers.disposition(trigger.id)?.handbacks ?? [])
     .map(item => ({ trigger_id: trigger.id, ticket_id: item.ticketId, reason: item.reason })))
-  // Format the primary trigger like a worker input (including the message it replies to) and summarize earlier batch triggers as cards.
+  // 像执行器输入一样格式化主触发器（包括它所回复的消息），并把较早的批量触发器汇总为卡片。
   const others = candidate.triggers.filter(trigger => trigger.id !== primary.id)
   return { ...triggerMessage(primary, await sourceLink(host, primary), undefined, repliedTo(host, primary)), strength: candidate.strength,
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},

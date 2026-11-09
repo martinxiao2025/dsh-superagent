@@ -30,7 +30,7 @@ it('finds triggers by thread', () => {
   store.triggers.save({ id: 'c', source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_y_x' }], actor: { source: 'feishu', id: 'u' }, human: true, at: '3', text: 'other', meta: {} })
   expect(store.read.threadTriggers('feishu:oc_1:om_%_x').map(trigger => trigger.id)).toEqual(['b', 'a'])
   expect(store.read.threadTriggers('github:3').map(trigger => trigger.id)).toEqual(['b'])
-  // Saving a Trigger again replaces the Threads it is found on.
+  // 再次保存触发器会替换它所在的线程。
   store.triggers.save({ ...store.triggers.get('b')!, threads: [{ source: 'github', id: '3' }] })
   expect(store.read.threadTriggers('feishu:oc_1:om_%_x').map(trigger => trigger.id)).toEqual(['a'])
   expect(store.read.threadTriggers('github:3').map(trigger => trigger.id)).toEqual(['b'])
@@ -49,9 +49,9 @@ it('reads the working sets alone, in SQLite as in memory, and follows each save'
   const store = new Store(join(directory, 'orchestrator.sqlite'))
   for (const repo of [store, new MemoryRepositories()] as Repositories[]) {
     repo.tickets.save(ticket('running', 'open', [{ state: 'running' }]))
-    // A retry or a resume adds a pending Assignment after the ones that ended.
+    // 重试或恢复会在已结束的派工之后添加一个待处理派工。
     repo.tickets.save(ticket('queued', 'open', [{ state: 'ended' }, { state: 'pending' }]))
-    // An ended Ticket a person's message reached without resuming it, which versions before schema 11 left to their next pass.
+    // 一条人的消息到达了已结束的工单但没有恢复它，schema 11 之前的版本会把它留到下一轮。
     repo.tickets.save(ticket('waking', 'ended', [{ state: 'ended' }], ['input']))
     repo.tickets.save(ticket('done', 'ended', [{ state: 'ended' }]))
     repo.threads.save(thread('1', 'github', { pending: ['a'] }))
@@ -133,7 +133,7 @@ it('sets and removes a Source\'s keys in a Thread\'s meta', () => {
 it('spells every kv key in KV alone, so each record is named by its entry there', () => {
   const src = join(dirname(fileURLToPath(import.meta.url)), '..', 'src')
   const entries = Object.values(KV).flatMap(group => Object.values(group) as (string | { prefix: string })[])
-  // Ignore single-word keys that collide with unrelated string literals.
+  // 忽略与无关字符串字面量冲突的单词键。
   const keys = entries.map(entry => typeof entry === 'string' ? entry : entry.prefix).filter(name => /[-:]/.test(name))
   const modules = readdirSync(src, { recursive: true, encoding: 'utf8' })
     .filter(path => /\.tsx?$/.test(path) && !['kv.ts', join('app', 'migration.ts')].includes(path))
@@ -151,7 +151,7 @@ it('runs what waits for a commit once the outermost transaction commits, and nev
     store.afterCommit(() => { ran.push('outer') })
     store.atomic(() => { store.afterCommit(() => { ran.push('inner') }) })
     expect(() => store.atomic(() => { store.afterCommit(() => { ran.push('rolled back') }); throw new Error('boom') })).toThrow('boom')
-    // Nothing runs before the outermost transaction commits.
+    // 最外层事务提交前不会运行任何内容。
     expect(ran).toEqual([])
   })
   expect(ran).toEqual(['outer', 'inner'])
@@ -211,7 +211,7 @@ it('replaces a working-set column an earlier build defined otherwise, and drops 
   db.prepare('INSERT INTO ticket (id, value) VALUES (?,?)').run('t', JSON.stringify(ticket('t', 'open', [{ state: 'running' }])))
   db.close()
   const store = new Store(path)
-  // The open set reads the ticket's end now.
+  // 开放集合现在读取工单的结束状态。
   expect(ids(store.tickets.open())).toEqual(['t'])
   expect(store.db.prepare("SELECT name FROM pragma_table_xinfo('ticket') WHERE name = 'ref'").all()).toEqual([])
   store.close()
@@ -226,12 +226,12 @@ it('lists in the same order in SQLite and in memory, and undoes a failed nested 
     repo.tickets.save(ticket('first', 'open', [{ state: 'running' }]))
     repo.tickets.save(ticket('second', 'ended', [{ state: 'ended' }]))
     repo.tickets.save(ticket('third', 'open', [{ state: 'pending' }]))
-    // Saving a ticket again keeps its place.
+    // 再次保存工单会保持其位置。
     repo.tickets.save({ ...repo.tickets.get('first')!, title: 'again' })
     repo.threads.save(thread('1', 'github', { pending: ['a'] })); repo.threads.save(thread('2', 'github')); repo.threads.save(thread('3', 'github', { pending: ['b'] }))
     repo.decisions.save(decision('d2'))
     repo.decisions.save(decision('d1'))
-    // A failed nested transaction undoes its own writes; the one around it goes on and keeps its own.
+    // 失败的嵌套事务会撤销自己的写入；外层事务继续并保留自己的写入。
     repo.atomic(() => {
       repo.tickets.save(ticket('outer', 'open', []))
       expect(() => repo.atomic(() => { repo.tickets.save(ticket('inner', 'open', [])); throw new Error('boom') })).toThrow('boom')
@@ -249,7 +249,7 @@ it('lists in the same order in SQLite and in memory, and undoes a failed nested 
 it('creates the state directory for its owner alone, and the database readable by its owner alone', () => {
   const path = join(directory, 'state', 'orchestrator.sqlite')
   new Store(path).close()
-  // Windows has no POSIX permission bits (mode reads 0o777/0o666 there); access follows the profile's ACL instead.
+  // Windows 没有 POSIX 权限位（那里 mode 读作 0o777/0o666）；访问权限遵循配置文件的 ACL。
   if (process.platform === 'win32') {
     expect([statSync(dirname(path)).isDirectory(), statSync(path).isFile()]).toEqual([true, true])
     return

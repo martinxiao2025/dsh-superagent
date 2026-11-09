@@ -1,39 +1,39 @@
 # dsh-superagent
 
-> **Research prototype for reference only, not an official DeepSeek product.** This code grew out of our team's day-to-day development work, with much of the engineering done by coding agents. Treat it as research code, not production-ready software. It may still contain bugs, and its coding style and engineering practices may be inconsistent. Review and adapt it before using it in your own environment.
+> **仅供研究参考的原型，不是 DeepSeek 官方产品。** 这份代码源自我们团队的日常开发工作，其中有大量工程由编码智能体完成。请把它当作研究代码，而不是可投产的软件。它可能仍有缺陷，编码风格和工程实践也可能不一致。在你自己的环境中使用之前，请先审阅并调整。
 >
-> We have adapted it for publication, so it is not identical to our internal version or the implementation described in *Exploring Super-agent Design: Towards a More Autonomous Agent System*. Some designs discussed in the article are directions for future development and are not implemented in this prototype.
+> 我们为公开发布做了适配，因此它与我们的内部版本、以及《Exploring Super-agent Design: Towards a More Autonomous Agent System》中描述的实现并不完全相同。文中讨论的某些设计属于未来发展方向，并未在本原型中实现。
 
-dsh-superagent is a proactive coding agent for one GitHub repository, packaged as a bundle for [DeepSeek Harness](https://www.deepseek.com/en/harness/). It listens to GitHub and, optionally, Feishu. When someone allowed asks the agent for work, it opens a work item, works on it in its own agent session and directory, and answers in the original conversation, for example with a pull request. A web panel shows what needs a person.
+dsh-superagent 是面向单个 GitHub 仓库的主动式编码智能体，可同时接入一个 GitLab 项目，以 [DeepSeek Harness](https://www.deepseek.com/en/harness/) 的插件包形式提供。它监听 GitHub（可选 GitLab），并可选监听飞书。当获得许可的人在对话中向智能体提出工作时，它会开一个工单，在各自的智能体会话和目录中处理，并在原对话中答复，例如给出一个拉取请求。Web 面板展示需要人处理的事项。
 
-It is also a way of working with an agent: **take as little human attention as possible, and give as much value as possible.** An agent that can act for a whole team can also waste a whole team's attention, so it acts only when asked or when a rule the team wrote allows it, and speaks only when someone must act or can use a result. [docs/000-philosophy.md](docs/000-philosophy.md) explains the principle and what it asks of the operator.
+它也是一种与智能体协作的方式：**尽可能少占用人的注意力，尽可能多地提供价值。** 能为整个团队行动的智能体，也可能浪费整个团队的注意力，因此它只在被请求时、或在团队写下的规则允许时行动，并且只在有人必须行动或能用到结果时才发言。[docs/000-philosophy.md](docs/000-philosophy.md) 解释了这一原则以及它对操作者的要求。
 
-## Setup
+## 安装
 
-Setup has many steps, so an agent does it with you. Ask your coding agent:
+安装步骤较多，因此由智能体与你一起完成。对你的编码智能体说：
 
-> Read SETUP.md in this repository and set up dsh-superagent with me.
+> 阅读本仓库中的 SETUP.md，和我一起安装 dsh-superagent。
 
-It asks one short question at a time, shows the full plan once, and then installs and configures everything. [SETUP.md](SETUP.md) is what it follows.
+它会一次只问一个简短的问题，最后完整展示一遍计划，然后安装并配置所有内容。它遵循的就是 [SETUP.md](SETUP.md)。
 
-## Documentation
+## 文档
 
-Read the numbered documents in order; each builds only on the ones before it.
+按顺序阅读编号文档；每篇只依赖它之前的文档。
 
-- [000 Philosophy](docs/000-philosophy.md)
-- [001 Domain model](docs/001-domain.md)
-- [002 Authorization](docs/002-authorization.md)
-- [003 Execution](docs/003-execution.md)
-- [004 Prompts](docs/004-prompts.md)
-- [005 Panel](docs/005-panel.md)
-- [006 Deployment](docs/006-deployment.md): manual setup, configuration, upgrades and troubleshooting
-- [007 Architecture](docs/007-architecture.md)
-- [008 Cookbook](docs/008-cookbook.md): adding a Source
+- [000 理念](docs/000-philosophy.md)
+- [001 领域模型](docs/001-domain.md)
+- [002 授权](docs/002-authorization.md)
+- [003 执行](docs/003-execution.md)
+- [004 提示词](docs/004-prompts.md)
+- [005 面板](docs/005-panel.md)
+- [006 部署](docs/006-deployment.md)：手动安装、配置、升级与故障排查
+- [007 架构](docs/007-architecture.md)
+- [008 操作手册](docs/008-cookbook.md)：新增一个来源
 
-## Development
+## 开发
 
-`pnpm check` runs the typecheck, the tests and the build.
+`pnpm check` 运行类型检查、测试和构建。
 
-## License
+## 许可证
 
 [MIT](LICENSE)

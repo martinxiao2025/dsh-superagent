@@ -1,8 +1,8 @@
-/* Panel layout and local UI controls styled with DSH `--dsw-alias-*` design tokens; one rule per line. */
+/* 面板布局与本地 UI 控件，使用 DSH 的 `--dsw-alias-*` 设计令牌设置样式；每条规则一行。 */
 .dt-page { box-sizing: border-box; height: 100%; overflow: auto; scrollbar-gutter: stable; scroll-padding: 48px 0 72px; container-type: inline-size; padding: 28px clamp(24px, 4vw, 48px) 0; color: var(--dsw-alias-label-primary); }
-/* Deployment page rendered inside DSH Plugin Manager, which owns scrolling and padding. */
+/* 部署页面渲染在 DSH 插件管理器内，滚动和内边距由宿主管理。 */
 .dt-embedded { container-type: inline-size; color: var(--dsw-alias-label-primary); }
-/* Disable sticky positioning inside DSH Plugin Manager, where the host container owns scrolling and bottom padding. */
+/* 在 DSH 插件管理器内禁用粘性定位，因为滚动和底部内边距由宿主容器管理。 */
 .dt-embedded .dt-savebar { position: static; }
 .dt-page > .dt-column { max-width: 960px; margin: 0 auto; padding-bottom: 48px; display: flex; flex-direction: column; gap: 24px; }
 .dt-head { position: relative; z-index: 3; display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
@@ -38,7 +38,7 @@
 .dt-row-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-caption); overflow-wrap: anywhere; }
 .dt-row-quote { font-size: 13px; line-height: 20px; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dt-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-/* Transparent block borders preserve vertical spacing when line clamping clips padding. */
+/* 透明的块边框在行截断裁掉内边距时保持垂直间距。 */
 .dt-banner:is(.dt-clamp, .dt-clamp-8) { padding-block: 0; border-block: 8px solid transparent; }
 .dt-banner-label { font-weight: 500; }
 .dt-banner .dt-md { display: inline; }
@@ -183,7 +183,7 @@ div.dt-preview-head { color: var(--dsw-alias-label-secondary); }
   .dt-search { width: 100%; }
   .dt-filters .dt-search { margin-left: 0; }
 }
-/* Local UI primitive styles (see controls.tsx). */
+/* 本地 UI 基础组件样式（见 controls.tsx）。 */
 .dt-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; border: none; border-radius: 18px; cursor: pointer; font: inherit; font-size: 14px; line-height: 22px; color: var(--dsw-alias-label-primary); background: transparent; padding: 0 14px; white-space: nowrap; }
 .dt-btn:disabled { cursor: not-allowed; opacity: 0.4; }
 .dt-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
@@ -331,7 +331,7 @@ div.dt-preview-head { color: var(--dsw-alias-label-secondary); }
 .dt-ticket-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--dsw-alias-label-primary); }
 .dt-ticket-note-error { color: var(--dsw-alias-state-error-primary); }
 .dt-ticket-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 8px; min-height: 30px; margin-top: 2px; }
-/* Pass pointer events through action containers to the row link, keeping only child controls interactive. */
+/* 让指针事件穿透操作容器到达行链接，仅保留子控件可交互。 */
 .dt-ticket-actions, .dt-row-buttons, .dt-row-actions { pointer-events: none; }
 .dt-ticket-actions > *, .dt-row-buttons > *, .dt-row-actions > * { pointer-events: auto; }
 .dt-line { min-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
