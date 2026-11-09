@@ -10,11 +10,13 @@ import { branchCiTrigger, ciTrigger, commentTrigger, CommentSchema, githubAddres
 import { githubLink, sendGithub } from './github-channel.ts'
 import type { GithubComment, PullRef } from './github-trigger.ts'
 import { observePull, pullsOf, readPull, type Pull } from './github-pull.ts'
-import { health, sourceContext, type Health, type SourceContext } from './host.ts'
+import { health, sourceContext, type SourceContext } from './host.ts'
 import { KV } from '../kv.ts'
-import { cursorAt, pause, POLL_HORIZON_MS, pollThreads as pollEach } from './poll.ts'
+import { cursorAt, pause, POLL_HORIZON_MS, pollFailure, pollThreads as pollEach } from './poll.ts'
 import type { Localized, SourceKind } from './kind.ts'
+import { forgePolicy, forgeScope } from './forge.ts'
 import { z } from 'zod'
+export { pollFailure } from './poll.ts'
 
 export { commentTrigger, type GithubComment } from './github-trigger.ts'
 /** A notification of the agent account; `subject.url` is the API address of its Issue or PR. */
@@ -28,13 +30,6 @@ const GithubConfigSchema = GithubAccountsSchema.extend({ pollSeconds: z.number()
   observeCi: z.boolean().default(false) }).strict()
 export type GithubConfig = z.infer<typeof GithubConfigSchema>
 const OBSERVED = { issues: 'observeIssues', pulls: 'observePulls', comments: 'observeComments', ci: 'observeCi' } as const
-type Scope = keyof typeof OBSERVED
-function scopeOf(meta: Record<string, unknown>): Scope | undefined {
-  if (meta.ci === true) return typeof meta.branch === 'string' ? 'ci' : undefined
-  if (meta.kind === 'issue') return 'issues'
-  if (meta.kind === 'pull') return 'pulls'
-  return meta.kind === 'conversation' || meta.kind === 'inline' || meta.kind === 'review' ? 'comments' : undefined
-}
 export const githubKind: SourceKind<GithubConfig> = {
   kind: SOURCE,
   title: { zh: 'GitHub', en: 'GitHub' },
@@ -56,10 +51,7 @@ export const githubKind: SourceKind<GithubConfig> = {
     { key: 'observeCi', type: 'switch', label: { zh: '接收默认分支的 CI', en: 'Receive the default branch\'s CI' },
       hint: { zh: '打开后，默认分支的 CI 失败和恢复会收到，由策略的接收表决定是否成为候选。', en: 'Failures of the default branch\'s CI, and its recovery, are received, and the Policy\'s admission table decides whether they become candidates.' } }],
   // What the Source observes across the repository it receives in full; elsewhere, only what addresses the agent.
-  scope: ({ meta }, config) => {
-    const row = scopeOf(meta)
-    return { listened: true, observed: row !== undefined && config[OBSERVED[row]], ...row ? { row } : {} }
-  },
+  scope: ({ meta }, config) => forgeScope(meta, config, OBSERVED),
   health: ['github'],
   channel: { send: sendGithub, link: githubLink },
   threadContext: githubThreadContext,
@@ -68,27 +60,25 @@ export const githubKind: SourceKind<GithubConfig> = {
     const number = (/^#?(\d+)$/.exec(query.trim()) ?? /github\.com\/[^/]+\/[^/]+\/(?:pull|issues)\/(\d+)/.exec(query))?.[1]
     return { threads: number ? [`${SOURCE}:${number}`] : [], terms: [] }
   },
-  policy: {
-    schema: z.object({ allowed: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9-]+$/) }).strict()).default([]),
-      bots: z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9-]+(\[bot\])?$/) }).strict()).optional() }).strict(),
-    fields: [{ key: 'allowed', type: 'rows', label: { zh: '能发起工作的 GitHub 账号', en: 'GitHub accounts that may originate work' },
-      columns: [{ key: 'id', type: 'text', label: { zh: '账号', en: 'Account' }, pattern: '[A-Za-z0-9\\-]+' }] },
-    { key: 'bots', type: 'rows', label: { zh: '评论可以成为候选的机器人', en: 'Bots whose comments may become candidates' },
-      hint: { zh: '名单里的机器人账号（例如 dependabot[bot]）的评论在来源收到时成为推断的候选，交给评估：评论 @ 了智能体，或者打开了“接收仓库里的评论”。它们不能发起明确的请求，也不能停止工单；其他机器人的评论不接收。', en: 'A comment of a bot account on this list, such as dependabot[bot], becomes an inferred candidate for an assessment when the Source receives it: when it mentions the agent, or with Receive comments in the repository on. Such a comment never makes an explicit request or stops a ticket; other bots\' comments are not admitted.' },
-      columns: [{ key: 'id', type: 'text', label: { zh: '账号', en: 'Account' }, pattern: '[A-Za-z0-9\\-]+(\\[bot\\])?' }] }],
+  policy: forgePolicy({
+    config: GithubConfigSchema,
+    observed: OBSERVED,
+    allowed: { zh: '能发起工作的 GitHub 账号', en: 'GitHub accounts that may originate work' },
+    allowedColumn: { zh: '账号', en: 'Account' },
+    accountPattern: /^[A-Za-z0-9-]+$/,
+    accountInput: '[A-Za-z0-9\\-]+',
+    bots: { zh: '评论可以成为候选的机器人', en: 'Bots whose comments may become candidates' },
+    botsHint: { zh: '名单里的机器人账号（例如 dependabot[bot]）的评论在来源收到时成为推断的候选，交给评估：评论 @ 了智能体，或者打开了“接收仓库里的评论”。它们不能发起明确的请求，也不能停止工单；其他机器人的评论不接收。', en: 'A comment of a bot account on this list, such as dependabot[bot], becomes an inferred candidate for an assessment when the Source receives it: when it mentions the agent, or with Receive comments in the repository on. Such a comment never makes an explicit request or stops a ticket; other bots\' comments are not admitted.' },
+    botColumn: { zh: '账号', en: 'Account' },
+    botPattern: /^[A-Za-z0-9-]+(\[bot\])?$/,
+    botInput: '[A-Za-z0-9\\-]+(\\[bot\\])?',
     explicit: { zh: '名单里的账号在 Issue 或评论里 @ 智能体的账号。', en: 'An account on the list mentions the agent\'s account in an Issue or a comment.' },
-    rows(stored) {
-      const config = GithubConfigSchema.partial().parse(stored)
-      const note = (observed: boolean | undefined) => observed ? { zh: '全部', en: 'All' } : { zh: '仅 @', en: '@ only' }
-      const row = (id: Scope, label: { zh: string; en: string }) => ({ id, label, note: note(config[OBSERVED[id]]),
-        cells: { listedUnaddressed: !!config[OBSERVED[id]], unlistedAddressed: true, unlistedUnaddressed: !!config[OBSERVED[id]] } })
-      return [row('issues', { zh: '新 Issue', en: 'New Issues' }), row('pulls', { zh: '新 PR', en: 'New pull requests' }),
-        row('comments', { zh: '评论', en: 'Comments' }),
-        // CI has no sender, so only the cell of a sender off the list who does not address the agent applies.
-        { id: 'ci', label: { zh: '默认分支的 CI', en: 'Default branch CI' }, note: config.observeCi ? { zh: '接收', en: 'Received' } : { zh: '不接收', en: 'Not received' },
-          cells: { listedUnaddressed: false, unlistedAddressed: false, unlistedUnaddressed: !!config.observeCi } }]
-    },
-  },
+    issues: { zh: '新 Issue', en: 'New Issues' },
+    pulls: { zh: '新 PR', en: 'New pull requests' },
+    comments: { zh: '评论', en: 'Comments' },
+    ci: { key: 'observeCi', label: { zh: '默认分支的 CI', en: 'Default branch CI' },
+      received: { zh: '接收', en: 'Received' }, notReceived: { zh: '不接收', en: 'Not received' } },
+  }),
   environment: {
     variables: [
       { key: 'DSH_SUPERAGENT_GITHUB_REPOSITORY', description: { zh: '这个来源监听的仓库，owner/name。智能体在这里开的 PR，分支最后一段是 DSH_SUPERAGENT_NAME 时（例如 agent/$DSH_SUPERAGENT_NAME）会关联到工单', en: 'The repository this Source watches, as owner/name. A PR the agent opens here from a branch whose last path segment is DSH_SUPERAGENT_NAME (for example agent/$DSH_SUPERAGENT_NAME) binds to the ticket' } },
@@ -119,10 +109,6 @@ export function apply(ctx: Context): void {
       .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
     return async () => { controller.abort(); await running }
   })
-}
-/** Returns an error health once `failures` consecutive polls fail, or undefined so a single network interruption stays quiet. */
-export function pollFailure(failures: number, threshold: number, error: unknown): Health | undefined {
-  return failures >= threshold ? health('error', 'pollFailures', { count: String(failures), error: String(error) }) : undefined
 }
 async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   let interval = 60

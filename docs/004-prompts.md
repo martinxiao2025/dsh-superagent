@@ -24,7 +24,7 @@ Overrides use these keys:
 | Shared instructions and roles | `runtime/shared`, `runtime/orchestrator`, `runtime/worker` |
 | Working instructions | `runtime/subscriptions`, `runtime/replies`, `runtime/dispatch`, `runtime/work`, `runtime/admission` |
 | Handoff instructions | `runtime/handoff/orchestrator`, `runtime/handoff/worker` |
-| Source skills | `skill/feishu`, `skill/github` |
+| Source skills | `skill/feishu`, `skill/github`, `skill/gitlab` |
 | Generated sections | `runtime/environment`, `runtime/policy`, `runtime/policy/none` |
 
 The generated sections are editable templates. They must retain these placeholders:

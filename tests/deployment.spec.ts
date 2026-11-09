@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, resolveGitlab, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 import { programSource, runProgram } from './fixtures/program.ts'
 
@@ -130,5 +130,41 @@ if (args === 'api GET /open-apis/bot/v3/info --as bot --format ndjson') {
 }
 return 1`)
     expect(await resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).toEqual({ cli: larkCli, appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' })
+  })
+})
+
+describe('gitlab setup', () => {
+  const project = 'group/sub/widgets'
+  const user = '{"id":7,"username":"Agent-Bot"}'
+  const payload = (access: number | null = 30, group: number | null = null, path = project): string => JSON.stringify({ id: 42,
+    path_with_namespace: path, namespace: { path: 'group/sub' },
+    permissions: { project_access: access === null ? null : { access_level: access }, group_access: group === null ? null : { access_level: group } } })
+  /** Fake glab: reports the signed-in user and one project payload, like `glab api user` and `glab api projects/<encoded>`. */
+  const glab = (name: string, userJson = user, projectJson = payload()): string => program(name, `const args = argv.join(' ')
+if (args === 'api user') { console.log(${JSON.stringify(userJson)}); return 0 }
+if (args === 'api projects/group%2Fsub%2Fwidgets') { console.log(${JSON.stringify(projectJson)}); return 0 }
+return 1`)
+  it('reads the GitLab project and its Developer access from glab, or finds none without a project', async () => {
+    expect(await resolveGitlab(machine(), {}, probe, path)).toBeUndefined()
+    const cli = glab('glab')
+    expect(await resolveGitlab(machine(), { project, cli: 'glab' }, probe, path)).toEqual({ cli, project, projectId: 42, login: 'Agent-Bot', id: 7 })
+    // Group access counts the same as project access, and the canonical renamed path is used.
+    expect(await resolveGitlab(machine(), { project, cli: glab('glab-group', user, payload(null, 30, 'group/renamed')) }, probe, path))
+      .toMatchObject({ project: 'group/renamed' })
+  })
+  it('names what GitLab setup needs and where it is set', async () => {
+    const needs = (code: string, values: Record<string, unknown>, cli: string, userJson?: string, projectJson?: string) =>
+      expect(resolveGitlab(machine(), { project, cli }, probe, path)).rejects.toEqual(setupError('gitlab', code, values))
+    await needs('gitlabCliUnset', {}, '')
+    await needs('gitlabCliMissing', { output: `${join(dir, 'missing')} is not an executable file` }, join(dir, 'missing'))
+    await needs('gitlabCliSignedOut', {}, program('glab-broken', 'return 1'))
+    await needs('gitlabNoAccount', {}, glab('glab-anonymous', '{}'))
+    const unreadable = program('glab-outsider', `const args = argv.join(' ')
+if (args === 'api user') { console.log(${JSON.stringify(user)}); return 0 }
+console.error('HTTP 404')
+return 1`)
+    await needs('gitlabProjectUnreadable', { account: 'Agent-Bot', project, output: expect.stringContaining('HTTP 404') as unknown }, unreadable)
+    await needs('gitlabProjectUnreported', { project }, glab('glab-empty-project', user, '{}'))
+    await needs('gitlabReadOnly', { account: 'Agent-Bot', project }, glab('glab-reader', user, payload(20)))
   })
 })

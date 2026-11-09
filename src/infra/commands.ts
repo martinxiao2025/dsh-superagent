@@ -119,6 +119,45 @@ export class Commands {
     if (outside) throw new Error('GitHub calls are restricted to the configured repository')
     return path ? `repos/${this.repository}/${path}` : `repos/${this.repository}`
   }
+  /** Runs the agent's GitLab CLI and parses its JSON output; prefer `gitlabApi`, which restricts the project and validates output. */
+  async glab<T>(args: string[]): Promise<T> {
+    const gitlab = this.deployment.gitlab
+    if (!gitlab) throw new Error('The GitLab Source has no working CLI')
+    return JSON.parse(await this.run(gitlab.cli, args)) as T
+  }
+  /**
+   * Calls the GitLab API within the configured project, validating JSON output when a schema is provided
+   * or returning raw CLI output when omitted.
+   * @throws CliError with GitLab's HTTP status as `code` on failure.
+   */
+  async gitlabApi<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T>
+  async gitlabApi(path: string, ...flags: string[]): Promise<string>
+  async gitlabApi<T>(schema: z.ZodType<T> | string, ...rest: string[]): Promise<T | string> {
+    const gitlab = this.deployment.gitlab
+    if (!gitlab) throw new Error('The GitLab Source has no working CLI')
+    if (typeof schema === 'string') return this.run(gitlab.cli, ['api', this.gitlabPath(schema, gitlab), ...rest])
+    const [path = '', ...flags] = rest
+    return schema.parse(await this.glab(['api', this.gitlabPath(path, gitlab), ...flags]))
+  }
+  /** Fetches all pages of a GitLab API list with explicit `per_page=100&page=N`, stopping at the first short page. */
+  async gitlabPages<T>(item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> {
+    const out: T[] = []
+    for (let page = 1; ; page += 1) {
+      const separator = path.includes('?') ? '&' : '?'
+      const listed = await this.gitlabApi(z.array(z.unknown()), `${path}${separator}per_page=100&page=${page}`)
+      out.push(...validItems(item, listed, tally))
+      if (listed.length < 100) break
+    }
+    return out
+  }
+  /** GitLab REST paths may use either the URL-encoded namespace or the numeric project id, but nothing outside the configured project. */
+  private gitlabPath(path: string, gitlab: { project: string; projectId: number }): string {
+    const bases = [`projects/${encodeURIComponent(gitlab.project)}`, `projects/${gitlab.projectId}`]
+    const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path)
+    const inside = bases.some(base => path === base || path.startsWith(`${base}/`) || path.startsWith(`${base}?`))
+    if (outside || !inside) throw new Error('GitLab calls are restricted to the configured project')
+    return path
+  }
   /**
    * Runs the Feishu bot's `lark-cli` and returns the JSON `data` payload.
    * @throws CliError with Feishu's error code on failure (rewriting 232011 when the bot is not in the chat).

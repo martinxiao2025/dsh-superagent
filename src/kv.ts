@@ -55,4 +55,7 @@ export const KV = {
   feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  /** GitLab Source: 每个流（issues/merge_requests）独立的光标，以及每个 Thread 的 notes 光标。 */
+  gitlab: { cursor: family<string, [stream: 'issues' | 'merge_requests']>('gitlab-cursor:'),
+    notes: family<string, [thread: string]>('gitlab-notes:') },
 }

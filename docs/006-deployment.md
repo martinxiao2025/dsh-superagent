@@ -7,6 +7,7 @@ Use this guide to install, configure and operate dsh-superagent. It covers accou
 - **A dedicated DeepSeek Harness profile**, called `superagent` in this guide. Create it from the Web profile template. It loads the bundle and serves its panel on `127.0.0.1`. Keep it separate from the profile you work in: the plugin changes process-wide `PATH` and git settings, and its process needs independent restarts and upgrades.
 - **An agent GitHub account.** The agent comments, pushes branches and opens pull requests as this account, through a GitHub CLI signed in only as that account.
 - **Optional:** a Feishu bot for chat requests.
+- **Optional:** a GitLab account and project, read and commented on through a GitLab CLI signed in as that account.
 
 Plugin configuration holds the state directory and machine limits. Use the panel for everything else: Sources for the repository and accounts, Policy for allowed lists, and Execution for worker directories and commands.
 
@@ -21,10 +22,11 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
 ## Prerequisites
 
 - Node.js 22.19+ or 24+, pnpm, git 2.32+, tmux
-- GitHub CLI (`gh`) 2.48 or later. Source CLI fields must point to `gh` or `lark-cli` wrappers; the host relies on their subcommands and output formats.
+- GitHub CLI (`gh`) 2.48 or later. Source CLI fields must point to `gh`, `lark-cli` or `glab` wrappers; the host relies on their subcommands and output formats.
 - A repository on github.com; GitHub Enterprise Server is not supported. To create a checkout per Ticket, keep a local clone from which the prepare command can add worktrees. Install `git-lfs` if that repository uses Git LFS.
 - A model provider configured for DeepSeek Harness. dsh-superagent uses the profile's default model unless the Eval or Execution settings name another.
 - For Feishu: `lark-cli` (tested with 1.0.90) and a Feishu or Lark app with a bot
+- For GitLab: `glab` (Developer access or higher on the project)
 
 ## Accounts
 
@@ -78,6 +80,31 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
    - Recalling the message a reply targets settles the reply as gone instead of retrying it.
 
    The automated tests cover the CLI contract offline, with fake CLIs: `auth status`, `config strict-mode`, `bot/v3/info`, `event consume` (NDJSON, CRLF, malformed lines, exit and restart, stopping the process tree), `im +messages-reply` (idempotency key, gone codes), `im +chat-list`, and the history and thread reads. What they cannot cover is a real tenant: the app's permissions, the event subscription, the bot's chat membership, and Feishu's own error codes. Those are the conditions of the check above.
+
+### GitLab project (optional)
+
+1. Install [GitLab CLI](https://gitlab.com/gitlab-org/cli) (`glab`) on the machine, version 1.30 or later.
+2. Sign the CLI in as the agent's GitLab account, with a token that has the `api` scope:
+
+   ```sh
+   glab auth login --hostname gitlab.com
+   glab api user
+   ```
+
+   The last command prints the account's `id` and `username`; setup reads them the same way. A `GITLAB_TOKEN` in the CLI environment works as well.
+
+3. Give the account **Developer** access (access level 30) or higher on the project, directly or through its group. Reporter access can read but not comment, so setup rejects it.
+4. On the GitLab Source card, set `project` to `group/project` (multi-level namespaces such as `group/subgroup/project` are supported), keep `cli` as `glab` or give the wrapper's absolute path, and turn the Source on. Saving checks the account and the project, then restarts dsh-superagent.
+5. Verify against a real project:
+   - The card names the account, and the history entry reads ready with `N issues, M merge requests`.
+   - A mention of `@<agent username>` in a new Issue or merge request creates a Ticket within the polling interval (60 seconds by default).
+   - A note that mentions the agent is received; with **Receive comments in the project** on, other notes are received too, subject to the Policy's admission table.
+   - A reply appears as a note on the Issue or merge request, and a note deleted before a retry settles as gone.
+   - Turning the Source off pauses polling; turning it on resumes it.
+
+   The automated tests cover the CLI contract offline with a fake `glab`. What they cannot cover is a real GitLab instance: token scopes, project permissions, and GitLab's own error codes.
+
+   GitLab is a Source only; the deployment still targets the GitHub repository. Pipelines/CI and inline diff discussions are not implemented.
 
 ## Install
 
@@ -228,7 +255,7 @@ curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json
 
 Setup uses the DeepSeek Harness subprocess service, as worker shells do. It removes environment variables whose names contain KEY, PASSWORD, SECRET or TOKEN.
 
-Setup verifies the GitHub repository and the agent's push access, writes the worker environment, and checks that git uses only the agent credentials for github.com. A Feishu setup failure disables only the Feishu Source.
+Setup verifies the GitHub repository and the agent's push access, writes the worker environment, and checks that git uses only the agent credentials for github.com. A Feishu setup failure disables only the Feishu Source; a GitLab setup failure disables only the GitLab Source.
 
 The process environment that setup writes:
 
@@ -239,7 +266,7 @@ A file in `worker-bin` or `worker-gitconfig` that dsh-superagent did not write s
 
 ## Try it
 
-From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat.
+From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat. For GitLab, mention `@<agent username>` in an Issue or merge request of the configured project.
 
 ## Upgrade
 
@@ -271,6 +298,12 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | `git does not read the github.com credential configuration dsh-superagent writes` | Install git 2.32 or later |
 | A Ticket fails with `The git configuration of the repository in … sets …` | Remove the named credential or `http.*.extraheader` settings from the clone's `.git/config` |
 | `… was not written by dsh-superagent` | Move the named file out of `<stateDir>/worker-bin` or `<stateDir>/worker-gitconfig`, or choose another `stateDir` |
+| `The agent GitLab CLI is not set.` / `was not found.` | Set `glab` or its absolute path on the GitLab card |
+| `The agent GitLab CLI cannot read its account.` | Run `glab auth login --hostname gitlab.com` as the agent, or set `GITLAB_TOKEN` |
+| `@… cannot read … on GitLab.` | Set `project` to `group/project`, and give the account access to the project |
+| `@… needs Developer access to … on GitLab.` | Raise the account to Developer (30) or higher; Reporter cannot comment |
+| `The agent GitLab CLI did not return …` | Check `glab api projects/<group%2Fproject>` by hand; a proxy or hostname mismatch can hide the project |
+| A GitLab note is not received | Check that the Source is on, the author is allowed, and the note mentions `@<agent username>` unless **Receive comments in the project** is on. System notes and the agent's own notes are ignored |
 | `The bot lark-cli allows user identities` | Point the Feishu Source at a bot-only configuration, as in Feishu bot above |
 | `The bot lark-cli does not work.` or `The bot identity of app … is …` | Check the configuration's app id and secret |
 | `The Feishu bot is not a member of the chat.` | Add the bot to the chat in the chat's settings; the next attempt succeeds |

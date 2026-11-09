@@ -50,15 +50,24 @@ export const GithubAccountsSchema = z.object({
   cli: z.string().trim().default(''),
 })
 export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
+/** GitLab 项目可以位于多级命名空间；`project` 为空表示未启用该可选来源。 */
+export const GitlabProjectSchema = z.object({
+  project: z.string().trim().regex(/^([A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+)?$/, 'group/project').default(''),
+  cli: z.string().trim().default('glab'),
+})
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
-export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
+export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape), gitlab: Object.keys(GitlabProjectSchema.shape),
+}
 
 export interface Deployment extends Machine {
   repository: string
   github: { cli: string; login: string; noreply: string }
   feishu?: FeishuBot
+  gitlab?: GitlabProject
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
+export interface GitlabProject { cli: string; project: string; projectId: number; login: string; id: number }
 
 /** Extensions Windows appends to a bare command name, as `cmd` and `where` do; POSIX appends none. */
 const EXTENSIONS: readonly string[] = process.platform === 'win32'
@@ -124,6 +133,40 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
   const repository = access.name
   if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
   return { ...machine, repository, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+}
+
+const GitlabUser = z.object({ id: z.number().int().positive(), username: z.string().regex(/^[A-Za-z0-9_.-]+$/) })
+const GitlabAccess = z.object({ access_level: z.number().int() })
+const GitlabProject = z.object({
+  id: z.number().int().positive(),
+  path_with_namespace: z.string().regex(/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/),
+  permissions: z.object({ project_access: GitlabAccess.nullable().optional(), group_access: GitlabAccess.nullable().optional() }).nullish(),
+  namespace: z.object({ path: z.string() }).nullish(),
+})
+/**
+ * 验证可选的 GitLab 账号：CLI 能读到用户，项目可读，并且项目或群组权限达到 Developer（30）以上。
+ * 未填写 project 时返回 undefined，表示该可选来源关闭；其他失败抛出 SetupError，由 setup 只禁用 GitLab 源。
+ */
+export async function resolveGitlab(machine: Machine, config: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<GitlabProject | undefined> {
+  const accounts = GitlabProjectSchema.parse(config ?? {})
+  const requested = accounts.project
+  if (!requested) return undefined
+  if (!accounts.cli) throw new SetupError('gitlabCliUnset')
+  let cli: string
+  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('gitlabCliMissing', { output: reason(error) }) }
+  const user = parsed(GitlabUser, await probe([cli, 'api', 'user']).catch((error: unknown) => {
+    throw new SetupError('gitlabCliSignedOut', { output: reason(error) })
+  }))
+  if (!user) throw new SetupError('gitlabNoAccount')
+  // GitLab 的 REST 路径用 URL 编码的完整命名空间，因此多级 group/subgroup/project 也能读取。
+  const access = parsed(GitlabProject, await probe([cli, 'api', `projects/${encodeURIComponent(requested)}`]).catch((error: unknown) => {
+    throw new SetupError('gitlabProjectUnreadable', { account: user.username, project: requested, output: reason(error) })
+  }))
+  if (!access) throw new SetupError('gitlabProjectUnreported', { project: requested })
+  const project = access.path_with_namespace
+  const level = Math.max(access.permissions?.project_access?.access_level ?? 0, access.permissions?.group_access?.access_level ?? 0)
+  if (level < 30) throw new SetupError('gitlabReadOnly', { account: user.username, project })
+  return { cli, project, projectId: access.id, login: user.username, id: user.id }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })
