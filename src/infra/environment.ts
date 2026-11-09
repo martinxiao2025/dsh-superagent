@@ -29,6 +29,10 @@ export function sameDirectory(a: string, b: string): boolean {
 export function withoutDirectory(path: string, dir: string): string {
   return path.split(delimiter).filter(entry => !sameDirectory(entry, dir)).join(delimiter)
 }
+/** The argv for running `command` in a shell: `sh -c` on POSIX, and cmd's `/c` on Windows, which has no `sh`. */
+export const shellArgv = (command: string): string[] => process.platform === 'win32'
+  ? [process.env.ComSpec ?? 'cmd.exe', '/d', '/s', '/c', command]
+  : ['sh', '-c', command]
 
 /**
  * The variables that tell git which repository, work tree and index to act on. A host started inside git, such as by
@@ -60,8 +64,9 @@ export function agentVariables(stateDir: string): Record<string, string | undefi
 /** True when a regular file starts with the dsh-superagent marker in its first two lines; a symbolic link, directory, or other non-regular file never counts as written by dsh-superagent. */
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
-  const head = (await readFile(file, 'utf8')).split('\n', 2)
-  return [MARKER, ...LEGACY_MARKERS].some(marker => head.includes(marker))
+  const head = (await readFile(file, 'utf8')).split('\n', 2).map(line => line.replace(/\r$/, ''))
+  // A batch shim marks itself with `rem`, which `cmd` ignores and which keeps the marker in the second line.
+  return [MARKER, ...LEGACY_MARKERS].flatMap(marker => [marker, `rem ${marker}`]).some(marker => head.includes(marker))
 }
 async function own(file: string, text: string, mode = 0o644): Promise<void> {
   let foreign = false
@@ -73,8 +78,43 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
 }
 
 /**
+ * The file name of a worker shim. Windows starts only files that a `PATHEXT` extension names, so shims are
+ * batch files there; a POSIX shell resolves the extensionless name.
+ */
+export const shimFile = (name: string): string => process.platform === 'win32' ? `${name}.cmd` : name
+/** A batch shim: `cmd` ignores the first line and the marker line, then the body runs. */
+const batch = (body: readonly string[]): string => ['@echo off', `rem ${MARKER}`, ...body].join('\r\n') + '\r\n'
+/** POSIX lines that drop the shim directory from PATH; the shim directory is written in, exactly as PATH names it. */
+const posixWithoutShims = (dir: string): string[] => [
+  `self=${shellQuote(dir)}`, 'rest=', 'IFS=:', 'set -f',
+  'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
+  'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
+]
+/** Windows lines that drop the shim directory from PATH, comparing each entry's full path with the script's directory. */
+const WINDOWS_WITHOUT_SHIMS = [
+  'set "self=%~dp0"', 'set "rest="',
+  'for %%P in ("%PATH:;=" "%") do (',
+  '  for %%Q in ("%%~P") do if /I not "%%~fQ\\"=="%self%" set "rest=%rest%;%%~P"',
+  ')',
+  'set "PATH=%rest:~1%"',
+]
+/**
+ * A shim body that runs `program` with the caller's arguments. The shim directory leaves PATH first so a wrapper
+ * that calls `gh` by name reaches the real binary instead of this shim again.
+ */
+function shimRunning(program: string, dir: string): string {
+  if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\n${posixWithoutShims(dir).join('\n')}\nexec ${shellQuote(program)} "$@"\n`
+  return batch([...WINDOWS_WITHOUT_SHIMS, `"${program}" %*`, 'exit /b %ERRORLEVEL%'])
+}
+/** A shim body that prints `message` to standard error and exits 1, for a blocked command or an absent Feishu bot. */
+function shimFailing(message: string): string {
+  if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\necho ${shellQuote(message)} >&2\nexit 1\n`
+  return batch([`1>&2 echo(${message})`, 'exit /b 1'])
+}
+
+/**
  * Atomically writes worker CLI shims and the isolated git configuration file into the state directory, refusing to overwrite foreign files.
- * Each shim strips the shim directory from PATH before exec so wrapper scripts resolving `gh` or `lark-cli` by name reach the real binary.
+ * Each shim strips the shim directory from PATH before it runs its target so wrapper scripts resolving `gh` or `lark-cli` by name reach the real binary.
  */
 export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
   const { stateDir, repository, github, feishu } = deployment
@@ -84,23 +124,17 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   for (const name of before) { const file = join(dir, name); if (!await written(file)) throw new SetupError('foreignFile', { file }) }
   // Workers may be running concurrently: write each shim to a temp file and atomically rename it so no command ever resolves past the shim directory.
   const kept = new Set<string>()
-  const shim = async (name: string, body: string): Promise<void> => {
-    const temporary = join(dir, `.${name}.${process.pid}.tmp`)
-    await writeFile(temporary, `#!/bin/sh\n${MARKER}\n${body}\n`, { mode: 0o755 })
-    await rename(temporary, join(dir, name))
-    kept.add(name)
+  const shim = async (name: string, text: string): Promise<void> => {
+    const file = shimFile(name)
+    const temporary = join(dir, `.${file}.${process.pid}.tmp`)
+    await writeFile(temporary, text, { mode: 0o755 })
+    await rename(temporary, join(dir, file))
+    kept.add(file)
   }
-  const withoutShims = [
-    `self=${shellQuote(dir)}`, 'rest=', 'IFS=:', 'set -f',
-    'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
-    'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
-  ].join('\n')
-  const run = (program: string): string => `${withoutShims}\nexec ${shellQuote(program)} "$@"`
-  const fail = (message: string): string => `echo ${shellQuote(message)} >&2\nexit 1`
-  await shim('gh', run(github.cli))
-  await shim('lark-cli', feishu ? run(feishu.cli) : fail('lark-cli is unavailable: this installation has no Feishu bot.'))
+  await shim('gh', shimRunning(github.cli, dir))
+  await shim('lark-cli', feishu ? shimRunning(feishu.cli, dir) : shimFailing('lark-cli is unavailable: this installation has no Feishu bot.'))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
-    await shim(name, fail(`${name} is blocked in this installation; use gh, which acts as ${github.login}.`))
+    await shim(name, shimFailing(`${name} is blocked in this installation; use gh, which acts as ${github.login}.`))
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
   await own(workerGitConfig(stateDir), [

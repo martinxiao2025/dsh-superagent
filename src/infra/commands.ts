@@ -7,6 +7,18 @@ import type { Deployment } from '../deployment.ts'
 
 const exec = promisify(execFile)
 const TIMEOUT_MS = 90_000
+/** A batch file a Windows CLI may be installed as, which Windows cannot start without a shell. */
+const BATCH = /\.(?:cmd|bat)$/i
+/** Quote one argument for a `cmd.exe /c` command line, doubling embedded quotes as cmd expects. */
+const cmdQuote = (argument: string): string => `"${argument.replaceAll('"', '""')}"`
+/**
+ * The argv a subprocess needs to run `program`: a `.cmd` or `.bat` CLI (a wrapper that selects an account) goes
+ * through `cmd.exe`, because Windows cannot start a batch file directly.
+ */
+export function spawnArgv(program: string, args: readonly string[]): string[] {
+  if (process.platform !== 'win32' || !BATCH.test(program)) return [program, ...args]
+  return [process.env.ComSpec ?? 'cmd.exe', '/d', '/s', '/c', [program, ...args].map(cmdQuote).join(' ')]
+}
 /**
  * Error thrown by Commands when a CLI invocation fails, capturing stderr diagnostics, API error codes, and exit status without echoing command arguments.
  * Source channels and pollers inspect its code to distinguish deleted conversations from retryable failures.
@@ -67,7 +79,8 @@ export class Commands {
   withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
-      const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+      const [file, ...argv] = spawnArgv(program, args)
+      const { stdout } = await exec(file!, argv, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
         env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
       return stdout
     } catch (error) { throw commandError(error, program) }
