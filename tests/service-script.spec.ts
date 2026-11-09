@@ -1,45 +1,72 @@
-/** Tests for scripts/dsh-superagent using a temporary checkout path with spaces and stubbed ps, tmux, and dsh binaries. */
+/** Tests for scripts/dsh-superagent.mjs using a temporary checkout path with spaces and stubbed ps, tmux, and dsh programs. */
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync }
   from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
+import { programSource } from './fixtures/program.ts'
 
 let root: string
 let server: Server | undefined
 let sleepers: ChildProcess[] = []
 const control = (profile: string) => join(root, '.artifacts', 'control', 'profiles', profile)
-const program = (name: string, body: string) => writeFileSync(join(root, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
-/** Spawn a dummy process whose PID can be listed by the fake ps binary; ignoreInterrupt simulates a hung graceful stop. */
-function sleeper(ignoreInterrupt = false): number {
-  const [program, args] = ignoreInterrupt ? ['sh', ['-c', 'trap "" INT; exec sleep 60']] as const : ['sleep', ['60']] as const
-  const child = spawn(program, [...args], { stdio: 'ignore' })
+const constant = (value: string) => JSON.stringify(value)
+/** Write a fake program into the checkout's `bin`, where `run` puts it first on PATH. */
+const program = (name: string, body: string) => programSource(join(root, 'bin'), name, body)
+/** Spawn a real Node process that stays alive, so the fake ps can list it and the script can signal it. */
+function sleeper(): number {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
   sleepers.push(child)
   return child.pid!
 }
 const service = (pid: number, profile = 'superagent') => `${pid} node node /opt/my tools/dsh --profile ${profile} --no-open`
-/** Write active process lines (`pid ucomm args`) for the fake ps binary. Entries prefixed with `after:<pid> ` appear only after that PID exits. */
+/** Write active process lines (`pid ucomm args`) for the fake ps. Entries prefixed with `after:<pid> ` appear only after that PID exits. */
 const processes = (...lines: string[]) => writeFileSync(join(root, 'ps.txt'), lines.map(line => `${line}\n`).join(''))
 const started = (...lines: string[]) => writeFileSync(join(root, 'ps-started.txt'), lines.map(line => `${line}\n`).join(''))
+/** A fake `tmux` that logs its arguments and, on creation, prints the PID written to `pane`. */
+const tmuxFake = (sessionExists = false) => program('tmux', `const fs = require('node:fs')
+const root = ${constant(root)}
+fs.appendFileSync(root + '/tmux.log', argv.join('\\n') + '\\n---\\n')
+if (argv[0] === 'has-session') return ${sessionExists ? 0 : 1}
+if (argv[0].startsWith('new-')) {
+  fs.writeFileSync(root + '/launched', '')
+  process.stdout.write(fs.readFileSync(root + '/pane', 'utf8'))
+  return 0
+}
+return 1`)
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'service script '))
   mkdirSync(join(root, 'scripts')); mkdirSync(join(root, 'bin'))
-  copyFileSync(join(import.meta.dirname, '..', 'scripts', 'dsh-superagent'), join(root, 'scripts', 'dsh-superagent'))
+  copyFileSync(join(import.meta.dirname, '..', 'scripts', 'dsh-superagent.mjs'), join(root, 'scripts', 'dsh-superagent.mjs'))
   processes()
-  program('ps', `list='${root}/ps.txt'; [ -f '${root}/launched' ] && [ -f '${root}/ps-started.txt' ] && list='${root}/ps-started.txt'
-want=; while [ $# -gt 0 ]; do [ "$1" = -p ] && want=$2; shift; done
-while IFS= read -r line; do
-  case "$line" in after:*) dep=\${line#after:}; dep=\${dep%% *}; kill -0 "$dep" 2>/dev/null && continue; line=\${line#after:$dep };; esac
-  pid=\${line%% *}; kill -0 "$pid" 2>/dev/null || continue
-  if [ -z "$want" ] || [ "$pid" = "$want" ]; then printf '%s\\n' "$line"; fi
-done < "$list"`)
-  // Log tmux invocations and simulate session creation by outputting the pane PID.
-  program('tmux', `for a in "$@"; do printf '%s\\n' "$a"; done >> '${root}/tmux.log'; echo --- >> '${root}/tmux.log'\n`
-    + `case "$1" in has-session) exit 1;; new-*) touch '${root}/launched'; cat '${root}/pane';; esac`)
-  program('dsh', 'exit 0')
+  program('ps', `const fs = require('node:fs')
+const root = ${constant(root)}
+let list = root + '/ps.txt'
+if (fs.existsSync(root + '/launched') && fs.existsSync(root + '/ps-started.txt')) list = root + '/ps-started.txt'
+const index = argv.indexOf('-p')
+const want = index >= 0 ? argv[index + 1] : undefined
+const alive = pid => { try { process.kill(Number(pid), 0); return true } catch { return false } }
+for (const raw of fs.readFileSync(list, 'utf8').split('\\n')) {
+  if (!raw) continue
+  let line = raw
+  let ghost = false
+  if (line.startsWith('ghost:')) { ghost = true; line = line.slice('ghost:'.length) }
+  if (line.startsWith('after:')) {
+    const rest = line.slice('after:'.length)
+    const dependency = rest.slice(0, rest.indexOf(' '))
+    if (alive(dependency)) continue
+    line = rest.slice(dependency.length + 1)
+  }
+  const pid = line.slice(0, line.indexOf(' '))
+  if (!ghost && !alive(pid)) continue
+  if (want !== undefined && pid !== want) continue
+  console.log(line)
+}`)
+  tmuxFake()
+  program('dsh', 'return 0')
 })
 afterEach(() => {
   server?.close(); server = undefined
@@ -48,8 +75,8 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise(resolve => execFile('python3', [join(root, 'scripts', 'dsh-superagent'), ...args],
-    { env: { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, DSH_SUPERAGENT_PROFILE: '', DSH_SUPERAGENT_URL: '' },
+  return new Promise(resolve => execFile(process.execPath, [join(root, 'scripts', 'dsh-superagent.mjs'), ...args],
+    { env: { ...process.env, PATH: [join(root, 'bin'), process.env.PATH].join(delimiter), DSH_SUPERAGENT_PROFILE: '', DSH_SUPERAGENT_URL: '' },
       timeout: 20_000 },
     (error, stdout, stderr) => resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr })))
 }
@@ -93,11 +120,12 @@ it('records the service PID at start, and still refuses a second instance the sc
   expect(start).toMatchObject({ code: 0, stdout: expect.stringContaining(`"pids": [\n    ${pid}\n  ]`) })
   expect(readFileSync(join(control('superagent'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
   const tmux = readFileSync(join(root, 'tmux.log'), 'utf8').split('---\n').find(call => call.startsWith('new-session'))!.split('\n')
-  // The checkout's path, which has a space, is one argument, and the log path inside it is quoted for the shell.
+  // The checkout's path, which has a space, is one argument, and the log path inside it is quoted for the POSIX shell tmux runs.
   const checkout = realpathSync(root)
   expect(tmux).toEqual(expect.arrayContaining(['-P', '-F', '#{pane_pid}', '-c', checkout]))
-  const log = new RegExp(`>> '${checkout}/\\.artifacts/dsh-superagent-superagent-\\d{8}-\\d{6}-\\d+\\.log' 2>&1$`)
-  expect(tmux.find(word => word.startsWith('umask 077; exec '))).toMatch(log)
+  const command = tmux.find(word => word.startsWith('umask 077; exec '))!
+  expect(command).toContain(`>> '${join(checkout, '.artifacts')}`)
+  expect(command).toMatch(/dsh-superagent-superagent-\d{8}-\d{6}-\d+\.log' 2>&1$/)
   const second = sleeper()
   started(service(pid), `${second} node node /opt/dsh --profile superagent`)
   const again = await run('start', '--url', url, '--timeout', '10')
@@ -174,7 +202,7 @@ it('restarts the service, and a restart whose graceful stop timed out does not k
   expect(readFileSync(join(control('superagent'), 'service.pid'), 'utf8')).toBe(`${pid}\n`)
   // A service that does not stop in time is left running, and the next check may restart it.
   rmSync(join(root, 'launched'))
-  processes(service(sleeper(true)))
+  processes(`ghost:${sleeper()} node node /opt/dsh --profile superagent --no-open`)
   expect(await run('restart', '--url', url, '--timeout', '10', '--stop-timeout', '1'))
     .toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
   expect(await status('superagent')).toMatchObject({ manually_stopped: false })
@@ -182,11 +210,11 @@ it('restarts the service, and a restart whose graceful stop timed out does not k
 it('refuses a second control operation while one holds the profile\'s lock', async () => {
   mkdirSync(control('superagent'), { recursive: true })
   const held = join(root, 'held')
-  const holder = spawn('python3', ['-c', `import fcntl, pathlib, time
-lock = open(${JSON.stringify(join(control('superagent'), 'operation.lock'))}, 'a')
-fcntl.flock(lock, fcntl.LOCK_EX)
-pathlib.Path(${JSON.stringify(held)}).touch()
-time.sleep(30)`], { stdio: 'ignore' })
+  const holder = spawn(process.execPath, ['-e', `const fs = require('node:fs')
+const descriptor = fs.openSync(${constant(join(control('superagent'), 'operation.lock'))}, 'wx')
+fs.writeSync(descriptor, String(process.pid))
+fs.writeFileSync(${constant(held)}, '')
+setInterval(() => {}, 1000)`], { stdio: 'ignore' })
   sleepers.push(holder)
   while (!existsSync(held)) await new Promise(resolve => setTimeout(resolve, 50))
   expect(await run('status')).toMatchObject({ code: 1,
@@ -200,8 +228,7 @@ it('refuses to start a service while no process runs it but something answers at
     'utf8').split('---\n').filter(Boolean).map(call => call.split('\n')[0])).toEqual(['has-session'])
 }, 20_000)
 it('starts the service in a new window of the profile\'s tmux session when the session exists', async () => {
-  program('tmux', `for a in "$@"; do printf '%s\\n' "$a"; done >> '${root}/tmux.log'; echo --- >> '${root}/tmux.log'\n`
-    + `case "$1" in has-session) exit 0;; new-*) touch '${root}/launched'; cat '${root}/pane';; esac`)
+  tmuxFake(true)
   const url = await answering()
   const pid = sleeper()
   writeFileSync(join(root, 'pane'), `${pid}\n`)
@@ -228,7 +255,7 @@ it('does not signal a process that took the recorded service PID, and keeps a st
   expect(() => process.kill(other, 0)).not.toThrow()
   // A service that does not stop in time keeps the stop, so recovery does not start it again.
   rmSync(join(control('superagent'), 'manually-stopped'))
-  processes(service(sleeper(true)))
+  processes(`ghost:${sleeper()} node node /opt/my tools/dsh --profile superagent --no-open`)
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
   expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(true)
 }, 20_000)

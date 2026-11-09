@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { threadKey, type Thread, type Trigger } from '../core/index.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { FeishuBot } from '../deployment.ts'
-import { validItems, type Tally } from '../infra/commands.ts'
+import { validItems, spawnCommand, type Tally } from '../infra/commands.ts'
 import { readFeishu, type FeishuRef } from './feishu-read.ts'
 import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, SOURCE, topicEvent }
   from './feishu-trigger.ts'
@@ -67,13 +67,27 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
 /** Wait before restarting the event consumer: 1s after a run that stayed up for a minute, otherwise exponential backoff up to 60s. */
 export const consumerRetry = (previous: number | undefined, ranMs: number): number =>
   previous === undefined || ranMs >= 60_000 ? 1000 : Math.min(previous * 2, 60_000)
+/**
+ * Stops the consumer: closes its stdin, then terminates the process tree, because a Windows batch CLI runs under
+ * `cmd.exe` and killing `cmd.exe` alone would leave the CLI itself running.
+ */
+function stopConsumer(child: ReturnType<typeof spawn>): void {
+  child.stdin?.end()
+  if (process.platform === 'win32' && child.pid !== undefined) {
+    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' }).unref()
+    return
+  }
+  child.kill('SIGTERM')
+}
 async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
-  const child = spawn(bot(ctx).cli, ['event', 'consume', 'im.message.receive_v1', '--as', 'bot'],
-    { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
+  // A batch CLI such as `lark-cli.cmd` cannot be started without `cmd.exe`, so the spawn call is resolved like every other CLI call.
+  const { file, args, windowsVerbatimArguments } = spawnCommand(bot(ctx).cli, ['event', 'consume', 'im.message.receive_v1', '--as', 'bot'])
+  const child = spawn(file, args,
+    { stdio: ['pipe', 'pipe', 'pipe'], windowsVerbatimArguments, env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
   const stdout = createInterface({ input: child.stdout }); const stderr = createInterface({ input: child.stderr })
   let chain = Promise.resolve(); let diagnostic = ''; let ready = false
-  const stop = (): void => { child.stdin.end(); child.kill('SIGTERM') }
+  const stop = (): void => { stopConsumer(child) }
   signal.addEventListener('abort', stop, { once: true })
   const timeout = setTimeout(() => { diagnostic = 'Feishu event consumer did not become ready within 45 seconds'; stop() }, 45_000)
   stderr.on('line', (line: string) => {

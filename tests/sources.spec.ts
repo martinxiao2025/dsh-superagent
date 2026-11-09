@@ -16,6 +16,7 @@ import { Store } from '../src/app/store.ts'
 import { Commands, commandError } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
 import { testDeployment } from './fixtures/deployment.ts'
+import { programSource } from './fixtures/program.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
 import { SetupError, type SetupProblem } from '../src/setup.ts'
@@ -1037,27 +1038,33 @@ describe('feishu event consumer', () => {
     controller.abort()
     await running
     vi.useRealTimers()
-    rmSync(dir, { recursive: true, force: true })
+    // Windows may still hold the last CLI's files for a moment after it is terminated.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
   /**
    * A bot CLI whose `event consume` behaves as `mode` says: `never` gets ready, `warn` warns once ready, `ready` stays up,
    * and `flaky` exits after its first ready. It records each run and the PID of the latest.
    */
   function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late'): string {
-    const path = join(dir, 'lark-bot')
-    writeFileSync(path, `#!/bin/sh
-  [ "$1" = event ] || { echo '{"ok":true,"data":{}}'; exit 0; }
-  n=$(cat '${dir}/runs' 2>/dev/null || echo 0); n=$((n + 1)); echo $n > '${dir}/runs'; echo $$ > '${dir}/pid'
-  case ${mode} in
-    never) exec sleep 60 ;;
-    warn) echo '[event] ready' >&2; echo 'WARN the connection was reset' >&2; exec sleep 60 ;;
-    ready) echo '[event] ready' >&2; exec sleep 60 ;;
-    flaky) echo '[event] ready' >&2; [ "$n" -gt 1 ] && exec sleep 60; exit 1 ;;
-    events) echo '[event] ready' >&2; cat '${dir}/events'; touch '${dir}/printed'; exec sleep 60 ;;
-    late) echo '[event] ready' >&2; sleep 1; cat '${dir}/events'; touch '${dir}/printed'; exec sleep 60 ;;
-  esac
-  `, { mode: 0o755 })
-    return path
+    const runsFile = JSON.stringify(join(dir, 'runs')), pidFile = JSON.stringify(join(dir, 'pid'))
+    const events = JSON.stringify(join(dir, 'events')), printed = JSON.stringify(join(dir, 'printed'))
+    const ready = `process.stderr.write('[event] ready\\n')`
+    const stay = 'await sleep(60000); return 0'
+    const body = {
+      never: stay,
+      warn: `process.stderr.write('[event] ready\\nWARN the connection was reset\\n'); ${stay}`,
+      ready: `${ready}; ${stay}`,
+      flaky: `${ready}; if (runs > 1) { await sleep(60000) } return 1`,
+      events: `${ready}; process.stdout.write(fs.readFileSync(${events}, 'utf8')); fs.writeFileSync(${printed}, ''); ${stay}`,
+      late: `${ready}; await sleep(1000); process.stdout.write(fs.readFileSync(${events}, 'utf8')); fs.writeFileSync(${printed}, ''); ${stay}`,
+    }[mode]
+    return programSource(dir, 'lark-bot', `const fs = require('node:fs')
+if (argv[0] !== 'event') { console.log('{"ok":true,"data":{}}'); return 0 }
+const runs = Number(fs.existsSync(${runsFile}) ? fs.readFileSync(${runsFile}, 'utf8').trim() : 0) + 1
+fs.writeFileSync(${runsFile}, String(runs))
+fs.writeFileSync(${pidFile}, String(process.pid))
+const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
+${body}`)
   }
   const runs = () => existsSync(join(dir, 'runs')) ? Number(readFileSync(join(dir, 'runs'), 'utf8')) : 0
   const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }

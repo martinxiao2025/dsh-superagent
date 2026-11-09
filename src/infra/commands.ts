@@ -20,6 +20,16 @@ export function spawnArgv(program: string, args: readonly string[]): string[] {
   return [process.env.ComSpec ?? 'cmd.exe', '/d', '/s', '/c', [program, ...args].map(cmdQuote).join(' ')]
 }
 /**
+ * The full spawn call for `program`, for callers that start the process themselves: a batch file is handed to
+ * `cmd.exe` as one quoted command, which must then be passed verbatim, because cmd strips one layer of quotes
+ * after `/s /c` and Node's own argument escaping would break the inner quoting.
+ */
+export function spawnCommand(program: string, args: readonly string[]): { file: string; args: string[]; windowsVerbatimArguments: boolean } {
+  if (process.platform !== 'win32' || !BATCH.test(program)) return { file: program, args: [...args], windowsVerbatimArguments: false }
+  const command = [program, ...args].map(cmdQuote).join(' ')
+  return { file: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', `"${command}"`], windowsVerbatimArguments: true }
+}
+/**
  * Error thrown by Commands when a CLI invocation fails, capturing stderr diagnostics, API error codes, and exit status without echoing command arguments.
  * Source channels and pollers inspect its code to distinguish deleted conversations from retryable failures.
  */
@@ -79,8 +89,8 @@ export class Commands {
   withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
-      const [file, ...argv] = spawnArgv(program, args)
-      const { stdout } = await exec(file!, argv, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
+      const { file, args: argv, windowsVerbatimArguments } = spawnCommand(program, args)
+      const { stdout } = await exec(file, argv, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, windowsVerbatimArguments,
         env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
       return stdout
     } catch (error) { throw commandError(error, program) }

@@ -90,13 +90,20 @@ const posixWithoutShims = (dir: string): string[] => [
   'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
   'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
 ]
-/** Windows lines that drop the shim directory from PATH, comparing each entry's full path with the script's directory. */
+/**
+ * Windows lines that drop the shim directory from PATH, comparing each entry's full path with the script's directory.
+ * The accumulation runs in a subroutine, because `%rest%` inside a `for` block would be expanded once when the block is
+ * parsed and every entry would overwrite the previous value, leaving only the last one.
+ */
 const WINDOWS_WITHOUT_SHIMS = [
   'set "self=%~dp0"', 'set "rest="',
-  'for %%P in ("%PATH:;=" "%") do (',
-  '  for %%Q in ("%%~P") do if /I not "%%~fQ\\"=="%self%" set "rest=%rest%;%%~P"',
-  ')',
+  'for %%P in ("%PATH:;=" "%") do call :dsh_keep "%%~P"',
   'set "PATH=%rest:~1%"',
+  'goto :dsh_run',
+  ':dsh_keep',
+  'if /I not "%~f1\\"=="%self%" set "rest=%rest%;%~1"',
+  'exit /b 0',
+  ':dsh_run',
 ]
 /**
  * A shim body that runs `program` with the caller's arguments. The shim directory leaves PATH first so a wrapper
@@ -109,7 +116,8 @@ function shimRunning(program: string, dir: string): string {
 /** A shim body that prints `message` to standard error and exits 1, for a blocked command or an absent Feishu bot. */
 function shimFailing(message: string): string {
   if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\necho ${shellQuote(message)} >&2\nexit 1\n`
-  return batch([`1>&2 echo(${message})`, 'exit /b 1'])
+  // `echo(` prints the rest of the line as it stands, including a closing parenthesis, so the text ends the line.
+  return batch([`1>&2 echo(${message}`, 'exit /b 1'])
 }
 
 /**
