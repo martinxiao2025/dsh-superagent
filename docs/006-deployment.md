@@ -123,7 +123,9 @@ dsh plugin --profile superagent add "link:$PWD"
 
 ## 机器配置
 
-把 [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) 复制到 `~/.dsh/profiles/superagent/cordis.patch.yml`，替换该文件，并替换每个 `<placeholder>`。如果使用飞书，还要在那里启用 `dsh-superagent-feishu` 条目。`webserver` 条目设置面板端口。
+把 [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) 复制到 `~/.dsh/profiles/superagent/cordis.patch.yml`，替换该文件，并替换每个 `<placeholder>`。如果使用飞书或 GitLab，还要在那里把对应的 `dsh-superagent-feishu`、`dsh-superagent-gitlab` 条目的 `disabled` 改为 `false`（桌面应用改 `~/.dsh/profiles/desktop/cordis.patch.yml`）。`webserver` 条目设置面板端口。
+
+可选来源只在 profile 的 `cordis.patch.yml` 里启用；不要改已安装包自带的 `cordis.patch.yml`，那里的改动要重新安装包才会生效。
 
 | 键 | 必需 | 含义 |
 | --- | --- | --- |

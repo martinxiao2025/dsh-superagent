@@ -52,3 +52,33 @@
 - 执行器产物位于 `C:\Users\61054\.dsh\state\superagent` 下。
 
 受阻于智能体账号的交互式 `gh auth login`。`docs/006-deployment.md` 说安装会移除名称包含 TOKEN 的环境变量，因此 `GH_TOKEN` 也不能代替登录。
+
+## 发布产物与桌面复验（2026-11-10）
+
+`pnpm check`（typecheck、61 个测试文件 / 1218 条用例 / 0 跳过、build）通过。`pnpm pack` 生成
+`.artifacts/final/dsh-superagent-0.1.0.tgz`，343 579 字节；`tar -xzf` 后包含 `lib/index|client|github-watch|feishu-watch|gitlab-watch`（`.js` 与 `.d.ts`）、共享 chunk、`cordis.patch.yml`、`package.json`、`README.md`、`prompts/`、`skills/`、`locale/`。产物内的 `cordis.patch.yml` 里 `dsh-superagent-feishu` 与 `dsh-superagent-gitlab` 都是 `disabled: true`，与提交状态一致。
+
+桌面应用用同一个构建启动：`Start-Process "…\DeepSeek Harness.exe"`，由一个后台 shell `Wait-Process` 持有，否则命令结束进程即被终止。管理接口需要 `x-orchestrator-request: 1`，且 `Host` 必须是 `127.0.0.1:<端口>` 或 `localhost:<端口>`。
+
+| 端口 | 配置 | `/orchestrator/api/state` | `sources` |
+| --- | --- | --- | --- |
+| 50558 | 默认 | 200 | 只有 `github` |
+| 56309 | 默认 | 200 | 只有 `github` |
+| 53011 | profile patch 启用 GitLab | 200 | `github` + `gitlab` |
+| 52618 | 默认（最终保留的实例） | 200 | 只有 `github` |
+| 64468、51026、53112、53687 | 默认或启用 GitLab | 404 | 无 |
+
+返回 200 时 `setup.problem.code` 为 `repositoryUnset`（GitHub 未填仓库），`github` 卡为 `enabled=true`、`paused`、`setupPending`；53011 上的 `gitlab` 卡同为 `enabled=true`、`paused`、`setupPending`，`setup.gitlabProblem` 为 `null`。
+
+返回 404 时响应体为空（`curl -s -o -`），说明 `/orchestrator` 前缀整体未注册，即 bundle 的**服务端**插件没有挂载；同一个页面里客户端仍显示 Superagent 侧栏，因此挂载失败只在服务端。
+
+同一配置、同一构建、先结束全部 `DeepSeek Harness` 进程再启动的条件下，3 次挂载成功、4 次未挂载。已排除：配置（启用或禁用 GitLab 都出现过两种结果）、等待时间（45–90 秒后仍 404）、端口、残留进程（`Get-Process` 计数为 0 后再启动）、`stateDir` 锁（`state\superagent` 下只有 sqlite 文件，无 lock，也无残留 node 进程），以及编辑 bundle patch 这一变量（改 profile patch 的方式同样出现过 404）。**未定位**。
+
+作为对照，headless 宿主（`dsh --profile superagent`，端口 3082，同样 `link:D:/dsh-superagent`）在启用 GitLab 时稳定挂载：`sources` 返回 `github` 与 `gitlab` 两张卡，均为 `enabled=true`、`paused`、`setupPending`，`setup.problem.code` 为 `repositoryUnset`，`gitlabProblem` 为 `null`。
+
+未验证项与条件：
+
+- 真实 GitLab 租户：本机没有 `glab`，也没有可读项目的账号；离线契约由 `tests/gitlab.spec.ts` 覆盖。条件为 `glab` 1.30 以上，且账号对项目有 Developer 或更高权限。
+- 真实飞书租户：条件见上一节的清单。
+- 桌面端服务端插件挂载的稳定复现条件：4 次 404 与 2 次 200 用的是同一构建与配置，未能找到触发因素。
+
