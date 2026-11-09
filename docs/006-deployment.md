@@ -68,6 +68,17 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
 
    Both configurations share the keychain entry for the app secret. To remove only the bot configuration, delete its directory; do not run `lark-cli config remove`, which would affect the shared secret.
 
+3. In the Feishu or Lark developer console, subscribe the app to `im.message.receive_v1` and deliver events over the long connection (WebSocket), then publish the app version. dsh-superagent runs `lark-cli event consume im.message.receive_v1 --as bot`; without the subscription the consumer exits and the Feishu card shows the CLI's own message.
+4. Add the bot to every chat it should receive. A bot cannot read a chat it has not joined, and the chat list in the panel shows only joined chats.
+5. Verify the bot against a real tenant:
+   - The Feishu card names the bot, and **Choose a chat the bot has joined** lists the chats, which also proves the read permissions.
+   - After a restart, the Feishu entry reads **Listening for bot events** and the history entry becomes ready within a minute.
+   - Mentioning the bot in a configured chat creates a Ticket, and its acknowledgement appears as a reply in that message's topic.
+   - Turning the Source off pauses the event consumer within five seconds; turning it on listens again.
+   - Recalling the message a reply targets settles the reply as gone instead of retrying it.
+
+   The automated tests cover the CLI contract offline, with fake CLIs: `auth status`, `config strict-mode`, `bot/v3/info`, `event consume` (NDJSON, CRLF, malformed lines, exit and restart, stopping the process tree), `im +messages-reply` (idempotency key, gone codes), `im +chat-list`, and the history and thread reads. What they cannot cover is a real tenant: the app's permissions, the event subscription, the bot's chat membership, and Feishu's own error codes. Those are the conditions of the check above.
+
 ## Install
 
 Run this block once, on a machine that has no `superagent` profile yet:
@@ -263,6 +274,9 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | `The bot lark-cli allows user identities` | Point the Feishu Source at a bot-only configuration, as in Feishu bot above |
 | `The bot lark-cli does not work.` or `The bot identity of app … is …` | Check the configuration's app id and secret |
 | `The Feishu bot is not a member of the chat.` | Add the bot to the chat in the chat's settings; the next attempt succeeds |
+| `Feishu event consumer exited (…, ready=false): …` | The app is not subscribed to `im.message.receive_v1` over the long connection, or its bot configuration lacks the message permission; the text after the colon is lark-cli's own message |
+| `Feishu event consumer did not become ready within 45 seconds` | lark-cli cannot open the long connection; run `lark-cli event consume im.message.receive_v1 --as bot` by hand as the operator to see its message, and check the network or proxy |
+| A Feishu read or reply fails with a `99991…` code or `Access denied … scopes` | Grant the permission the message names in the developer console, then publish the app version |
 | `status` exits 2 | A part reports an error, which a restart does not fix: `errors` names each part, as listed under Management API, with its detail; each part clears its own entry once it works again |
 | `status` exits 3 | Setup waits: `setup` says what is missing, and the overview links to the setting that fixes it |
 | `status` exits 1 | The service does not run, runs twice, does not answer, or its runtime reports an error; the output and the newest log say which |

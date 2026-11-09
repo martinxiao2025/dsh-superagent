@@ -1045,7 +1045,7 @@ describe('feishu event consumer', () => {
    * A bot CLI whose `event consume` behaves as `mode` says: `never` gets ready, `warn` warns once ready, `ready` stays up,
    * and `flaky` exits after its first ready. It records each run and the PID of the latest.
    */
-  function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late'): string {
+  function cli(mode: 'never' | 'warn' | 'ready' | 'flaky' | 'events' | 'late' | 'crlf'): string {
     const runsFile = JSON.stringify(join(dir, 'runs')), pidFile = JSON.stringify(join(dir, 'pid'))
     const events = JSON.stringify(join(dir, 'events')), printed = JSON.stringify(join(dir, 'printed'))
     const ready = `process.stderr.write('[event] ready\\n')`
@@ -1057,6 +1057,7 @@ describe('feishu event consumer', () => {
       flaky: `${ready}; if (runs > 1) { await sleep(60000) } return 1`,
       events: `${ready}; process.stdout.write(fs.readFileSync(${events}, 'utf8')); fs.writeFileSync(${printed}, ''); ${stay}`,
       late: `${ready}; await sleep(1000); process.stdout.write(fs.readFileSync(${events}, 'utf8')); fs.writeFileSync(${printed}, ''); ${stay}`,
+      crlf: `${ready}; process.stdout.write(fs.readFileSync(${events}, 'utf8').replaceAll('\\n', '\\r\\n')); fs.writeFileSync(${printed}, ''); ${stay}`,
     }[mode]
     return programSource(dir, 'lark-bot', `const fs = require('node:fs')
 if (argv[0] !== 'event') { console.log('{"ok":true,"data":{}}'); return 0 }
@@ -1102,6 +1103,14 @@ ${body}`)
     expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId(id))?.meta.direct)).toEqual([false, true])
     expect(store.get(KV.feishu.chats)).toEqual({ oc_group: false, oc_dm: true })
     expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
+    controller.abort(); await running; store.close()
+  }, 20_000)
+  it('reads event lines that end in CRLF, as a native CLI on Windows prints them', async () => {
+    writeFileSync(join(dir, 'events'), event('om_crlf', 'oc_group', 'group') + '\n')
+    const { ctx, health, store } = consumerSource(cli('crlf'))
+    running = runFeishu(ctx, controller.signal)
+    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_crlf'))).toBeDefined(), until)
+    expect(health.feishu).toMatchObject({ state: 'ready' })
     controller.abort(); await running; store.close()
   }, 20_000)
   it('drops the events it reads once the Source is off', async () => {

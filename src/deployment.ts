@@ -96,6 +96,14 @@ function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   const result = schema.safeParse(value)
   return result.success ? result.data : undefined
 }
+/** Returns the first line of CLI output that parses as `schema`, skipping banners or warnings printed before the payload. */
+function firstParsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
+  for (const line of text.split(/\r?\n/)) {
+    const value = parsed(schema, line)
+    if (value) return value
+  }
+  return undefined
+}
 /** Verify the agent's GitHub CLI identity and push access to the configured repository. */
 export async function resolveDeployment(machine: Machine, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
   const { stateDir } = machine
@@ -138,8 +146,9 @@ export async function resolveFeishuBot(machine: Machine, feishu: unknown, probe:
   if (status.identities.bot.status !== 'ready') fail(new SetupError('feishuBotNotReady', { app: status.appId, status: status.identities.bot.status }))
   const mode = /strict-mode:\s*(\w+)/.exec(await run('config', 'strict-mode'))?.[1]
   if (mode !== 'bot') fail(new SetupError('feishuUserIdentity', { mode: mode ?? 'unknown' }))
-  // `--format json` unwraps only `data`, whereas this endpoint returns the payload under `bot`.
-  const info = parsed(BotInfo, (await run('api', 'GET', '/open-apis/bot/v3/info', '--as', 'bot', '--format', 'ndjson')).split('\n')[0] ?? '')
+  // `--format json` unwraps only `data`, whereas this endpoint returns the payload under `bot`. A CLI may print a
+  // banner before its NDJSON, so the first line that is the bot payload is taken rather than the first line.
+  const info = firstParsed(BotInfo, await run('api', 'GET', '/open-apis/bot/v3/info', '--as', 'bot', '--format', 'ndjson'))
   if (!info) return fail(new SetupError('feishuNoBot'))
   return { cli, appId: status.appId, brand: status.brand, botId: info.bot.open_id, name: info.bot.app_name }
 }

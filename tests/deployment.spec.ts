@@ -114,4 +114,21 @@ return 1`)
 return 1`)
     await refuses('feishuCliFailed', { output: expect.stringContaining('not configured') })
   })
+  it('reads the Feishu app and bot through a CLI that prints a banner before its JSON, and defaults the brand to feishu', async () => {
+    // lark-cli 的升级提示可能出现在 JSON 之前；凭据校验只认能解析成载荷的行，不取第一行。
+    program('lark-cli', `const args = argv.join(' ')
+if (args === 'auth status') {
+  console.log('note: a newer lark-cli is available')
+  console.log(${JSON.stringify(JSON.stringify({ appId: 'cli_bot', identities: { bot: { status: 'ready' } } }))})
+  return 0
+}
+if (args === 'config strict-mode') { console.log('strict-mode: bot (source: profile)'); return 0 }
+if (args === 'api GET /open-apis/bot/v3/info --as bot --format ndjson') {
+  console.log('note: reading the bot from the cache')
+  console.log('{"bot":{"open_id":"ou_bot","app_name":"Widgets Bot"}}')
+  return 0
+}
+return 1`)
+    expect(await resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).toEqual({ cli: larkCli, appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' })
+  })
 })

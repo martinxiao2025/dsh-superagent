@@ -57,7 +57,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
     signal.addEventListener('abort', stop, { once: true })
     const began = Date.now()
     try { await consume(ctx, running.signal) }
-    catch (error) { if (!running.signal.aborted) ctx.report('feishu', { state: 'error', detail: String(error) }) }
+    catch (error) { if (!running.signal.aborted) ctx.report('feishu', { state: 'error', detail: String(error), at: new Date().toISOString() }) }
     finally { clearInterval(check); signal.removeEventListener('abort', stop) }
     if (running.signal.aborted) continue
     retry = consumerRetry(retry, Date.now() - began)
@@ -95,7 +95,7 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
     if (line.startsWith('[event] ready')) {
       ready = true; clearTimeout(timeout)
       ctx.report('feishu', { state: 'ready', detail: 'Listening for bot events', at: new Date().toISOString() })
-    } else if (/WARN|drop|error/.test(line)) ctx.report('feishu', { state: 'error', detail: diagnostic })
+    } else if (/WARN|drop|error/.test(line)) ctx.report('feishu', { state: 'error', detail: diagnostic, at: new Date().toISOString() })
   })
   stdout.on('line', (line: string) => {
     chain = chain.then(async () => {
@@ -107,7 +107,7 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       chats[String(trigger.meta.chatId)] = trigger.meta.direct === true
       ctx.state.set(KV.feishu.chats, chats)
       await receive(ctx, trigger)
-    }).catch(error => { ctx.report('feishu', { state: 'error', detail: String(error) }) })
+    }).catch(error => { ctx.report('feishu', { state: 'error', detail: String(error), at: new Date().toISOString() }) })
   })
   try {
     await new Promise<void>((resolve, reject) => {
