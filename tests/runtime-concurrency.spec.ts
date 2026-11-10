@@ -1,5 +1,7 @@
 /** 重叠触发器、投递和 worker 启动时的并发运行时行为。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { rmSync } from 'node:fs'
+import { join } from 'node:path'
 import { latestAssignment, waitsForPerson, type Ticket, type Trigger } from '../src/core/index.ts'
 import { Later } from '../src/app/effects.ts'
 import { reportRelay } from '../src/app/notices.ts'
@@ -164,6 +166,8 @@ it('counts a launch under way against maxWorkers, so a bot\'s Input for an idle 
   // 第二个工单的启动在其 prepare 命令运行期间占用唯一槽位，早于其 worker 会话。
   const prepare = deferred()
   h.hooks.prepare = prepare.promise
+  // 目录按项目命名后同一项目复用已准备好的工作区；删掉它，让第二个工单的启动重新运行 prepare。
+  rmSync(join(h.directory, 'work', 'feishu'), { recursive: true, force: true })
   h.runtime.receive(feishu('5', '@bot 修二')); await h.runtime.idle()
   await h.route({ kind: 'accept', trigger_id: feishu('5', '').id, title: 'two', worktree_name: 'fix-two', acknowledgement: '收到。' })
   await waitUntil(() => h.subprocess.spawn.mock.calls.filter(([spec]) => spec.argv[0] === shellArgv('')[0]).length === 2)

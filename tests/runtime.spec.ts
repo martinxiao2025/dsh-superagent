@@ -229,8 +229,8 @@ it('relays an explicit member mention as a candidate and creates the ticket, ack
   expect(ticket).toMatchObject({ title: '修复回归', mandate: { strength: 'explicit', basis: expect.objectContaining({ via: 'addressed', source: 'feishu', sender: 'Alice', addressed: 'mention', scope: expect.objectContaining({ chatId: CHAT }) }) },
     execution: expect.objectContaining({ name: expect.stringMatching(/^fix-regression-/) }), origin: expect.objectContaining({ triggerId: trigger.id }) })
   expect(ticket).not.toHaveProperty('ended')
-  // 工单的执行环境在接受时固定：它在执行根目录下的目录，以及来源值来自其触发器。
-  expect(ticket.execution!.directory).toBe(join(directory, 'work', ticket.execution!.name))
+  // 工单的执行环境在接受时固定：执行目录按来源记录的项目命名（飞书没有项目标识，退回记录 ID），来源值来自其触发器。
+  expect(ticket.execution!.directory).toBe(join(directory, 'work', 'feishu'))
   expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_TICKET: ticket.id, DSH_SUPERAGENT_SOURCE: 'feishu', DSH_SUPERAGENT_FEISHU_CHAT: CHAT })
   expect(ticket.assignments).toEqual([expect.objectContaining({ state: 'running', startedAt: expect.any(String) })])
   expect(sessionId).toBe(`worker-${ticket.id}`)
@@ -1112,6 +1112,8 @@ it('runs the prepare command once for a new ticket, under the execution root wit
   expect(runs()).toHaveLength(1)
   answers[shellArgv('exit 3').join(' ')] = new Error('fatal: no such clone')
   prepare('exit 3')
+  // 目录按项目命名后同一项目复用已准备好的工作区；删掉它，验证新工作区上的准备失败会让工单失败。
+  rmSync(join(directory, 'work', 'feishu'), { recursive: true, force: true })
   const failed = await acceptedTicket(feishu('9', '@bot 修一下标题'))
   await runtime.idle()
   expect(runtime.store.tickets.get(failed.ticket.id)!.assignments.at(-1)).toMatchObject({ report: expect.objectContaining({ state: 'failed', summary: expect.stringContaining('The prepare command failed: fatal: no such clone') }) })
@@ -1639,6 +1641,8 @@ it('runs a launch that fails for a passing reason again on the launch backoff th
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: 'exit 3' } })
   answers[shellArgv('exit 3').join(' ')] = new Error('fatal: unable to access: The requested URL returned error: 503')
   const before = runs()
+  // 项目工作区已被前面的工单准备好；删掉它，让这个工单重新运行 prepare 命令。
+  rmSync(join(directory, 'work', 'feishu'), { recursive: true, force: true })
   const prepared = await acceptedTicket(feishu('40', '@bot 修 prepare', { root_id: undefined }))
   await runtime.idle()
   expect(runtime.store.tickets.get(prepared.ticket.id)!.assignments.at(-1)!.report).toMatchObject({ state: 'failed', summary: expect.stringContaining('503') })
