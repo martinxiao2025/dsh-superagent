@@ -34,7 +34,7 @@ flowchart LR
 | Pipeline | 一份 `pipeline` 来源记录：代码源、任务源、时间表与回写策略 | 同一记录同一时间至多一次运行；停用后不再产生新工单，已有工单继续 |
 | Code source | 代码源配置：指向一条 GitHub 或 GitLab 记录、分支和本地目录 | 只读同步，不覆盖本地未提交内容；凭据来自该记录的 CLI |
 | Task source | 任务源配置：`excel` 或 `feishu`，加上列映射与「待办状态」集合 | 只读；读取失败不删除已知任务 |
-| Task item | 规范化后的任务：稳定 ID、标题、描述、来源状态、优先级 | 稳定 ID 由任务源提供；缺省时由行内容摘要生成 |
+| Task item | 规范化后的任务：稳定 ID、标题、描述、来源状态、优先级 | 稳定 ID 必须由清单的 `id` 列提供，整张表内唯一；缺失、重复或缺少 `title` 都会整批拒绝并报出行号 |
 | Split | 把一条任务的描述按复选框/编号列表拆成可独立执行的工作项 | 拆分结果确定：同样输入得到同样工作项 |
 | Pipeline run | 一次运行：同步代码 → 读取任务 → 拆解规划 → 逐条执行 → 回写 | 运行状态持久化；进程重启后从未完成状态继续 |
 | Writeback | 把任务项结果写回任务源 | 只在对应工单结束后写一次；写失败单独重试，不重跑工单 |
@@ -51,7 +51,8 @@ interface CodeSourcePort {
 
 /** 任务源端口：读取全部任务项，只做规范化和校验，不做拆分或去重。 */
 interface TaskSourcePort {
-  load(input: { signal: AbortSignal }): Promise<{ tasks: RawTask[]; warnings: string[] }>
+  /** 缺列、编号缺失或重复时抛出 TaskListError（含逐行问题），由运行器记为本次运行失败。 */
+  load(input: { signal: AbortSignal }): Promise<RawTask[]>
 }
 ```
 
@@ -116,7 +117,7 @@ interface TaskSourcePort {
 | `pendingStatuses` | 逗号分隔的待办状态集合；状态为空也视为待办 |
 | `intervalMinutes` | 运行间隔，最小 1 分钟、最大 1 天 |
 | `runOnStart` | 启动后立即运行一次 |
-| `concurrency` | 同时执行的工单数，不超过 `executor.maxWorkers` |
+| `concurrency` | 本轮同时在途的工作项上限；实际执行仍受执行器全局 `maxWorkers` 槽位约束（超出排队，不超发） |
 | `maxRetries` | 单个任务项在失败后自动重试的次数 |
 | `retryBackoffSeconds` | 重试退避基数，按尝试次数指数增长 |
 | `doneStatus`、`failedStatus` | 回写状态文案 |
@@ -128,7 +129,7 @@ interface TaskSourcePort {
 - `remoteUrl` 为空时按记录生成 `https://<站点>/<仓库>.git`；非空时拒绝 `user:pass@` 形式的内嵌凭据；
 - `taskKind = excel` 时 `taskFile` 必须是非空绝对路径；`taskKind = feishu` 时 `wikiUrl` 与 `feishuSource` 必填；
 - 列映射中 `columnId`、`columnTitle` 必填，其余可留空；
-- `concurrency` 实际取值同时受 `extensions.executor.maxWorkers` 约束。
+- `concurrency` 只限制本记录一轮在途的工作项数，不改变执行器的全局槽位（`extensions.executor.maxWorkers`）；超出槽位的工单排队等待。
 
 ## 调度模型
 
@@ -142,19 +143,35 @@ interface TaskSourcePort {
 4. 任一次运行失败只影响本次运行；下一次按时间表继续；
 5. 运行期间收到停止信号：当前步骤不再启动新任务，已启动工单不受影响。
 
-运行之间**不重叠**：单飞锁（进程内 Promise 复用）保证同一记录只有一个运行；跨进程由状态目录锁与工单去重 ID 兜底。
+运行之间**不重叠**：`watchPipeline` 是单循环顺序执行，上一次 `runPipeline` 返回后才进入等待并开始下一轮，因此同一记录不会并发运行；跨进程由状态目录锁与工单去重 ID 兜底。
 
 ### 去重与幂等
 
 | 对象 | 键 | 规则 |
 | --- | --- | --- |
-| 任务项 | `pipelineItem(record, taskId)` | 任务源提供的稳定 ID；缺省时用标题与描述摘要 |
-| 触发器 | `pipelineTask(record, taskId)` | 同一任务项永远产生同一个触发器 ID |
-| 工单 | `scheduledTicket(triggerId)` | 已存在即跳过，不新建、不改写 |
-| 已知任务 | KV `pipeline-item:<record>` | 保存终态、尝试次数与工单 ID，用于重启续跑 |
+| 任务项 | `pipeline-item(record, taskId, index)` | 任务源提供的 `id` 列；不再由内容摘要兜底 |
+| 触发器 | `pipeline-task(record, itemKey)` | 同一任务项永远产生同一个触发器 ID |
+| 工单 | `ticket(triggerId)` | 已存在即跳过，不新建、不改写 |
+| 已知任务 | KV `pipeline-items:<record>`、运行状态 `pipeline-state:<record>` | 保存阶段、终态、尝试次数与工单 ID，用于重启续跑 |
 | 代码同步 | 运行记录中的 `commit` | 仅作审计；不决定是否执行任务 |
 
 因此：重复读取同一份清单不会重复开单；进程在「已开单、未回写」时重启，只会补回写，不会重跑。
+
+### 清单导入契约
+
+- 第一行必须是表头；`columnId` 与 `columnTitle` 指向的列必须存在，拼错时错误信息会带上当前表头的实际列名；
+- 每一行都必须有非空 `id` 与 `title`，`id` 在整张表内唯一；
+- 只有表头、没有数据行也会报错；
+- 任一行不满足即**整批拒绝**，错误按行号汇总（最多逐条列出 5 处，其余注明数量），写入运行状态 `failed` 的 `detail` 与 `pipeline:tasks` 健康详情，不再出现“成功导入 0 条”；
+- 状态不在 `pendingStatuses` 的任务不算错误，运行状态里记录本轮跳过数量。
+
+### 工单目录
+
+- 工单目录为 `<executionRoot>/<项目名称>`，`executionRoot` 取 `executor.directory`，为空时取 `<stateDir>/work`；
+- 项目名称取来源记录项目标识的最后一段：GitHub 用 `repository`，GitLab 用 `project`；没有项目标识的来源（飞书）退回记录 ID；
+- 两条记录映射到同一名称时，两条都追加记录 ID（`<名称>-<记录ID>`），不会静默共用一个目录；
+- 名称会去掉 Windows 非法字符与首尾点、空格，保留设备名（`CON`、`NUL`、`COM1` 等）加 `project-` 前缀；
+- 同一项目的工单共享该目录，`executor.prepare` 只在该目录不存在时运行一次；**不迁移**旧版本按工单命名的目录，旧目录保留原样。
 
 ### 拆解
 
@@ -187,20 +204,19 @@ idle → syncing-code → loading-tasks → planning → running → writing-bac
 
 ```
 discovered → queued → running → succeeded → written-back
-                    ↘ failed → queued（未达 maxRetries）
-                             → failed-final（达上限，等待人工）
-                    ↘ skipped（状态不在 pending、工单已存在或人工停止）
+                    ↘ failed（未达 maxRetries，下一次运行重新准入）
+                             → failed（达到上限，作为终态等待人工）
 ```
 
-状态由流水线运行器写 KV；工单状态仍由引擎写。两边通过工单 ID 关联，不复制工单字段。
+状态由流水线运行器写 KV；工单状态仍由引擎写。两边通过工单 ID 关联，不复制工单字段。没有 `skipped` 状态：不符合导入契约的行整批拒绝，状态过滤只体现在运行摘要里。
 
 ## 失败重试与并发
 
 - **运行级**：失败后不立即重试，按 `intervalMinutes` 等到下一次时间表；`failed` 原因写入该记录健康与运行记录。
-- **任务级**：工单报告 `failed`/`blocked` 且未达 `maxRetries` 时，下一次运行重新准入（同一工单 ID，不重复开单）；达到上限后标记 `failed-final` 并在面板显示。
+- **任务级**：工单报告 `failed`/`blocked` 且未达 `maxRetries` 时，下一次运行重新准入（同一工单 ID，不重复开单）；达到上限后保持 `failed` 终态并在面板显示。
 - **回写级**：回写失败单独计数，独立于工单重试；工单成功不回退。
-- **并发**：`execution.concurrency` 与 `executor.maxWorkers` 取较小值；达到上限的工作项保持 `queued`，由下一次运行继续。流水线不抢占其他来源的工单槽位。
-- **崩溃恢复**：启动时把 `running` 且对应工单已不存在的任务项恢复为 `queued`；工单仍存在则继续等待。
+- **并发**：`concurrency` 是本轮同时在途的工作项上限（实际取值 `max(1, concurrency)`），未与 `executor.maxWorkers` 取较小值；超出执行器全局槽位的工单由执行器排队，不超发。流水线不抢占其他来源的工单槽位。
+- **崩溃恢复**：启动时对仍为 `running` 的任务项，若对应工单已丢失则写为 `failed` 并记录原因；工单仍存在则保持 `running`，继续等待它结束。
 
 ## 凭据读取
 
