@@ -1,0 +1,12 @@
+{
+  "startedAt": "2026-11-10 21:47:59",
+  "pid": 52540,
+  "port": "59519",
+  "token": "_6ErNgjYlKNdxaa2tacVgLcHVzMoEmgCM97tG34hEiY",
+  "url": "http://127.0.0.1:59519/?token=_6ErNgjYlKNdxaa2tacVgLcHVzMoEmgCM97tG34hEiY",
+  "ready": true,
+  "pathSource": "Machine + User 注册表值",
+  "pathHasGithubCli": true,
+  "whereGh": "C:\\Users\\61054\\AppData\\Local\\Programs\\GitHub CLI\\gh.exe",
+  "ghVersion": "gh version 2.103.3 (2026-10-26)\nhttps://github.com/cli/cli/releases/tag/v2.103.3"
+}

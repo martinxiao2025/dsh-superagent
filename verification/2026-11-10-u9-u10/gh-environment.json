@@ -1,0 +1,33 @@
+{
+  "recordedAt": "2026-11-10 21:48:52",
+  "gh": {
+    "path": "C:\\Users\\61054\\AppData\\Local\\Programs\\GitHub CLI\\gh.exe",
+    "exists": true,
+    "where": "C:\\Users\\61054\\AppData\\Local\\Programs\\GitHub CLI\\gh.exe",
+    "version": "gh version 2.103.3 (2026-10-26)\nhttps://github.com/cli/cli/releases/tag/v2.103.3",
+    "authStatus": {
+      "exit": 1,
+      "output": "You are not logged into any GitHub hosts. To log in, run: gh auth login"
+    }
+  },
+  "path": {
+    "userBefore": "c:\\SoftWare\\Trae CN\\bin;C:\\Users\\61054\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\61054\\.dotnet\\tools;C:\\Program Files\\Azure Data Studio\\bin;C:\\SoftWare\\nvm;C:\\SoftWare\\nodejs;C:\\Users\\61054\\.dotnet\\tools;D:\\SoftWare\\nvm;D:\\SoftWare\\nodejs;C:\\Software\\JetBrains\\IntelliJ IDEA 2023.1.2\\bin;;C:\\Users\\61054\\AppData\\Local\\Microsoft\\WindowsApps;;C:\\Users\\61054\\AppData\\Local\\Programs\\Ollama;C:\\Users\\61054\\.dotnet\\tools;C:\\Users\\61054\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\61054\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\copilot-shim;D:\\WorkSpace\\dev-agent-workbench\\src\\DevAgent.Workbench\\bin\\Debug\\net10.0",
+    "userAfter": "c:\\SoftWare\\Trae CN\\bin;C:\\Users\\61054\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\61054\\.dotnet\\tools;C:\\Program Files\\Azure Data Studio\\bin;C:\\SoftWare\\nvm;C:\\SoftWare\\nodejs;C:\\Users\\61054\\.dotnet\\tools;D:\\SoftWare\\nvm;D:\\SoftWare\\nodejs;C:\\Software\\JetBrains\\IntelliJ IDEA 2023.1.2\\bin;;C:\\Users\\61054\\AppData\\Local\\Microsoft\\WindowsApps;;C:\\Users\\61054\\AppData\\Local\\Programs\\Ollama;C:\\Users\\61054\\.dotnet\\tools;C:\\Users\\61054\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\61054\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\copilot-shim;D:\\WorkSpace\\dev-agent-workbench\\src\\DevAgent.Workbench\\bin\\Debug\\net10.0;C:\\Users\\61054\\AppData\\Local\\Programs\\GitHub CLI",
+    "userKind": "ExpandString",
+    "addedEntry": "C:\\Users\\61054\\AppData\\Local\\Programs\\GitHub CLI",
+    "verifiedInFreshProcess": {
+      "where": "C:\\Users\\61054\\AppData\\Local\\Programs\\GitHub CLI\\gh.exe",
+      "version": "gh version 2.103.3 (2026-10-26)\nhttps://github.com/cli/cli/releases/tag/v2.103.3"
+    }
+  },
+  "desktopProbe": {
+    "note": "临时 GitHub 来源 u10-gh-check，cli=gh；第一次（旧进程，PATH 未生效）返回 agentCliMissing，第二次（重启后）返回 agentCliSignedOut",
+    "beforeRestart": "{\"problem\":{\"place\":\"u10-gh-check\",\"code\":\"agentCliMissing\",\"values\":{\"output\":\"gh is not an executable file on PATH\"},\"detail\":\"The agent GitHub CLI was not found.\\ngh is not an executable file on PATH\"}}",
+    "afterRestart": "[{\"id\":\"u10-gh-check\",\"title\":{\"zh\":\"GitHub\",\"en\":\"GitHub\"},\"installed\":true,\"enabled\":true,\"state\":\"error\",\"health\":[{\"name\":\"u10-gh-check\",\"state\":\"starting\",\"detail\":\"\"}],\"problem\":{\"place\":\"u10-gh-check\",\"code\":\"agentCliSignedOut\",\"values\":{\"output\":\"gh: To use GitHub CLI in automation, set the GH_TOKEN environment variable.\"},\"detail\":\"The agent GitHub CLI cannot read its account.\\ngh: To use GitHub CLI in automation, set the GH_TOKEN environment variable.\"},\"stats\":{\"received\":0,\"filtered\":0,\"lastAt\":\"\"},\"filtered\":[],\"dropped\":[]}]"
+  },
+  "cleanup": {
+    "deleteStatus": 200,
+    "deleteBody": "{\"removed\":true,\"restarting\":true}",
+    "sourcesAfter": "[]"
+  }
+}

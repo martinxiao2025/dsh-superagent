@@ -1,0 +1,110 @@
+{
+  "phase": "install",
+  "startedAt": "2026-11-10 21:45:54",
+  "workspaceHash": "DA41500219CECD5DE06A854FF37B2356287983416131B61CDAFEC924EC7FBCB3",
+  "tgz": {
+    "path": "D:\\dsh-superagent\\.artifacts\\u6-u8\\dsh-superagent-0.1.0.tgz",
+    "bytes": 362637,
+    "hash": "4AB0361CB6530C8F385390F09C125D7A7B99AA51C7DD0D968D0CC9718077A73A"
+  },
+  "original": {
+    "linkType": "Junction",
+    "target": "D:\\dsh-superagent",
+    "lockFile": false,
+    "packageJson": "{\n  \"name\": \"dsh-profile-desktop\",\n  \"private\": true,\n  \"dependencies\": {\n    \"dsh-superagent\": \"link:D:\\\\dsh-superagent\"\n  },\n  \"dsh\": {\n    \"profile\": {\n      \"bundles\": [\n        \"@deepseek-ai/dsh-base\",\n        \"@deepseek-ai/dsh-web-app\",\n        \"@deepseek-ai/dsh-experimental-agent-team-profile\",\n        \"@deepseek-ai/dsh-experimental-plugin-market-bundle\",\n        \"dsh-superagent\"\n      ]\n    }\n  }\n}\n\r\n"
+  },
+  "installCommand": {
+    "exit": 0,
+    "output": "Progress: resolved 0, reused 0, downloaded 1, added 0\r\n WARN  Issues with peer dependencies found\r\n.\r\n└─┬ dsh-superagent 0.1.0\r\n  ├── ✕ missing peer @deepseek-ai/cordis@4.0.5-alpha.1\r\n  ├── ✕ missing peer @deepseek-ai/dsh-agent@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-api-session-controller@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-locale@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-ui-renderer@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-ui-settings@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-ui-layout@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-ui-sidebar@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-ui-workspace@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-host-webserver@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-llm@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-permission-presets@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-scope@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-session@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-session-persistence@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-system-prompt@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-tools@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-workspace@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/schemastery@3.18.5-alpha.1\r\n  ├── ✕ missing peer @deepseek-ai/dsh-skill@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-attachment@^0.2.1-alpha.2\r\n  ├── ✕ missing peer @deepseek-ai/dsh-client-ui-slots@^0.2.1-alpha.2\r\n  └── ✕ missing peer @deepseek-ai/dsh-subprocess@^0.2.1-alpha.2\r\nPeer dependencies that should be installed:\r\n  @deepseek-ai/cordis@4.0.5-alpha.1\r\n  @deepseek-ai/dsh-agent@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-api-session-controller@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-attachment@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-locale@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-ui-layout@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-ui-renderer@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-ui-settings@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-ui-sidebar@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-ui-slots@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-client-ui-workspace@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-host-webserver@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-llm@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-permission-presets@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-scope@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-session-persistence@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-session@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-skill@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-subprocess@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-system-prompt@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-tools@^0.2.1-alpha.2\r\n  @deepseek-ai/dsh-workspace@^0.2.1-alpha.2\r\n  @deepseek-ai/schemastery@3.18.5-alpha.1\r\n\r\nPackages: +6\r\n++++++\r\nProgress: resolved 6, reused 5, downloaded 1, added 6, done\r\nDone in 873ms using pnpm v10.26.1"
+  },
+  "install": {
+    "linkType": "",
+    "target": "",
+    "version": "0.1.0",
+    "libHash": "DA41500219CECD5DE06A854FF37B2356287983416131B61CDAFEC924EC7FBCB3",
+    "matchesWorkspace": true,
+    "dependency": "file:D:/dsh-superagent/.artifacts/u6-u8/dsh-superagent-0.1.0.tgz"
+  },
+  "inject": {
+    "mode": "prepare",
+    "inserted": [
+      {
+        "id": "demo-ui-01",
+        "project": "Demo.ProjectOnline",
+        "directory": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\Demo.ProjectOnline\\demo-ui-01"
+      },
+      {
+        "id": "demo-ui-02",
+        "project": "Demo.ProjectOnline",
+        "directory": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\Demo.ProjectOnline\\demo-ui-02"
+      },
+      {
+        "id": "demo-ui-03",
+        "project": "ledger-app",
+        "directory": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\ledger-app\\demo-ui-03"
+      },
+      {
+        "id": "demo-ui-04",
+        "project": "ledger-app",
+        "directory": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\ledger-app\\demo-ui-04"
+      },
+      {
+        "id": "demo-ui-05",
+        "project": "",
+        "directory": ""
+      }
+    ]
+  },
+  "start": {
+    "pid": 39932,
+    "port": "60332",
+    "token": "jQ-mN8wC6TVocRYQS5HIaghl9d-iD2c4iwJqgTjTT-I",
+    "url": "http://127.0.0.1:60332/?token=jQ-mN8wC6TVocRYQS5HIaghl9d-iD2c4iwJqgTjTT-I",
+    "log": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-u9-install.out.log",
+    "healthStatus": 200,
+    "health": {
+      "ok": true,
+      "stage": "ready",
+      "configured": true,
+      "paused": false,
+      "problem": null,
+      "listen": {
+        "host": "127.0.0.1",
+        "port": 60332
+      },
+      "phase": "ready",
+      "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+      "machine": {
+        "stateDir": "C:/Users/61054/.dsh/state/superagent"
+      },
+      "sources": []
+    }
+  },
+  "tickets": {
+    "status": 200,
+    "count": 5,
+    "groups": [
+      {
+        "project": "Demo.ProjectOnline",
+        "count": 2
+      },
+      {
+        "project": "ledger-app",
+        "count": 2
+      },
+      {
+        "project": "(unassigned)",
+        "count": 1
+      }
+    ],
+    "directories": [
+      "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\Demo.ProjectOnline\\demo-ui-01",
+      "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\Demo.ProjectOnline\\demo-ui-02",
+      "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\ledger-app\\demo-ui-03",
+      "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\ledger-app\\demo-ui-04",
+      null
+    ]
+  },
+  "ok": true,
+  "finishedAt": "2026-11-10 21:46:22"
+}

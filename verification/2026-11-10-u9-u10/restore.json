@@ -1,0 +1,48 @@
+{
+  "phase": "restore",
+  "startedAt": "2026-11-10 22:04:23",
+  "workspaceHash": "DA41500219CECD5DE06A854FF37B2356287983416131B61CDAFEC924EC7FBCB3",
+  "cleanup": {
+    "mode": "cleanup",
+    "deleted": 5
+  },
+  "restore": {
+    "exit": 0,
+    "output": "Packages: -6\r\n------\r\nDone in 395ms using pnpm v10.26.1",
+    "linkType": "Junction",
+    "target": "D:\\dsh-superagent",
+    "libHash": "DA41500219CECD5DE06A854FF37B2356287983416131B61CDAFEC924EC7FBCB3",
+    "packageJson": "{\n  \"name\": \"dsh-profile-desktop\",\n  \"private\": true,\n  \"dependencies\": {\n    \"dsh-superagent\": \"link:D:\\\\dsh-superagent\"\n  },\n  \"dsh\": {\n    \"profile\": {\n      \"bundles\": [\n        \"@deepseek-ai/dsh-base\",\n        \"@deepseek-ai/dsh-web-app\",\n        \"@deepseek-ai/dsh-experimental-agent-team-profile\",\n        \"@deepseek-ai/dsh-experimental-plugin-market-bundle\",\n        \"dsh-superagent\"\n      ]\n    }\n  }\n}\n\r\n"
+  },
+  "start": {
+    "pid": 20040,
+    "port": "61704",
+    "token": "CpQ2ED7PkP0L6NXYhNIYM5lJ08njhRhP0yAukHKnenM",
+    "url": "http://127.0.0.1:61704/?token=CpQ2ED7PkP0L6NXYhNIYM5lJ08njhRhP0yAukHKnenM",
+    "log": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-u9-restore.out.log",
+    "healthStatus": 200,
+    "health": {
+      "ok": true,
+      "stage": "ready",
+      "configured": true,
+      "paused": false,
+      "problem": null,
+      "listen": {
+        "host": "127.0.0.1",
+        "port": 61704
+      },
+      "phase": "ready",
+      "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+      "machine": {
+        "stateDir": "C:/Users/61054/.dsh/state/superagent"
+      },
+      "sources": []
+    }
+  },
+  "tickets": {
+    "status": 200,
+    "count": 0
+  },
+  "ok": true,
+  "finishedAt": "2026-11-10 22:04:50"
+}
