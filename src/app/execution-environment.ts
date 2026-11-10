@@ -9,7 +9,7 @@ import type { SourceRegistry } from '../sources/registry.ts'
 /** 由执行器注册的变量；`ticket` 条目仅在有工单时填充。 */
 export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] = [
   { key: 'DSH_SUPERAGENT_DIR', ticket: true, description: { zh: '这个工单的执行目录；执行器 Session 在其中工作', en: 'This ticket\'s directory; the executor Session works in it' } },
-  { key: 'DSH_SUPERAGENT_NAME', ticket: true, description: { zh: '工单的短名，也是执行目录的名字', en: 'The ticket\'s short name, also its directory\'s name' } },
+  { key: 'DSH_SUPERAGENT_NAME', ticket: true, description: { zh: '工单的短名，用于分支与工单标识；执行目录按项目命名，见 DSH_SUPERAGENT_DIR', en: 'The ticket\'s short name, used for its branch; the directory is named after the project, see DSH_SUPERAGENT_DIR' } },
   { key: 'DSH_SUPERAGENT_TICKET', ticket: true, description: { zh: '工单 id', en: 'The ticket id' } },
   { key: 'DSH_SUPERAGENT_SOURCE', ticket: true, description: { zh: '这个工单的来源记录 id；执行环境只按该记录注入变量', en: 'This ticket\'s Source record id; the execution environment only uses that record' } },
   { key: 'DSH_SUPERAGENT_BLOCKED_COMMANDS', description: { zh: '这个执行环境禁止调用的命令，以空格分隔；不要运行它们', en: 'Commands blocked in this execution environment, separated by spaces; never run them' } },
@@ -17,6 +17,38 @@ export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] =
 export interface Variable { key: string; value: string; description: Localized; owner: string }
 
 export const executionRoot = (settings: Settings, stateDir: string): string => settings.executor.directory || join(stateDir, 'work')
+
+/** Windows 保留设备名：目录名与之相同会导致无法创建或访问。 */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+
+/**
+ * 把项目标识洗成可安全用作 Windows 目录名的一段文本：取最后一段，去掉非法字符与首尾的点、空格，
+ * 保留设备名加 `project-` 前缀。返回值只由输入决定，便于对同名冲突做确定性判断。
+ */
+export function projectDirectoryName(raw: string): string {
+  const last = raw.trim().split(/[\\/]+/).filter(Boolean).pop() ?? ''
+  const cleaned = last.replace(/[<>:"|?*\u0000-\u001f]/g, '-').replace(/^[. ]+|[. ]+$/g, '')
+  if (!cleaned) return ''
+  return WINDOWS_RESERVED.test(cleaned) ? `project-${cleaned}` : cleaned
+}
+
+/** 来源记录声明的项目标识：GitHub 取仓库，GitLab 取项目路径，其他来源没有项目。 */
+function projectIdOf(source: { kind: string; config: Record<string, unknown> } | undefined): string {
+  const value = source?.kind === 'github' ? source.config.repository : source?.kind === 'gitlab' ? source.config.project : undefined
+  return typeof value === 'string' ? value : ''
+}
+
+/**
+ * 工单目录名：优先用来源记录的项目名；多条记录声明同一项目名时统一追加记录 ID，避免两个项目静默共用一个目录；
+ * 没有项目标识的来源（飞书）退回记录 ID。结果只由设置决定，不随工单或时间变化。
+ */
+export function projectDirectory(settings: Settings, sourceId: string | undefined, fallback: string): string {
+  const nameOf = (id: string): string => projectDirectoryName(projectIdOf(settings.sources[id])) || id
+  if (!sourceId || !settings.sources[sourceId]) return projectDirectoryName(fallback) || 'ticket'
+  const own = nameOf(sourceId)
+  const shared = Object.keys(settings.sources).some(id => id !== sourceId && nameOf(id) === own)
+  return shared ? `${own}-${sourceId}` : own
+}
 
 /** 按来源记录分组列出所有已声明的变量；对于当前已关闭的记录，`enabled` 为 false。 */
 export function declaredVariables(sources: SourceRegistry, settings?: Settings): { owner: string; enabled: boolean; variables: readonly VariableSpec[] }[] {

@@ -1,7 +1,7 @@
 /** 执行环境按工单来源记录注入变量：其他记录不进入该工单，同名变量不再互相覆盖。 */
 import { describe, expect, it } from 'vitest'
 import type { Trigger } from '../src/core/index.ts'
-import { environmentOf } from '../src/app/execution-environment.ts'
+import { environmentOf, projectDirectory, projectDirectoryName } from '../src/app/execution-environment.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind } from '../src/sources/github.ts'
@@ -54,5 +54,36 @@ describe('ticket execution environment', () => {
     expect(variables.filter(variable => variable.key === 'DSH_SUPERAGENT_GITHUB_REPOSITORY').map(variable => variable.value)).toEqual(['acme/alpha', 'acme/beta'])
     expect(variables.some(variable => variable.key === 'DSH_SUPERAGENT_SOURCE')).toBe(false)
     expect(variables.some(variable => variable.key === 'DSH_SUPERAGENT_FEISHU_CHAT')).toBe(true)
+  })
+})
+
+describe('project directory names', () => {
+  /** 用给定的 GitHub 仓库构造设置，用于验证项目名与同名冲突。 */
+  const withRepos = (repos: Record<string, string>) => SettingsSchema.parse({ sources: Object.fromEntries(
+    Object.entries(repos).map(([id, repository]) => [id, { kind: 'github', enabled: true, config: { repository } }])) })
+
+  it('names the directory after the repository, never after the ticket', () => {
+    const value = withRepos({ alpha: 'acme/Demo.ProjectOnline' })
+    expect(projectDirectory(value, 'alpha', 'ticket-name')).toBe('Demo.ProjectOnline')
+  })
+
+  it('falls back to the record id for sources without a project, and to the worktree name without a record', () => {
+    const value = SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: {} } } })
+    expect(projectDirectory(value, 'feishu', 'ticket-name')).toBe('feishu')
+    expect(projectDirectory(value, undefined, 'quiet-otter-123456789012')).toBe('quiet-otter-123456789012')
+  })
+
+  it('suffixes both records when two projects sanitize to the same name instead of sharing a directory', () => {
+    const value = withRepos({ alpha: 'acme/app', beta: 'other/app' })
+    expect(projectDirectory(value, 'alpha', 'x')).toBe('app-alpha')
+    expect(projectDirectory(value, 'beta', 'x')).toBe('app-beta')
+  })
+
+  it('strips path separators, Windows-illegal characters and trailing dots, and escapes reserved device names', () => {
+    expect(projectDirectoryName('acme\\app')).toBe('app')
+    expect(projectDirectoryName('acme/app.')).toBe('app')
+    expect(projectDirectoryName('..')).toBe('')
+    expect(projectDirectoryName('CON')).toBe('project-CON')
+    expect(projectDirectoryName('a:b*c?')).toBe('a-b-c-')
   })
 })

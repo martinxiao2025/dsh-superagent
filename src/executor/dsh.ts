@@ -13,7 +13,7 @@ import { recordTicketSource } from '../infra/worker-sources.ts'
 import type { Settings } from '../policy.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
-import { executionRoot, type Variable } from '../app/execution-environment.ts'
+import { executionRoot, projectDirectory, type Variable } from '../app/execution-environment.ts'
 import type { Sessions } from '../app/sessions.ts'
 import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
@@ -95,11 +95,10 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
     + 'internal to one module within the accepted rule scope. If it requires public-interface or behavior changes, new interaction, product '
     + 'decisions or clarification, stop and report dropped; do not expand scope.' : ''
 }
-/** 构建新接受工单的执行元数据：其工作树名称、工作区目录和任务分配文本。 */
+/** 构建新接受工单的执行元数据：工单短名（用于分支）、按项目命名的目录和任务分配文本。 */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
-  stateDir: string): Execution {
+  stateDir: string, trigger?: Trigger): Execution {
   const name = ticketWorktreeName(outcome.name ?? '', ticket.id)
-  const source = ticket.origin.triggerId
   const note = outcome.note ? `\nRouting note (not the source request): ${outcome.note}` : ''
   const ruleIds = ticket.mandate.basis.rules
   const rules = settings.policy.rules.filter(rule => ruleIds?.includes(rule.id))
@@ -109,7 +108,7 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
   const assignment = ticket.mandate.strength === 'inferred' && ruleIds
     ? `Proactively accepted under ${ruleIds.join(', ')}. Scope: ${outcome.scope}.${precedence}${note}`
     : note.trim()
-  return { name, directory: join(executionRoot(settings, stateDir), name), assignment }
+  return { name, directory: join(executionRoot(settings, stateDir), projectDirectory(settings, trigger?.source, name)), assignment }
 }
 /** 工作单元消息中内联任务分配和触发器文本的字符上限；更长的文本通过其资源读取。 */
 const ASSIGNMENT_CHARS = 1500, TRIGGER_CHARS = 600
@@ -236,9 +235,10 @@ export class DshExecutor implements Executor {
     // 失败的输入投递记录在工单本身上，而不通过 `delivery` 效果的健康条目报告（`quiet: true`）。
     host.effects.handle('delivery', payload => this.deliverQueued(payload.ticketId), { limit: () => host.paused() ? 0 : 4, quiet: true })
   }
-  /** 填充新接受工单的 `execution` 属性（工作树名称、工作区目录和任务分配文本）。 */
+  /** 填充新接受工单的 `execution` 属性（工单短名、按项目命名的目录和任务分配文本）。 */
   prepare(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>): Ticket {
-    return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir) }
+    return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir,
+      sourceTrigger(this.host, ticket)) }
   }
   /**
    * 以工单的执行环境变量，在其父目录中为新工单工作区运行配置的 `executor.prepare` 命令，
