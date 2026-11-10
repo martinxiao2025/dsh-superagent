@@ -1,0 +1,45 @@
+{
+  "phase": "cleanup",
+  "startedAt": "2026-11-10 21:38:27",
+  "stateDir": "C:\\Users\\61054\\.dsh\\state\\superagent",
+  "workspaceHash": "DA41500219CECD5DE06A854FF37B2356287983416131B61CDAFEC924EC7FBCB3",
+  "inject": {
+    "exit": 0,
+    "output": {
+      "mode": "cleanup",
+      "deleted": 5
+    }
+  },
+  "start": {
+    "pid": 33180,
+    "port": "59784",
+    "token": "N9WB4cQ8A8njov_oFMvyfAcCV17PepO973ZdANc-bd4",
+    "url": "http://127.0.0.1:59784/?token=N9WB4cQ8A8njov_oFMvyfAcCV17PepO973ZdANc-bd4",
+    "log": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-u6-u8-cleanup.out.log",
+    "healthStatus": 200,
+    "health": {
+      "ok": true,
+      "stage": "ready",
+      "configured": true,
+      "paused": false,
+      "problem": null,
+      "listen": {
+        "host": "127.0.0.1",
+        "port": 59784
+      },
+      "phase": "ready",
+      "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+      "machine": {
+        "stateDir": "C:/Users/61054/.dsh/state/superagent"
+      },
+      "sources": []
+    }
+  },
+  "tickets": {
+    "status": 200,
+    "count": 0,
+    "groups": []
+  },
+  "ok": true,
+  "finishedAt": "2026-11-10 21:38:50"
+}
