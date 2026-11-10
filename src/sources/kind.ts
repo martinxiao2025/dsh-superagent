@@ -11,13 +11,14 @@ export interface Localized { zh: string; en: string }
 interface FieldBase { key: string; label: Localized; hint?: Localized; advanced?: true }
 /**
  * 配置字段规范；`rows` 编辑以第一列为键的记录列表，`choose` 从已解析的来源标签中选择，
- * `fact` 显示来自 `facts` 的只读值。
+ * `sources` 从已安装的来源记录中选择（按 `kinds` 过滤），`fact` 显示来自 `facts` 的只读值。
  */
 export type FieldSpec =
   | FieldBase & { type: 'switch' }
   | FieldBase & { type: 'select'; options: { value: string; label: Localized }[] }
   | FieldBase & { type: 'number'; min: number; max: number }
   | FieldBase & { type: 'text'; pattern?: string; readonly?: boolean; choose?: Localized }
+  | FieldBase & { type: 'sources'; kinds: string[]; choose: Localized }
   | FieldBase & { type: 'fact'; settings?: 'deployment' }
   | FieldBase & { type: 'rows'; columns: ({ key: string; label: Localized; type: 'text'; pattern?: string; optional?: boolean; choose?: Localized; refresh?: Localized } | { key: string; label: Localized; type: 'select'; options: { value: string; label: Localized }[] })[] }
 

@@ -47,7 +47,7 @@ function AddSource() {
   </div>
 }
 
-function SourceCard({ source }: { source: SourceView }) {
+function SourceCard({ source, records }: { source: SourceView; records: readonly SourceView[] }) {
   const { t, call, notify } = usePanel()
   const { running } = usePanelData()
   const { reload } = useSettings()
@@ -63,7 +63,7 @@ function SourceCard({ source }: { source: SourceView }) {
   const description = localized(t, source.description)
   // 对未保存的字段编辑隐藏派生事实，直到新值被保存。
   const field = (spec: FieldSpec) => <SourceField key={spec.key} field={spec} value={value.config[spec.key]} saved={saved.config[spec.key]}
-    labels={source.labels}
+    labels={source.labels} records={records}
     refreshLabels={refreshLabels} fact={spec.type === 'fact' || !changed(spec.key) ? source.facts[spec.key] : undefined}
     onChange={next => draft.edit({ ...value, config: { ...value.config, [spec.key]: next } })} />
   const advanced = source.fields.filter(spec => spec.advanced)
@@ -113,7 +113,7 @@ export function SourceSettings({ focus }: { focus?: string }) {
   useEffect(() => { if (focus) document.getElementById(`dt-source-${focus}`)?.scrollIntoView?.({ block: 'start' }) }, [focus])
   return <div className="dt-form">
     <AddSource />
-    {sources.map(source => <SourceCard key={source.id} source={source} />)}
+    {sources.map(source => <SourceCard key={source.id} source={source} records={sources} />)}
     <ConfigHistory blocks={['source:']} />
   </div>
 }

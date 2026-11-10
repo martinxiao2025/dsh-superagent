@@ -104,12 +104,12 @@ interface TaskSourcePort {
 
 | 字段 | 含义 |
 | --- | --- |
-| `codeSource` | 代码来源记录 ID；必须是已安装的 `github` 或 `gitlab` 记录 |
+| `codeSource` | 代码来源记录；面板只列出已安装的 `github` 或 `gitlab` 记录 |
 | `remoteUrl` | 可选远端地址；空表示按来源记录生成 HTTPS 地址。可填 `ssh://git@host/owner/repo.git`，不得内嵌账号密码 |
 | `branch` | 分支；空表示该来源的默认分支（由 `git ls-remote` 解析远端 HEAD） |
 | `directory` | 本地同步目录；空表示 `<stateDir>/pipeline/<记录ID>/code` |
 | `taskKind` | `excel` 或 `feishu` |
-| `feishuSource` | 读取飞书知识库所使用的飞书来源记录 ID；`taskKind = feishu` 时必填 |
+| `feishuSource` | 读取知识库所使用的飞书来源记录；`taskKind = feishu` 时必填，面板只列出已安装的飞书记录 |
 | `taskFile`、`taskSheet` | Excel 文件绝对路径与工作表名；`taskSheet` 为空时取第一张表 |
 | `wikiUrl` | 飞书知识库节点 URL、文档 URL 或 token |
 | `column*` | 表头到字段的映射；`columnId` 与 `columnTitle` 必填，其余可留空 |

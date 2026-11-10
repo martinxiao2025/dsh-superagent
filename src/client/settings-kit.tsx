@@ -237,10 +237,13 @@ function RowsField({ field, value, saved, onChange, labels, refreshLabels }: {
     </li>)}</ul>}
   </div>
 }
-export function SourceField({ field, value, saved, fact, onChange, labels, refreshLabels }: {
+/** 可被字段引用的来源记录；`sources` 字段按 `kinds` 过滤后渲染为下拉选项。 */
+export interface SourceOption { id: string; kind: string; title: Localized | string }
+export function SourceField({ field, value, saved, fact, onChange, labels, refreshLabels, records }: {
   field: FieldSpec; value: unknown; saved: unknown; fact: Localized | string | undefined; onChange: (next: unknown) => void
   labels: Record<string, string>
   refreshLabels?: () => Promise<string[]>
+  records?: readonly SourceOption[]
 }) {
   const { t, navigate } = usePanel()
   const label = localized(t, field.label), hint = localized(t, field.hint)
@@ -264,6 +267,18 @@ export function SourceField({ field, value, saved, fact, onChange, labels, refre
         : <Input value={String(value ?? '')} readOnly={field.readonly} pattern={field.pattern} spellCheck={false}
           onChange={event => onChange(event.target.value)} />}
     </Field>
+    case 'sources': {
+      const options = (records ?? []).filter(record => field.kinds.includes(record.kind))
+        .sort((left, right) => String(localized(t, left.title)).localeCompare(String(localized(t, right.title))))
+      const current = String(value ?? '')
+      return <Field label={label} hint={hint}>
+        <select className="dt-select" aria-label={label} value={current} onChange={event => onChange(event.target.value)}>
+          <option value="">{localized(t, field.choose)}</option>
+          {current && !options.some(record => record.id === current) ? <option value={current}>{current}</option> : null}
+          {options.map(record => <option key={record.id} value={record.id}>{localized(t, record.title)}{' ('}{record.id}{')'}</option>)}
+        </select>
+      </Field>
+    }
     case 'fact': return <div className="dt-field">
       <span className="dt-field-head">{label}{hint && <InfoTip text={hint} />}</span>
       <span className="dt-mono">{localized(t, fact) || t('empty')}</span>

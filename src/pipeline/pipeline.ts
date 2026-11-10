@@ -22,7 +22,7 @@ export const pipelineKind: SourceKind<PipelineConfig> = {
     return ready ? { listened: true, observed: false } : { listened: false, reason: '流水线尚未配置代码源或任务源' }
   },
   fields: [
-    { key: 'codeSource', type: 'text', label: label('代码来源记录', 'Code source record'), hint: label('填写 GitHub 或 GitLab 来源记录的 ID', 'ID of a GitHub or GitLab source record') },
+    { key: 'codeSource', type: 'sources', kinds: ['github', 'gitlab'], choose: label('选择代码来源记录', 'Choose a code source record'), label: label('代码来源记录', 'Code source record'), hint: label('从已安装的 GitHub 或 GitLab 来源记录中选择', 'Pick an installed GitHub or GitLab source record') },
     { key: 'remoteUrl', type: 'text', label: label('远端地址', 'Remote URL'), hint: label('留空按来源记录生成；可填 SSH 地址（git@host:owner/repo.git），不要内嵌账号密码', 'Empty derives from the record; SSH like git@host:owner/repo.git is allowed, never embed credentials'), advanced: true },
     { key: 'branch', type: 'text', label: label('分支', 'Branch'), hint: label('留空使用仓库默认分支', 'Empty uses the default branch') },
     { key: 'taskKind', type: 'select', label: label('任务源类型', 'Task source'), options: [
@@ -31,7 +31,7 @@ export const pipelineKind: SourceKind<PipelineConfig> = {
     ] },
     { key: 'taskFile', type: 'text', label: label('任务清单文件', 'Task list file'), hint: label('绝对路径，支持 .xlsx、.csv、.tsv', 'Absolute path; .xlsx, .csv, .tsv') },
     { key: 'wikiUrl', type: 'text', label: label('知识库地址', 'Wiki URL'), hint: label('知识库节点或文档链接', 'Wiki node or document link') },
-    { key: 'feishuSource', type: 'text', label: label('飞书来源记录', 'Feishu source record'), hint: label('读取知识库所使用的飞书来源记录 ID', 'Feishu record ID used to read the wiki'), advanced: true },
+    { key: 'feishuSource', type: 'sources', kinds: ['feishu'], choose: label('选择飞书来源记录', 'Choose a Feishu source record'), label: label('飞书来源记录', 'Feishu source record'), hint: label('读取知识库所使用的飞书来源记录', 'Feishu record used to read the wiki'), advanced: true },
     { key: 'intervalMinutes', type: 'number', min: 1, max: 1440, label: label('运行间隔（分钟）', 'Interval (minutes)') },
     { key: 'runOnStart', type: 'switch', label: label('启动后立即运行', 'Run on start') },
     { key: 'taskSheet', type: 'text', label: label('工作表', 'Sheet'), hint: label('留空取第一张表', 'Empty uses the first sheet'), advanced: true },

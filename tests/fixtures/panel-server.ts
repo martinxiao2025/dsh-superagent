@@ -19,6 +19,7 @@ import { feishuChannel } from '../../src/sources/feishu-trigger.ts'
 import { githubChannel } from '../../src/sources/github-trigger.ts'
 import { feishuKind } from '../../src/sources/feishu.ts'
 import { githubKind } from '../../src/sources/github.ts'
+import { pipelineKind } from '../../src/pipeline/pipeline.ts'
 import type { Health } from '../../src/sources/host.ts'
 import type { SourceKind } from '../../src/sources/kind.ts'
 import { testDeployment, testFeishu, testGithub, testGitlab } from './deployment.ts'
@@ -79,7 +80,7 @@ export const droppedReply = (id: string, hoursAgo: number, source: 'feishu' | 'g
 const dayAgo = () => new Date(Date.now() - 86_400_000).toISOString()
 export const problemOf = (code: SetupCode, values: Record<string, string> = {}) => new SetupError(code, values).problem
 // 这些类型的配置不同，伪实现只把它们当作视图所携带的记录来读取。
-const KINDS = [feishuKind, githubKind] as unknown as SourceKind[]
+const KINDS = [feishuKind, githubKind, pipelineKind] as unknown as SourceKind[]
 export const MACHINE = { stateDir: '/srv/dsh-superagent', promptMaxChars: 100000, admissionContextMaxPages: 10,
   admissionContextTimeoutMs: 15000 }
 
@@ -190,7 +191,7 @@ const overviewView = (): ApiResponse<'GET overview'> => {
   const setup = problem ?? feishuProblem
   return {
     problems: [...setup ? [{ kind: 'setup' as const, ...setup }] : [],
-      ...KINDS.some(kind => server.settings.sources[kind.kind]?.enabled !== false) ? [] : [{ kind: 'no-source' as const }],
+      ...Object.values(server.settings.sources).some(record => record.enabled !== false) ? [] : [{ kind: 'no-source' as const }],
       ...feishuProblem || server.settings.sources.feishu?.enabled === false ? [] : [{ kind: 'source-error' as const, source: { id: 'feishu',
         title: { zh: '飞书', en: 'Feishu' },
         health: { name: 'feishu', state: 'error' as const, detail: 'socket closed' } } }],

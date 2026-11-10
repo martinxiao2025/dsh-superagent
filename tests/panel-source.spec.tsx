@@ -285,6 +285,23 @@ it('reads the settings again as soon as dsh-superagent answers after a save rest
   expect(field<HTMLInputElement>('智能体的 GitHub CLI').value).toBe('/opt/bin/gh-agent')
 })
 
+it('chooses code and Feishu source records from installed records', async () => {
+  server.settings.sources.pipeline = { kind: 'pipeline', enabled: true, config: {
+    codeSource: 'github', taskKind: 'feishu', wikiUrl: 'https://acme.feishu.cn/wiki/wikcn1', feishuSource: 'feishu', intervalMinutes: 5 } }
+  at({ page: 'settings', query: { group: 'source' } })
+  await mount()
+  await click(tab(zh['tab.source']))
+  await click(find(zh['tab.settings'], '.dt-status-head button'))
+  const card = all('.dt-card').find(item => item.textContent?.includes('任务流水线'))!
+  const select = (label: string) => card.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!
+  const options = (label: string) => [...select(label).options].map(option => option.textContent)
+  expect(options('代码来源记录')).toEqual(['选择代码来源记录', 'GitHub (github)'])
+  expect(select('代码来源记录').value).toBe('github')
+  await click([...card.querySelectorAll<HTMLElement>('[data-disclosure-row]')].find(row => row.textContent?.includes('高级'))!)
+  expect(options('飞书来源记录')).toEqual(['选择飞书来源记录', '飞书 (feishu)'])
+  expect(select('飞书来源记录').value).toBe('feishu')
+})
+
 it('creates a Source record through the API and shows the new card', async () => {
   at({ page: 'settings', query: { group: 'source' } })
   await mount()
