@@ -100,26 +100,27 @@ function threadMessages(thread: GithubComment[], id: (comment: GithubComment) =>
  * `{ id, from, at, text, reply_to?, path?, line?, url }` 消息，而非 GitHub API 原始记录。
  */
 export async function readGithub(commands: Commands, resource: string): Promise<unknown> {
-  // 某个提交的 CI，例如默认分支的 CI，没有 PR 引用它。
-  const commit = /^github\/commits\/([0-9a-f]{7,40})\/checks$/.exec(resource)
-  if (commit) return pullChecks(commands, commit[1]!)
-  const match = /^github\/(issues|pulls)\/([1-9]\d*)(?:\/(comments|reviews|checks|thread)(?:\/([1-9]\d*))?)?$/.exec(resource)
+  // 某个提交的 CI，例如默认分支的 CI，没有 PR 引用它；记录段可选，由调用方的命令作用域决定。
+  const commit = /^github\/(?:([^/]+)\/)?commits\/([0-9a-f]{7,40})\/checks$/.exec(resource)
+  if (commit) return pullChecks(commands, commit[2]!)
+  const match = /^github\/(?:([^/]+)\/)?(issues|pulls)\/([1-9]\d*)(?:\/(comments|reviews|checks|thread)(?:\/([1-9]\d*))?)?$/.exec(resource)
   if (!match) {
-    throw new Error('Use github/issues/<number>, github/pulls/<number>, or append /comments/<page>, /reviews/<page>, /thread/<comment-id> or /checks; or github/commits/<sha>/checks')
+    throw new Error('Use github/<record>/issues/<number> or github/<record>/pulls/<number>, or append /comments/<page>, /reviews/<page>, /thread/<comment-id> or /checks; or github/<record>/commits/<sha>/checks')
   }
-  const [, kind, number, section, page = '1'] = match
+  const [, record, kind, number, section, page = '1'] = match
+  const base = record ? `github/${record}` : 'github'
   if (kind === 'issues' && (section === 'reviews' || section === 'checks' || section === 'thread')) {
     throw new Error('Reviews, review threads and checks require a pull request')
   }
   const path = `${kind}/${number}`
   if (section === 'checks') {
-    if (match[4]) throw new Error('Checks do not take a page number')
+    if (match[5]) throw new Error('Checks do not take a page number')
     const pr = await commands.api(z.looseObject({ head: z.looseObject({ sha: z.string() }) }), path)
     return pullChecks(commands, pr.head.sha)
   }
   if (section === 'thread') {
-    if (!match[4]) throw new Error('Name the review thread by one of its comments: github/pulls/<number>/thread/<comment-id>')
-    const thread = await reviewThread(commands, Number(number), Number(match[4]))
+    if (!match[5]) throw new Error(`Name the review thread by one of its comments: ${base}/pulls/<number>/thread/<comment-id>`)
+    const thread = await reviewThread(commands, Number(number), Number(match[5]))
     if (!thread.length) throw new Error('No review comment of this PR has that id')
     return { messages: threadMessages(thread, item => String(item.id)) }
   }
@@ -137,7 +138,7 @@ export async function readGithub(commands: Commands, resource: string): Promise<
     ? githubMessage({ ...item, created_at: item.submitted_at ?? item.created_at }, reviewText(item), String(item.id))
     : { ...githubMessage(item, item.body ?? '', String(item.id)), ...item.in_reply_to_id ? { reply_to: String(item.in_reply_to_id) } : {} })
   return { messages, ...tally.skipped ? { skipped: tally.skipped } : {},
-    ...listed.length === 20 ? { next_resource: `github/${kind}/${number}/${section}/${Number(page) + 1}` } : {} }
+    ...listed.length === 20 ? { next_resource: `${base}/${kind}/${number}/${section}/${Number(page) + 1}` } : {} }
 }
 /** 读取 Issue 或 PR 对话的一页（第 1 页最先包含 Issue/PR 描述），并使用评论 URL 作为消息 ID。 */
 async function conversationPage(commands: Commands, number: number, page: number) {

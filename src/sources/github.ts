@@ -255,7 +255,7 @@ async function pollBranchCi(ctx: SourceContext, round: Round): Promise<void> {
   let revision = previous?.revision ?? 0
   if (known && JSON.stringify(now) !== JSON.stringify(known)) {
     revision += 1
-    const summary = ciSummary(snapshot, branch, `github/commits/${head.sha}/checks`)
+    const summary = ciSummary(snapshot, branch, `github/${encodeURIComponent(ctx.id)}/commits/${head.sha}/checks`)
     const { repository, instanceUrl } = account(ctx)
     const url = `${webBaseOf(instanceUrl, 'https://github.com').replace(/\/+$/, '')}/${repository}/commit/${head.sha}`
     await ctx.receive(branchCiTrigger(ctx.id, branch, head.sha, revision, summary, url))
@@ -411,7 +411,7 @@ async function pollChecks(ctx: SourceContext, round: Round, number: number, pr: 
   const previous = ctx.state.get(KV.github.ci(ctx.id, number))
   if (previous?.fingerprint === fingerprint) return
   const revision = previous ? previous.revision + 1 : 0
-  if (previous) await ctx.receive(ciTrigger(ctx.id, pr, revision, ciSummary(snapshot, `PR #${number}`, `github/pulls/${number}/checks`)))
+  if (previous) await ctx.receive(ciTrigger(ctx.id, pr, revision, ciSummary(snapshot, `PR #${number}`, `github/${encodeURIComponent(ctx.id)}/pulls/${number}/checks`)))
   ctx.state.set(KV.github.ci(ctx.id, number), { fingerprint, revision })
   ctx.threads.describe(threadKey(ctx.id, String(number)), { facts: { ci: ciFact(ciCounts(snapshot)) } })
 }

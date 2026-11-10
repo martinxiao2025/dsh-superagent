@@ -38,15 +38,16 @@ async function conversationPage(commands: Commands, kind: 'issues' | 'mrs', iid:
 }
 /**
  * 读取 Issue/MR 本体或一页 note，返回模型可读的 `{ messages }` 或带标题、状态、分支的摘要。
- * 资源命名与 GitHub 对齐：`gitlab/issues/<iid>`、`gitlab/mrs/<iid>`、`gitlab/issues/<iid>/notes/<page>`。
+ * 资源命名与 GitHub 对齐：`gitlab/<record>/issues/<iid>`、`gitlab/<record>/mrs/<iid>`、`gitlab/<record>/issues/<iid>/notes/<page>`；
+ * 记录段可省略，由调用方的命令作用域决定。
  */
 export async function readGitlab(commands: Commands, resource: string): Promise<unknown> {
-  const match = /^gitlab\/(issues|mrs)\/([1-9]\d*)(?:\/notes(?:\/([1-9]\d*))?)?$/.exec(resource)
-  if (!match) throw new Error('Use gitlab/issues/<iid>, gitlab/mrs/<iid>, or append /notes/<page>')
-  const [, kind = 'issues', iidText, page = '1'] = match
+  const match = /^gitlab\/(?:([^/]+)\/)?(issues|mrs)\/([1-9]\d*)(?:\/notes(?:\/([1-9]\d*))?)?$/.exec(resource)
+  if (!match) throw new Error('Use gitlab/<record>/issues/<iid>, gitlab/<record>/mrs/<iid>, or append /notes/<page>')
+  const [, , kind = 'issues', iidText, page = '1'] = match
   const iid = Number(iidText)
   if (resource.includes('/notes')) {
-    if (match[3] && Number(match[3]) < 1) throw new Error('Note pages start at 1')
+    if (match[4] && Number(match[4]) < 1) throw new Error('Note pages start at 1')
     return conversationPage(commands, kind as 'issues' | 'mrs', iid, Number(page))
   }
   const item = await commands.gitlabApi(ItemSchema, `${apiProject(commands)}/${kind === 'issues' ? 'issues' : 'merge_requests'}/${iid}`)

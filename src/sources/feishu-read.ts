@@ -43,13 +43,17 @@ export function feishuReferences(ref: FeishuRef) {
     around: read('around') }
 }
 
-/** 在任何网络请求之前校验模型提供的资源字符串；只有 `thread` 和 `around` 接受分页游标。 */
+/**
+ * 在任何网络请求之前校验模型提供的资源字符串；只有 `thread` 和 `around` 接受分页游标。
+ * 记录段可省略：触发器 id 本身由其来源记录生成，记录段只用于与 GitHub/GitLab 保持同一写法。
+ */
 export function feishuResource(resource: string) {
-  const match = /^feishu\/([^/]+)\/(message|root|parent|thread|around)(?:\/([^/]+))?$/.exec(resource)
-  if (!match || (match[3] && match[2] !== 'thread' && match[2] !== 'around')) {
-    throw new Error('Use feishu/<trigger-id>/message, /root, /parent, /thread or /around; follow returned next_resource for another page')
+  const match = /^feishu\/(?:([^/]+)\/)?([^/]+)\/(message|root|parent|thread|around)(?:\/([^/]+))?$/.exec(resource)
+  if (!match || (match[4] && match[3] !== 'thread' && match[3] !== 'around')) {
+    throw new Error('Use feishu/[<record>/]<trigger-id>/message, /root, /parent, /thread or /around; follow returned next_resource for another page')
   }
-  return { triggerId: match[1]!, section: match[2]!, cursor: match[3] ? decodeURIComponent(match[3]) : undefined }
+  return { record: match[1] ? decodeURIComponent(match[1]) : undefined, triggerId: match[2]!,
+    section: match[3]!, cursor: match[4] ? decodeURIComponent(match[4]) : undefined }
 }
 async function sourceOf(commands: Commands, ref: FeishuRef) {
   const id = messageId.parse(ref.messageId)

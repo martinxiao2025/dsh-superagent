@@ -419,6 +419,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/gitlab.spec.ts` | 带假 `glab` 的 `SourceContext` 上的 GitLab 来源：Issue、合并请求和评论触发器，双流轮询和游标，已订阅线程的评论，回复及其去重，健康，策略行，`find` 和上下文读取 |
 | `tests/commands.spec.ts` | 以部署账号进行的 CLI 调用、渠道的答复，以及限定在仓库内的 GitHub 调用 |
 | `tests/feishu-read.spec.ts`、`tests/github-read.spec.ts` | 飞书和 GitHub 读取 |
+| `tests/resources.spec.ts` | 来源资源按记录路由：真实 CLI 进程验证两条记录下同号 Issue、同 id 合并请求和同一条飞书消息各自读取自己的内容，以及主会话省略记录段时的失败与唯一记录的回退 |
 | `tests/admission-context.spec.ts`、`tests/feishu-image.spec.ts` | 评估的线程窗口，以及飞书图片读取 |
 | `tests/assessment.spec.ts` | MasterAssessor 为每次评估保留什么，以及何时释放 |
 | `tests/background.spec.ts` | 等待执行器的 shell 任务和子代理：唤醒它的结束，以及停止的宿主 |
@@ -571,11 +572,12 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `settings`、`settings/<block>` | 修订号和摘要，或可保存的完整块 |
 | `prompts`、`prompts/<revision>`、`prompts/current`、`prompts/defaults`、`prompt-preview/<id>` | 提示词配置和组装文本 |
 | `models`、`models/<provider>` | 可用模型 |
-| `feishu/<trigger id>/…`、`github/…` | 原始来源记录，在来源技能中说明 |
+| `feishu/[<record>/]<trigger id>/…`、`github/[<record>/]…`、`gitlab/[<record>/]…` | 原始来源记录，在来源技能中说明；记录段选择来源记录 |
+
 
 工单线程对仅作上下文关注标记为 `context`，对来源绑定标记为 `bound`。派工页面最新在前，并包含报告预览。用 `next_offset` 继续列表。`/input/<id>` 接受输入的名称或 id。`settings` 完整包含小块，并汇总策略块和来源块。
 
-来源资源包括消息邻域、`github/pulls/<n>/thread/<comment id>` 和 `github/commits/<sha>/checks`。
+来源资源包括消息邻域、`github/<record>/pulls/<n>/thread/<comment id>` 和 `github/<record>/commits/<sha>/checks`。记录段由资源路径给出：执行器会话省略时用其工单的来源记录，主会话省略时只在该类型恰好一条记录时采用它，多条记录则报错并列出记录 id；返回的 `next_resource` 总是带上记录段。飞书以触发器 id 作为记录限定，记录段可省略。
 
 原始记录的消息以统一的紧凑形态读取，`{id, from, at, text, reply_to?, path?, line?, url?}`，而不是 GitHub 或飞书记录它们的方式。
 

@@ -1479,7 +1479,7 @@ describe('observing the GitHub repository', () => {
     expect(texts()).toEqual(['CI failed 1/2 on main at bbb2222: lint; 1 still running', 'CI passed 2/2 on main at ccc3333'])
     expect(h.receive.mock.calls[0]![0]).toMatchObject({ human: false, actor: { id: '' }, threads: [{ source: 'github', id: 'ci:main' }],
       meta: { ci: true, branch: 'main', sha: 'bbb2222' }, url: 'https://github.com/acme/widgets/commit/bbb2222' })
-    expect(h.receive.mock.calls[0]![0].text).toContain('Read github/commits/bbb2222/checks for every check.')
+    expect(h.receive.mock.calls[0]![0].text).toContain('Read github/github/commits/bbb2222/checks for every check.')
     h.store.close()
   })
 })
