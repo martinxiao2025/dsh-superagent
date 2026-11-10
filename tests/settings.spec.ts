@@ -1,10 +1,10 @@
 /** 设置保存、暂停切换和策略同步的并发、重试与校验测试。 */
 import { afterEach, expect, it, vi } from 'vitest'
-import { UserError } from '../src/core/index.ts'
+import { UserError, threadKey } from '../src/core/index.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { Setup } from '../src/app/setup.ts'
 import { SettingsConflict } from '../src/app/settings.ts'
-import { startRuntime, type Host } from './fixtures/host.ts'
+import { feishu, startRuntime, type Host } from './fixtures/host.ts'
 
 let h: Host | undefined
 afterEach(async () => { await h?.stop(); h = undefined })
@@ -98,4 +98,42 @@ it('records nothing for a pause that changes nothing, refuses a sync while setup
   await expect(settings.sync('feishu')).rejects.toThrow(new UserError('nothingToSync', { source: 'feishu' }))
   vi.mocked(Setup.prototype.configured).mockRestore()
   expect(() => settings.block('source:x')).toThrow(new UserError('unknownBlock', { block: 'source:x' }))
+})
+it('ends unfinished Tickets on a disabled Source, keeps its Threads and Triggers, and reports the count', async () => {
+  h = await startRuntime()
+  const { settings, store, sources } = h.runtime
+  const { trigger, ticket } = await h.acceptedTicket(feishu('e1', '@bot 修复登录'))
+  const block = settings.block('source:feishu')
+  const value = block.value as { enabled: boolean; config: Record<string, unknown> }
+  const meta = trigger.channel!.address
+  expect(sources.scope({ source: 'feishu', meta })).toMatchObject({ listened: true })
+  const result = await settings.save('source:feishu', { ...value, enabled: false }, block.revision, 'panel')
+  expect(result).toMatchObject({ stopped: 1 })
+  const ended = store.tickets.get(ticket.id)!
+  expect(store.tickets.open().map(item => item.id)).not.toContain(ticket.id)
+  expect(ended.ended).toMatchObject({ by: 'human', outcome: 'stopped', reason: 'source_disabled' })
+  // 线程与触发器作为历史保留，但该记录不再监听。
+  expect(store.threads.get(threadKey(trigger.threads[0]!))).toBeDefined()
+  expect(store.triggers.get(trigger.id)).toBeDefined()
+  expect(sources.scope({ source: 'feishu', meta })).toEqual({ listened: false, reason: 'source_disabled' })
+})
+it('refuses to delete a Source with unfinished Tickets, and deletes an unused record with its Policy part', async () => {
+  h = await startRuntime()
+  const { settings, store } = h.runtime
+  await h.acceptedTicket(feishu('e2', '@bot 修复登录'))
+  await expect(settings.removeSource('feishu', 'panel')).rejects.toThrow(new UserError('sourceInUse', { source: 'feishu',
+    count: '1' }))
+  expect(store.settings().sources.feishu).toBeDefined()
+  // 新记录按 kind-2 生成；显式重复 ID 被拒绝。
+  expect(await settings.createSource('github', undefined, {}, 'panel')).toMatchObject({ id: 'github-2', restarting: true })
+  expect(store.settings().sources['github-2']).toBeDefined()
+  await expect(settings.createSource('github', 'github', {}, 'panel')).rejects.toThrow(new UserError('sourceExists',
+    { source: 'github' }))
+  const policy = store.settings().policy
+  await settings.save('policy', { ...policy, sources: { ...policy.sources, 'github-2': { allowed: [], admission: {} } } },
+    store.blockRevision('policy'), 'panel')
+  expect(store.settings().policy.sources['github-2']).toBeDefined()
+  expect(await settings.removeSource('github-2', 'panel')).toEqual({ removed: true, restarting: true })
+  expect(store.settings().sources['github-2']).toBeUndefined()
+  expect(store.settings().policy.sources['github-2']).toBeUndefined()
 })

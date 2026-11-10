@@ -1,7 +1,7 @@
 /** 按块作用域的设置校验、乐观并发保存、处理暂停控制，以及来源策略同步。 */
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { UserError, type EngineForSettings } from '../core/index.ts'
+import { UserError, type EngineForSettings, type Ticket } from '../core/index.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
 import type { SourceHost } from '../sources/host.ts'
@@ -55,7 +55,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
 
 /** `Settings` 使用的宿主依赖。 */
 export interface SettingsHost {
-  readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'get'>
+  readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'triggers' | 'get'>
   readonly sources: SourceRegistry
   /** 当设置保存改变策略版本时收到通知。 */
   readonly engine: EngineForSettings
@@ -157,6 +157,8 @@ export class Settings {
     if (kind === 'source' && !sources.record(id)) throw new UserError('sourceNotInstalled', { source: id })
     const parsed = rules.parse(value, sources, id)
     const current = store.settings()
+    // 停用一条正在工作的记录会结束它名下未完成工单，而不是让它们失去来源后悬挂。
+    const disabling = kind === 'source' && current.sources[id]?.enabled !== false && !(parsed as { enabled: boolean }).enabled
     const candidate = rules.merge(current, parsed, id)
     const model = block === 'eval' ? candidate.eval.model : block === 'executor' ? candidate.executor.model : null
     const previous = block === 'eval' ? current.eval.model : block === 'executor' ? current.executor.model : null
@@ -172,7 +174,8 @@ export class Settings {
     const settings = rules.merge(old, parsed, id)
     if (JSON.stringify(SettingsSchema.parse(settings)) === JSON.stringify(old)) {
       const delivery = await sessions.delivery(`settings:${block}`)
-      return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting: false, context_delivery: delivery }
+      return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting: false, context_delivery: delivery,
+        stopped: 0 }
     }
     const restarting = setupChanged(old, settings) || !this.host.setup.configured()
     const before = policyVersion(old), after = policyVersion(settings)
@@ -189,11 +192,103 @@ export class Settings {
     const blocked = settings.executor.blockedCommands
     const changed = blocked.join(' ') !== old.executor.blockedCommands.join(' ')
     if (changed) await this.host.setup.blockCommands(blocked)
+    // 停用记录后结束其名下工单；这一动作写入工单历史（原因 `source_disabled`），面板与日志可查。
+    const stopped = disabling ? this.stopTickets(id) : 0
     // 重启时，通知会保持待处理状态直到重启之后；`setup.restart()` 会延迟到本次调用返回后执行。
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
     if (restarting) this.host.setup.restart()
     else this.host.requestPass()
-    return { saved: true, revision: store.blockRevision(block), policy_changed: before !== after, restarting, context_delivery: delivery }
+    return { saved: true, revision: store.blockRevision(block), policy_changed: before !== after, restarting, context_delivery: delivery,
+      stopped }
+  }
+  /** 主触发来源属于记录 `id` 的未结束工单；用于删除保护与停用后的收尾。 */
+  openTickets(id: string): Ticket[] {
+    const { store } = this.host
+    return store.tickets.open().filter(ticket => store.triggers.get(ticket.origin.triggerId)?.source === id)
+  }
+  /**
+   * 结束记录 `id` 名下的全部未结束工单，原因记为 `source_disabled`。
+   * 并发的结束可能已经关闭其中某个工单，此时跳过。
+   * @returns 实际结束的工单数量。
+   */
+  private stopTickets(id: string): number {
+    let stopped = 0
+    for (const ticket of this.openTickets(id)) {
+      try { this.host.engine.stopTicket(ticket.id, 'source_disabled'); stopped++ }
+      catch { /* 工单已在别处结束。 */ }
+    }
+    return stopped
+  }
+  /**
+   * 用插件提供的类型创建一个来源记录并重启使配置生效。
+   * 未提供 `id` 时按 `kind`、`kind-2`… 生成；显式 `id` 已存在时拒绝。
+   * @returns 新记录的 ID、当前修订和重启标记。
+   * @throws 当类型未安装（`sourceKindUnknown`）、显式 ID 冲突（`sourceExists`）或配置无效（ZodError）时抛出。
+   */
+  async createSource(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin) {
+    const { store, sources, sessions } = this.host
+    const spec = sources.kindByName(kind)
+    if (!spec) throw new UserError('sourceKindUnknown', { kind })
+    const current = store.settings()
+    let recordId = id ?? kind
+    if (current.sources[recordId]) {
+      if (id !== undefined) throw new UserError('sourceExists', { source: recordId })
+      let suffix = 2
+      while (current.sources[`${kind}-${suffix}`]) suffix++
+      recordId = `${kind}-${suffix}`
+    }
+    const parsed = spec.schema.parse(config ?? {})
+    const settings = SettingsSchema.parse({ ...current,
+      sources: { ...current.sources, [recordId]: { kind, enabled: true, config: parsed } } })
+    const block: SettingsSave = `source:${recordId}`
+    store.atomic(() => {
+      store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
+    })
+    sources.syncHealth(settings)
+    await sessions.delivery(`settings:${block}`)
+    this.host.setup.restart()
+    return { id: recordId, revision: store.blockRevision(block), restarting: true as const }
+  }
+  /**
+   * 删除一条来源记录：移除记录与其策略部分、释放健康项和同步重试，并重启使轮询停止。
+   * 仍有未结束工单时拒绝，避免留下没有来源的工单。
+   * @returns 删除完成并等待重启的标记。
+   * @throws 当记录不存在（`sourceNotInstalled`）或仍有未结束工单（`sourceInUse`）时抛出。
+   */
+  async removeSource(id: string, origin: SettingsOrigin) {
+    const { store, sources, engine, sessions } = this.host
+    const current = store.settings()
+    if (!current.sources[id]) throw new UserError('sourceNotInstalled', { source: id })
+    const open = this.openTickets(id)
+    if (open.length) throw new UserError('sourceInUse', { source: id, count: String(open.length) })
+    const { [id]: _record, ...restSources } = current.sources
+    const { [id]: _part, ...restParts } = current.policy.sources
+    const settings = SettingsSchema.parse({ ...current, sources: restSources, policy: { ...current.policy, sources: restParts } })
+    const block: SettingsSave = `source:${id}`
+    const before = policyVersion(current), after = policyVersion(settings)
+    const scope = (version: SettingsValue) => ({
+      scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
+    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), current, settings, scope)
+    const notified = [...effects.keys()]
+    store.atomic(() => {
+      store.saveSettings(settings, { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
+      if (before !== after) engine.policyChanged(before, after, effects)
+    })
+    this.releaseSource(id)
+    sources.syncHealth(settings)
+    await sessions.delivery(`settings:${block}`)
+    this.host.setup.restart()
+    return { removed: true as const, restarting: true as const }
+  }
+  /** 删除记录后释放它拥有的 `sync:<id>` 健康项，并取消待处理的策略同步重试。 */
+  private releaseSource(id: string): void {
+    const retry = this.retries.get(id)
+    if (retry) clearTimeout(retry.timer)
+    this.retries.delete(id)
+    const entry = this.syncs.get(id)
+    if (entry) { entry.release(); this.syncs.delete(id) }
   }
   /**
    * 暂停或恢复处理（新的评估、执行器调度和渠道投递，而来源继续记录

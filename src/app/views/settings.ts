@@ -16,6 +16,10 @@ function policyOf(sources: SourceRegistry, id: string, health: HealthMap) {
   return { policy: { fields: policy.fields, explicit: policy.explicit, ...policy.rows ? { rows: policy.rows(config) } : {}, ...sync
     ? { sync } : {} } }
 }
+/** 主触发来源属于记录 `id` 的未结束工单数量；面板据此提示删除保护与停用后果。 */
+function openTicketCount(store: Store, id: string): number {
+  return store.tickets.open().filter(ticket => store.triggers.get(ticket.origin.triggerId)?.source === id).length
+}
 /**
  * 按配置块（`{ value, revision }`）构建设置视图，包含各来源配置与需重启才生效的字段，
  * 以及执行环境详情（`stateDir` 提供工单默认工作目录的根路径）。
@@ -25,6 +29,8 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
   const block = <V>(name: 'policy' | 'eval' | 'executor', value: V) => ({ value, revision: store.blockRevision(name) })
   return {
     policyVersion: policyVersion(settings),
+    // 已安装的来源类型目录；面板用它渲染「新增来源」的选项。
+    kinds: sources.kindsList().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description })),
     blocks: { policy: block('policy', settings.policy), eval: block('eval', settings.eval), executor: block('executor',
       settings.executor) },
     sources: sources.instances(settings).map(instance => {
@@ -34,7 +40,8 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
       return { id, kind: instance.kind, title, description: kind?.description ?? { zh: '', en: '' }, installed: instance.installed,
         value: { enabled: instance.enabled, config: instance.config }, revision: store.blockRevision(`source:${instance.id}`),
         restarts: SETUP_FIELDS[instance.kind] ?? [], fields: kind?.fields ?? [], facts: kind?.facts?.(setup.deployment?.sources[instance.id]) ?? {},
-        labels: store.get(KV.sources.labels(instance.id)) ?? {}, ...problem ? { problem } : {}, ...policyOf(sources, instance.id, health) }
+        labels: store.get(KV.sources.labels(instance.id)) ?? {}, openTickets: openTicketCount(store, instance.id),
+        ...problem ? { problem } : {}, ...policyOf(sources, instance.id, health) }
     }),
     environment: { root: executionRoot(settings, stateDir), variables: declaredVariables(sources, settings) },
   }

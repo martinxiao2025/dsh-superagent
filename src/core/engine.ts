@@ -256,7 +256,7 @@ export type EngineForMainSession = Pick<Engine, 'candidate' | 'candidateDelivere
 /** 人通过面板或主会话向引擎询问的内容。 */
 export type EngineForPeople = Pick<Engine, 'stopTicket' | 'retryTicket' | 'reevaluate' | 'unsubscribe' | 'dismiss'>
 /** 设置告知引擎的内容。 */
-export type EngineForSettings = Pick<Engine, 'policyChanged'>
+export type EngineForSettings = Pick<Engine, 'policyChanged' | 'stopTicket'>
 /** 执行器告知引擎的内容，以及其工作单元向引擎询问的内容。 */
 export type EngineForExecutor = Pick<Engine, 'assignmentStarted' | 'inputsDelivered' | 'inputsRead' | 'turnEnded' | 'deliveryFailed'
   | 'assignmentInterrupted' | 'report' | 'markUnrelated' | 'handback' | 'followForContext' | 'reply'>

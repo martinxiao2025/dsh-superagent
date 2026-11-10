@@ -284,3 +284,46 @@ it('reads the settings again as soon as dsh-superagent answers after a save rest
   expect(field('智能体的 GitHub CLI').matches(':disabled')).toBe(false)
   expect(field<HTMLInputElement>('智能体的 GitHub CLI').value).toBe('/opt/bin/gh-agent')
 })
+
+it('creates a Source record through the API and shows the new card', async () => {
+  at({ page: 'settings', query: { group: 'source' } })
+  await mount()
+  await type(field<HTMLSelectElement>(zh.sourceAddKind), 'github')
+  await click(zh.sourceAdd)
+  expect(server.requests.find(request => request.path === 'sources')).toMatchObject({ method: 'POST', body: { kind: 'github' } })
+  expect(document.querySelector('.dt-toast')?.textContent).toBe('已新增来源 github-2，请补全配置后保存')
+  expect(all('.dt-card')).toHaveLength(3)
+  expect(document.getElementById('dt-source-github-2')).not.toBeNull()
+})
+
+it('deletes a Source through the API and removes its card', async () => {
+  at({ page: 'settings', query: { group: 'source' } })
+  await mount()
+  await click(find(zh.sourceDelete, '#dt-source-github button'))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('删除“GitHub”？')
+  await click(zh.confirm)
+  expect(server.requests.find(request => request.path === 'sources/github')).toMatchObject({ method: 'DELETE' })
+  expect(all('.dt-card').map(card => card.querySelector('.dt-row-title')?.firstChild?.textContent)).toEqual(['飞书'])
+  expect(document.querySelector('.dt-toast')?.textContent).toBe('已删除来源 GitHub')
+})
+
+it('shows the server refusal when deleting a Source that still has unfinished Tickets', async () => {
+  server.openTickets = { github: 2 }
+  at({ page: 'settings', query: { group: 'source' } })
+  await mount()
+  await click(find(zh.sourceDelete, '#dt-source-github button'))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('该来源还有 2 个未完成工单，不能删除')
+  await click(zh.confirm)
+  expect(server.requests.some(request => request.path === 'sources/github' && request.method === 'DELETE')).toBe(true)
+  expect(document.querySelector('.dt-toast')?.textContent).toBe('该来源 github 还有 2 个未完成工单，请先停用来源以结束它们。')
+  expect(all('.dt-card')).toHaveLength(2)
+})
+
+it('warns that disabling a Source with unfinished Tickets ends them before saving', async () => {
+  server.openTickets = { github: 1 }
+  at({ page: 'settings', query: { group: 'source' } })
+  await mount()
+  await click('运行来源：GitHub')
+  expect(document.getElementById('dt-source-github')?.querySelector('.dt-savebar')?.textContent)
+    .toContain('停用会立即停止轮询，并结束 1 个未完成工单')
+})

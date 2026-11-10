@@ -2,17 +2,53 @@
 import { useEffect, useState } from 'react'
 import type { FieldSpec } from '../sources/kind.ts'
 import { usePoll, type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
-import { DisclosureRow, Dot, Icon, InfoTip, Switch, Tag } from './controls.tsx'
+import { Button, DisclosureRow, Dot, Icon, InfoTip, Input, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { sourceMark } from './marks.ts'
-import { usePanel, usePanelData } from './provider.tsx'
+import { useAction, usePanel, usePanelData } from './provider.tsx'
 import { setupPage, settingsRoute, type Route } from './route.ts'
 import { ConfigHistory, Fields, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
 import { actorName, healthText, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
-import { CheckSetupButton, Hint, LabelValue, LoadState, SetupMessage, StatusHead, When } from './widgets.tsx'
+import { CheckSetupButton, ConfirmButton, Hint, LabelValue, LoadState, SetupMessage, StatusHead, When } from './widgets.tsx'
+
+/** 「新增来源」区块：选择已安装类型并以默认配置创建记录，再在下方卡片补全配置。 */
+function AddSource() {
+  const { t, call, notify } = usePanel()
+  const { settings, reload } = useSettings()
+  const kinds = settings.kinds
+  const [kind, setKind] = useState('')
+  const [id, setId] = useState('')
+  const create = useAction(async () => {
+    const request = id.trim() ? { kind, id: id.trim() } : { kind }
+    const { id: created } = await call('POST sources', { body: request })
+    notify(t('sourceAdded', { id: created }))
+    setId('')
+  }, { reload })
+  if (kinds.length === 0) return null
+  // 类型目录到达后默认选中第一项；`kind` 只记录用户的显式选择。
+  const selected = kind || kinds[0]?.kind || ''
+  return <div className="dt-source-add" role="group" aria-label={t('sourceAddTitle')}>
+    <div className="dt-row-main">
+      <div className="dt-row-title"><span className="dt-card-title">{t('sourceAddTitle')}</span><InfoTip text={t('sourceAddHint')} /></div>
+    </div>
+    <div className="dt-row-buttons">
+      <div className="dt-field"><span className="dt-field-head"><label htmlFor="dt-source-add-kind">{t('sourceAddKind')}</label></span>
+        <select id="dt-source-add-kind" className="dt-select" value={selected} onChange={event => setKind(event.target.value)}>
+          {kinds.map(item => <option key={item.kind} value={item.kind}>{localized(t, item.title)}</option>)}
+        </select>
+      </div>
+      <div className="dt-field"><span className="dt-field-head"><label htmlFor="dt-source-add-id">{t('sourceAddId')}</label></span>
+        <Input id="dt-source-add-id" value={id} placeholder={selected ? `${selected}-2` : ''} onChange={event => setId(event.target.value)} />
+      </div>
+      <Button variant="primary" disabled={create.busy || !selected}
+        onClick={() => { void create.run() }}>{t('sourceAdd')}</Button>
+    </div>
+    <Hint>{t('sourceAddIdHint')}</Hint>
+  </div>
+}
 
 function SourceCard({ source }: { source: SourceView }) {
-  const { t, call } = usePanel()
+  const { t, call, notify } = usePanel()
   const { running } = usePanelData()
   const { reload } = useSettings()
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -31,6 +67,13 @@ function SourceCard({ source }: { source: SourceView }) {
     refreshLabels={refreshLabels} fact={spec.type === 'fact' || !changed(spec.key) ? source.facts[spec.key] : undefined}
     onChange={next => draft.edit({ ...value, config: { ...value.config, [spec.key]: next } })} />
   const advanced = source.fields.filter(spec => spec.advanced)
+  // 停用一条仍有未结束工单的记录会结束这些工单；保存前把这个后果说清楚。
+  const disabling = saved.enabled && !value.enabled
+  const deleteMessage = source.openTickets > 0
+    ? t('sourceDeleteBlocked', { count: source.openTickets })
+    : t('sourceDeleteConfirm', { name: localized(t, source.title) })
+  const status = disabling && source.openTickets > 0 ? t('sourceDisableStops', { count: source.openTickets })
+    : restarts && running > 0 ? t('restartInterrupts', { count: running }) : undefined
   return <form id={`dt-source-${source.id}`} className="dt-card" onSubmit={event => { void draft.submit(event) }}>
     <Fields disabled={draft.busy}>
       <div className="dt-card-head">
@@ -40,8 +83,16 @@ function SourceCard({ source }: { source: SourceView }) {
             {!source.installed && <Tag tone="warning">{t('sourceNotInstalled')}</Tag>}
           </div>
         </div>
-        {source.installed && <Switch checked={value.enabled} onChange={enabled => draft.edit({ ...value, enabled })}
-          label={t('sourceEnable', { name: localized(t, source.title) })} />}
+        <div className="dt-row-buttons">
+          {source.installed && <Switch checked={value.enabled} onChange={enabled => draft.edit({ ...value, enabled })}
+            label={t('sourceEnable', { name: localized(t, source.title) })} />}
+          <ConfirmButton label={t('sourceDelete')} title={t('sourceDeleteTitle')} message={deleteMessage} icon="trash"
+            variant="outline" onConfirm={async () => {
+              await call('DELETE sources/:id', { id: source.id })
+              notify(t('sourceDeleted', { name: localized(t, source.title) }))
+              await reload()
+            }} />
+        </div>
       </div>
       {problem && <div className="dt-row-buttons">
         <p className="dt-error" role="status"><SetupMessage problem={problem} lead /></p><CheckSetupButton />
@@ -53,8 +104,7 @@ function SourceCard({ source }: { source: SourceView }) {
         <div className="dt-disclosure-body">{advanced.map(field)}</div>
       </DisclosureRow>}
     </Fields>
-    <SaveBar {...draft} status={restarts && running > 0 ? t('restartInterrupts', { count: running }) : undefined}
-      onDiscard={draft.discard} />
+    <SaveBar {...draft} status={status} onDiscard={draft.discard} />
   </form>
 }
 
@@ -62,6 +112,7 @@ export function SourceSettings({ focus }: { focus?: string }) {
   const { sources } = useSettings().settings
   useEffect(() => { if (focus) document.getElementById(`dt-source-${focus}`)?.scrollIntoView?.({ block: 'start' }) }, [focus])
   return <div className="dt-form">
+    <AddSource />
     {sources.map(source => <SourceCard key={source.id} source={source} />)}
     <ConfigHistory blocks={['source:']} />
   </div>

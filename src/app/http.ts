@@ -24,7 +24,7 @@ import type { Variable } from './execution-environment.ts'
 import { policyHistory } from './settings-history.ts'
 import { overview } from './views/overview.ts'
 import { settingsView } from './views/settings.ts'
-import { sourcesStatus, type SetupState } from './views/sources.ts'
+import { sourceHealth, sourceState, sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 
@@ -35,7 +35,7 @@ export interface HttpHost {
   readonly sources: SourceRegistry
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'preview' | 'save' | 'defaultChanged'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'>
-  readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels'>
+  readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels' | 'createSource' | 'removeSource'>
   readonly engine: EngineForPeople
   readonly executor: Pick<DshExecutor, 'activeCount'>
   readonly health: Record<string, Health>
@@ -90,7 +90,8 @@ function failure(error: unknown): [number, Record<string, unknown>] {
   }
   if (error instanceof SetupError) return [400, { error: error.message, setup: error.problem }]
   if (error instanceof RouteError) return [error.status, { error: error.message }]
-  if (error instanceof UserError) return [error.missing ? 404 : 400, { error: error.message, code: error.code, values: error.values }]
+  if (error instanceof UserError) return [error.code === 'sourceInUse' ? 409 : error.missing ? 404 : 400,
+    { error: error.message, code: error.code, values: error.values }]
   if (error instanceof SettingsConflict || error instanceof PromptConflict) return [409, { error: error.message }]
   return [500, { error: error instanceof Error ? error.message : String(error) }]
 }
@@ -123,6 +124,25 @@ const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources:
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
   problem: runtime.setupProblem, sourceProblems: runtime.sourceProblems })
 export type StateView = ReturnType<typeof stateView>
+/** 管理接口的实际监听地址；健康探针据此报告入口。 */
+export interface Listen { host: string; port: number }
+/** 构建 `/orchestrator/api/health` 探针视图：就绪阶段、监听地址与每条来源记录的状态摘要。 */
+export function healthView(runtime: HttpHost, listen: Listen) {
+  const setup = setupState(runtime)
+  const ok = runtime.configured() && !runtime.setupProblem
+  return {
+    ok, stage: ok ? 'ready' as const : 'setup' as const, configured: runtime.configured(),
+    paused: runtime.store.settings().paused, problem: runtime.setupProblem ?? null, listen,
+    machine: { stateDir: runtime.machine.stateDir },
+    // 逐记录给出健康摘要；未安装类型按 `missing`，禁用记录按 `off`。
+    sources: runtime.sources.instances().map(instance => {
+      const { health, id } = sourceHealth(runtime.sources, instance, runtime.health)
+      return { id, kind: instance.kind, enabled: instance.enabled, installed: instance.installed,
+        state: sourceState(instance, health, setup), health }
+    }),
+  }
+}
+export type HealthView = ReturnType<typeof healthView>
 /** 构建工单详情视图；在等待初始化期间 `environment` 为空，因为它需要已解析的部署。 */
 function ticketPage(runtime: HttpHost, id: string) {
   const detail = ticketDetail(views(runtime), id), ticket = runtime.store.tickets.get(id)
@@ -158,8 +178,10 @@ const PromptsQuery = z.object({ revision: count.optional(), offset: count.defaul
 const SourceBlock = z.templateLiteral(['source:', z.string().regex(/^[a-z][a-z0-9-]*$/)])
 const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), SourceBlock])
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
+const ResourceId = z.string().regex(/^[a-z][a-z0-9-]*$/)
+const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(), config: z.unknown().optional() })
 
-function routes(runtime: HttpHost): Routes {
+function routes(runtime: HttpHost, listen: Listen): Routes {
   const { store } = runtime
   const ticket = (id: string) => { if (!store.tickets.get(id)) throw new RouteError(404, 'Ticket not found'); return id }
   const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
@@ -169,6 +191,12 @@ function routes(runtime: HttpHost): Routes {
       executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.sourceProblem),
     'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
     'GET sources': () => sourcesStatus(views(runtime), runtime.health, setupState(runtime)),
+    'POST sources': async ({ body }) => {
+      const request = CreateSourceRequest.parse(await body())
+      return runtime.settings.createSource(request.kind, request.id, request.config, 'panel')
+    },
+    'DELETE sources/:id': ({ params }) => runtime.settings.removeSource(params.id, 'panel'),
+    'GET health': () => healthView(runtime, listen),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
     'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),
     'GET threads': ({ query }) => {
@@ -240,7 +268,7 @@ function match(table: Routes, method: string, segments: string[]) {
 }
 export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
   if (ctx.webServer.host !== '127.0.0.1') throw new Error('Orchestrator management requires a loopback Web server')
-  const table = routes(runtime)
+  const table = routes(runtime, { host: ctx.webServer.host, port: ctx.webServer.port })
   const disposers = [
     ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
       const url = new URL(req.url ?? '/', 'http://localhost')

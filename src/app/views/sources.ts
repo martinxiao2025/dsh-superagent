@@ -30,7 +30,7 @@ export interface SetupState {
 export const problemOf = (id: string, setup: SetupState): SetupProblem | undefined => setup.sourceProblems?.[id]
 /** 来源生命周期状态，按优先级排列：类型缺失、已禁用、安装/部件错误、因全局安装受阻、启动中、已暂停或就绪。 */
 export type SourceState = 'missing' | 'off' | 'error' | 'setup' | 'starting' | 'paused' | 'ready'
-function sourceState(instance: SourceInstance & { installed: boolean }, parts: { state: string }[], setup: SetupState): SourceState {
+export function sourceState(instance: SourceInstance & { installed: boolean }, parts: { state: string }[], setup: SetupState): SourceState {
   if (!instance.installed) return 'missing'
   if (!instance.enabled) return 'off'
   if (problemOf(instance.id, setup) || parts.some(part => part.state === 'error')) return 'error'

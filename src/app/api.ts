@@ -1,7 +1,7 @@
 /** Web 面板与宿主路由之间的纯类型管理 API 契约；面板导入它时不会打包宿主代码。 */
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { PromptConfig, Prompts } from './prompts.ts'
-import type { PromptsView, StateView, TicketPageView } from './http.ts'
+import type { HealthView, PromptsView, StateView, TicketPageView } from './http.ts'
 import type { HistoryView } from './settings-history.ts'
 import type { OverviewView } from './views/overview.ts'
 import type { SettingsView } from './views/settings.ts'
@@ -22,6 +22,9 @@ export interface Api {
   'GET overview': { response: OverviewView }
   'GET search': { query: { q: string }; response: SearchView }
   'GET sources': { response: SourceStatusView[] }
+  'POST sources': { body: { kind: string; id?: string; config?: unknown }; response: { id: string; revision: number; restarting: true } }
+  'DELETE sources/:id': { response: { removed: true; restarting: true } }
+  'GET health': { response: HealthView }
   'GET settings': { response: SettingsView }
   'POST sources/:id/labels': { response: { added: string[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }

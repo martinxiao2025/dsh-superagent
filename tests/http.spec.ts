@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import { z } from 'zod'
+import { UserError } from '../src/core/index.ts'
 import { registerHttp } from '../src/app/http.ts'
 import { PromptConflict } from '../src/app/prompts.ts'
 import { SettingsConflict } from '../src/app/settings.ts'
@@ -24,6 +25,42 @@ function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.
     return { status, body: JSON.parse(text) as Record<string, unknown> }
   }
 }
+
+it('creates and deletes Source records and answers the health probe', async () => {
+  const calls: unknown[] = []
+  const call = serve({
+    store: { settings: () => SettingsSchema.parse({}) },
+    machine: { stateDir: '/srv/dsh-superagent' },
+    sources: { instances: () => [{ id: 'github', kind: 'github', enabled: true, installed: true }], kindByName: () => ({ health: ['github'] }) },
+    health: { github: { state: 'ready', detail: '' } },
+    configured: () => true, sourceProblems: {},
+    settings: {
+      save: async () => ({ saved: true, revision: 0, restarting: false }),
+      createSource: async (...args: unknown[]) => { calls.push(args); return { id: 'github-2', revision: 0, restarting: true } },
+      removeSource: async (...args: unknown[]) => { calls.push(args); return { removed: true, restarting: true } },
+    },
+  })
+  expect(await call('POST', 'sources', { kind: 'github' })).toEqual({ status: 200, body: { id: 'github-2', revision: 0,
+    restarting: true } })
+  expect(calls[0]).toEqual(['github', undefined, undefined, 'panel'])
+  expect(await call('DELETE', 'sources/github')).toEqual({ status: 200, body: { removed: true, restarting: true } })
+  expect(calls[1]).toEqual(['github', 'panel'])
+  expect(await call('GET', 'health')).toMatchObject({ status: 200, body: { ok: true, stage: 'ready', configured: true, paused: false,
+    listen: { host: '127.0.0.1', port: 3082 }, machine: { stateDir: '/srv/dsh-superagent' },
+    sources: [{ id: 'github', kind: 'github', enabled: true, installed: true, state: 'ready' }] } })
+})
+
+it('answers a Source deletion that still has unfinished Tickets with 409 and its error code', async () => {
+  const call = serve({
+    store: { settings: () => SettingsSchema.parse({}) },
+    sources: { instances: () => [] },
+    settings: { save: async () => ({}), removeSource: async () => {
+      throw new UserError('sourceInUse', { source: 'feishu', count: '2' })
+    } },
+  })
+  expect(await call('DELETE', 'sources/feishu')).toEqual({ status: 409, body: { error: 'The feishu Source still has 2 unfinished Tickets; disable it to end them',
+    code: 'sourceInUse', values: { source: 'feishu', count: '2' } } })
+})
 
 it('answers each kind of failure with its own status', async () => {
   const saves: unknown[] = []
