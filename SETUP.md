@@ -34,8 +34,8 @@ grep -l -E 'id: dsh-superagent\b' "${DSH_HOME:-$HOME/.dsh}"/profiles/*/cordis.pa
 
 **来源：请求从哪里来。**
 
-1. **来源。** 智能体只接受来自 GitHub 的请求，还是也接受来自飞书群的请求？[仅 GitHub，除非团队在飞书里工作。]
-2. **仓库。** 智能体应当在哪个 github.com 仓库上工作，写成 `owner/name`？
+1. **来源。** 要接入哪些来源：GitHub 仓库、GitLab 项目、飞书群，还是其中几种？同一类型可以有多条记录（例如两个 GitHub 企业实例；[默认只接一个 GitHub 仓库，除非团队还要 GitLab 或飞书]）。
+2. **仓库或项目。** 智能体应当在哪个仓库（`owner/name`）或 GitLab 项目（`group/project`）上工作？使用 GitHub Enterprise 或自建 GitLab 时，同时问实例地址。
 3. **智能体账号。** 智能体以哪个 GitHub 用户账号行动？[专用账号，绝不用操作者自己的账号：智能体写的一切都会以这个名义出现。]它可能还不存在；创建它属于操作者步骤。
 4. 如果使用飞书：**哪些群，** 按名称给出？智能体在配置好机器人后查找它们的 id。
 
@@ -65,8 +65,8 @@ grep -l -E 'id: dsh-superagent\b' "${DSH_HOME:-$HOME/.dsh}"/profiles/*/cordis.pa
 ## 4. 执行
 
 1. **先做操作者步骤。** 阅读 `docs/006-deployment.md` 的账号一节，自己写好 CLI 包装脚本，然后用一条消息列出只有操作者能做的事：创建智能体账号，若启用自动合并则以负责启用的账号登录一个 CLI，以智能体账号接受仓库邀请，为每个包装脚本运行 `auth login`，若使用飞书则创建并发布机器人应用，并用其密钥运行 `config init` 命令。等操作者说完成后，用 `<wrapper> api user --jq .login` 逐个检查登录。
-2. **安装并启动。** 遵循 `docs/006-deployment.md` 的安装、机器配置、启动与停止几节。跳过本仓库的 `git clone`：你就在它的检出目录中。如果第 7 个问题要求新建克隆，就克隆第 2 个问题中的仓库。已有 profile 时，跳过 `dsh superagent --from-default-profile` 命令，它会替换 profile 并删除其 `cordis.patch.yml`；改为编辑该文件，而不是替换它。
-3. **设置。** 通过 `docs/006-deployment.md` 的管理 API 按以下顺序保存：`github` 来源，若使用则还有 `feishu` 来源，带允许名单的 `policy` 块（飞书需要先用机器人的 CLI 查找群 id），以及带第 7 个问题答案中准备命令的 `executor` 块。然后保存提示词，在交付要求中写入第 8 个问题的提交身份和第 9 个问题的自动合并答案。返回 `restarting: true` 的保存会重启 dsh-superagent：在下一次请求前等到 `scripts/dsh-superagent.mjs status` 不再以 1 退出，并从 `GET settings` 重新读取修订号。
+2. **安装并启动。** 遵循 `docs/006-deployment.md` 的安装、机器配置、启动与停止几节。跳过本仓库的 `git clone`：你就在它的检出目录中。如果第 7 个问题要求新建克隆，就克隆第 2 个问题中的仓库。已有 profile 时，跳过 `dsh superagent --from-default-profile` 命令，它会替换 profile 并删除其 `cordis.patch.yml`；改为编辑该文件中的机器配置，不要在里面添加来源条目。
+3. **设置。** 通过 `docs/006-deployment.md` 的管理 API 按以下顺序保存：用 `POST sources` 为第 1 个问题中的每个来源创建记录（GitHub/GitLab 填仓库或项目与 `cli`，飞书填机器人 CLI 与群），带允许名单的 `policy` 块（飞书需要先用机器人的 CLI 查找群 id），以及带第 7 个问题答案中准备命令的 `executor` 块。`policy.sources` 以记录 ID 为键。然后保存提示词，在交付要求中写入第 8 个问题的提交身份和第 9 个问题的自动合并答案。返回 `restarting: true` 的保存会重启 dsh-superagent：在下一次请求前等到 `scripts/dsh-superagent.mjs status` 不再以 1 退出，并从 `GET settings` 重新读取修订号和记录 ID。
 4. **失败。** 被拒绝的保存会在响应体中指明安装问题。在 `docs/006-deployment.md` 的故障排查表中找到它，修复后继续。只向操作者询问你自己无法修复的事项。
 
 ## 5. 验证并交接

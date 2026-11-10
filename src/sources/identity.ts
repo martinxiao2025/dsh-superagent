@@ -1,4 +1,4 @@
-/** 来源记录的身份拼接：记录 ID 是来源身份，线程、触发器、KV 键、健康项与环境变量都按它命名。 */
+/** 来源记录的身份拼接：记录 ID 是来源身份，线程、触发器、KV 键与健康项都按它命名。 */
 import { key } from '../core/index.ts'
 
 /** 线程键：`<记录ID>:<记录内后缀>`，例如 `github-main:123`。 */
@@ -17,10 +17,3 @@ export const kvKey = (family: string, record: string, ...parts: (string | number
  */
 export const healthNames = (record: string, declared: readonly string[]): string[] =>
   declared.map((_, index) => index === 0 ? record : `${record}:${declared[index]}`)
-
-/** 执行环境变量名：`DSH_SUPERAGENT_SOURCE_<记录ID>_<字段>`，连字符换成下划线。 */
-export const envKey = (record: string, field: string): string =>
-  `DSH_SUPERAGENT_SOURCE_${record.toUpperCase().replace(/-/g, '_')}_${field}`
-
-/** 记录 ID 对应的环境变量前缀，供需要成组写入变量的调用方使用。 */
-export const envPrefix = (record: string): string => `DSH_SUPERAGENT_SOURCE_${record.toUpperCase().replace(/-/g, '_')}`

@@ -1,0 +1,4 @@
+{
+  "status": 200,
+  "body": "[{\"id\":\"u8-check\",\"title\":{\"zh\":\"GitHub\",\"en\":\"GitHub\"},\"installed\":true,\"enabled\":true,\"state\":\"error\",\"health\":[{\"name\":\"u8-check\",\"state\":\"starting\",\"detail\":\"\"}],\"problem\":{\"place\":\"u8-check\",\"code\":\"agentCliMissing\",\"values\":{\"output\":\"gh is not an executable file on PATH\"},\"detail\":\"The agent GitHub CLI was not found.\\ngh is not an executable file on PATH\"},\"stats\":{\"received\":0,\"filtered\":0,\"lastAt\":\"\"},\"filtered\":[],\"dropped\":[]}]"
+}

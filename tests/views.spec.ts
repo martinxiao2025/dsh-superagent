@@ -104,13 +104,30 @@ it('states each Source by the first state that holds', () => {
   const states = (setup: Parameters<typeof sourcesStatus>[2], health: Parameters<typeof sourcesStatus>[1] = {}) =>
     Object.fromEntries(sourcesStatus(host, health, setup).map(source => [source.id, source.state]))
   expect(states({})).toEqual({ feishu: 'starting', github: 'starting' })
-  expect(states({}, { feishu: { state: 'ready', detail: '' }, history: { state: 'paused', detail: '' }, github: { state: 'error',
+  expect(states({}, { feishu: { state: 'ready', detail: '' }, 'feishu:history': { state: 'paused', detail: '' }, github: { state: 'error',
     detail: 'x' } }))
     .toEqual({ feishu: 'paused', github: 'error' })
   const problem = { place: 'deployment', code: 'stateDirUnset', values: {}, detail: '' } as never
-  expect(states({ problem }, { feishu: { state: 'ready', detail: '' }, history: { state: 'ready', detail: '' }, github: { state: 'ready',
+  expect(states({ problem }, { feishu: { state: 'ready', detail: '' }, 'feishu:history': { state: 'ready', detail: '' }, github: { state: 'ready',
     detail: '' } }))
     .toEqual({ feishu: 'setup', github: 'setup' })
+})
+
+it('reports each Source record\'s own health entries, including a second record of the same kind', () => {
+  const host = views()
+  const settings = store.settings()
+  store.saveSettings({ ...settings, sources: { ...settings.sources,
+    'github-2': { kind: 'github', enabled: true, config: { repository: 'acme/other', cli: 'gh' } },
+    'feishu-2': { kind: 'feishu', enabled: true, config: { cli: 'lark-cli' } } } })
+  const status = Object.fromEntries(sourcesStatus(host, {
+    github: { state: 'ready', detail: '' },
+    'github-2': { state: 'error', detail: 'second record failed' },
+    'feishu-2': { state: 'ready', detail: '' },
+    'feishu-2:history': { state: 'paused', detail: '' },
+  }, {}).map(source => [source.id, [source.state, source.health.map(part => part.name)]]))
+  expect(status).toMatchObject({ github: ['ready', ['github']],
+    'github-2': ['error', ['github-2']],
+    'feishu-2': ['paused', ['feishu-2', 'feishu-2:history']] })
 })
 
 it('follows the Ticket\'s stage: a blocked Ticket a person answered since is working, with no retry, note or turn end', () => {
@@ -166,14 +183,14 @@ it('lists an Eval past its deadline, and as dsh-superagent\'s own errors only pa
     evaluating, meta: {} })
   const error = (detail: string) => ({ state: 'error' as const, detail })
   const health = { relay: error('relay failing'), reply: error('reply failing'), feishu: error('socket closed'),
-    history: error('read failed'),
+    'feishu:history': error('read failed'),
     'sync:feishu': error('sync failed'), evals: error('unavailable'), launch: { state: 'ready' as const, detail: '' } }
   const found = problems(host, health)
   expect(found).toContainEqual({ kind: 'eval-overdue', thread: expect.objectContaining({ key: 'github:1', stage: 'evaluating' }) })
   // 效果属于 dsh-superagent 自身；来源显示其部件与策略同步，评估则逐条列出。
   expect(found.filter(item => item.kind === 'runtime-error')).toEqual([{ kind: 'runtime-error', name: 'relay', detail: 'relay failing' },
     { kind: 'runtime-error', name: 'reply', detail: 'reply failing' }])
-  expect(found.filter(item => item.kind === 'source-error').map(item => item.source.health.name)).toEqual(['feishu', 'history'])
+  expect(found.filter(item => item.kind === 'source-error').map(item => item.source.health.name)).toEqual(['feishu', 'feishu:history'])
 })
 
 it('says no Source runs when every Source is off, and states a Source missing or off', () => {

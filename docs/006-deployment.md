@@ -22,8 +22,8 @@
 ## 前置条件
 
 - Node.js 22.19+ 或 24+、pnpm、git 2.32+、tmux
-- GitHub CLI（`gh`）2.48 或更高版本。来源的 CLI 字段必须指向 `gh`、`lark-cli` 或 `glab` 包装脚本；宿主依赖它们的子命令和输出格式。
-- github.com 上的一个仓库；不支持 GitHub Enterprise Server。要为每个工单创建检出，请保留一个本地克隆，让准备命令可以从中添加 worktree。如果该仓库使用 Git LFS，请安装 `git-lfs`。
+- GitHub CLI（`gh`）2.48 或更高版本。来源记录的 `cli` 字段必须指向 `gh`、`lark-cli` 或 `glab` 包装脚本；宿主依赖它们的子命令和输出格式。
+- 一个 GitHub 仓库，位于 github.com 或 GitHub Enterprise。企业实例在记录上填写 `instanceUrl`，宿主通过 `GH_HOST` 把 CLI 指向该实例。要为每个工单创建检出，请保留一个本地克隆，让准备命令可以从中添加 worktree。如果该仓库使用 Git LFS，请安装 `git-lfs`。
 - 为 DeepSeek Harness 配置的模型提供方。除非评估或执行设置指定了其他模型，dsh-superagent 使用该 profile 的默认模型。
 - 飞书：`lark-cli`（已在 1.0.90 测试）以及带机器人的飞书或 Lark 应用
 - GitLab：`glab`（在项目上具有 Developer 或更高权限）
@@ -101,7 +101,7 @@
 
    自动化测试用假的 `glab` 离线覆盖 CLI 契约。它们无法覆盖的是真实 GitLab 实例：令牌范围、项目权限以及 GitLab 自己的错误码。
 
-   GitLab 只是来源；部署仍然面向 GitHub 仓库。未实现流水线/CI 和内联差异讨论。
+   GitLab 是来源记录的一种类型；未实现流水线/CI 和内联差异讨论。
 
 ## 安装
 
@@ -121,11 +121,23 @@ dsh plugin --profile superagent add "link:$PWD"
 
 只在全新安装时运行创建 profile 的命令。如果 profile 已存在，该命令会替换它并删除其 `cordis.patch.yml`，包括机器配置。升级时不要使用它。
 
+### 从打包产物安装
+
+`pnpm pack` 生成 `dsh-superagent-<version>.tgz`。把该文件装进 profile：
+
+```sh
+pnpm build
+pnpm pack
+dsh plugin --profile superagent add /path/to/dsh-superagent-0.1.0.tgz
+```
+
+安装会解包到 profile 的 `node_modules`，运行时不依赖检出目录。升级已有安装时重复最后一条命令并重启进程。
+
 ## 机器配置
 
-把 [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) 复制到 `~/.dsh/profiles/superagent/cordis.patch.yml`，替换该文件，并替换每个 `<placeholder>`。如果使用飞书或 GitLab，还要在那里把对应的 `dsh-superagent-feishu`、`dsh-superagent-gitlab` 条目的 `disabled` 改为 `false`（桌面应用改 `~/.dsh/profiles/desktop/cordis.patch.yml`）。`webserver` 条目设置面板端口。
+把 [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) 复制到 `~/.dsh/profiles/superagent/cordis.patch.yml`，替换该文件，并替换每个 `<placeholder>`。`webserver` 条目设置面板端口；`dsh-superagent` 条目提供 `stateDir`。
 
-可选来源只在 profile 的 `cordis.patch.yml` 里启用；不要改已安装包自带的 `cordis.patch.yml`，那里的改动要重新安装包才会生效。
+来源不是插件条目：GitHub、GitLab 和飞书适配器随主插件加载，来源记录由面板的 **新增来源**、启用开关和删除操作管理。`cordis.patch.yml` 里没有、也不需要 `dsh-superagent-github`、`dsh-superagent-feishu` 或 `dsh-superagent-gitlab` 条目；不要改已安装包自带的 `cordis.patch.yml`，那里的改动要重新安装包才会生效。
 
 | 键 | 必需 | 含义 |
 | --- | --- | --- |
@@ -181,7 +193,7 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
 
 在轮询或工作开始之前，安装必须成功。概览会列出缺失的要求，并链接到对应设置。设置更改会重新运行安装。如果你在应用之外修复了某些内容（例如 CLI 登录），请选择 **重新检查**。
 
-1. **来源。** 设置 GitHub 仓库（`owner/name`）和智能体 CLI，例如 `/home/me/.local/bin/gh-agent`。请求通常通过智能体账号的通知到达。提到该账号的新 Issue 或评论会在下次轮询时到达；通过编辑已有 Issue 正文添加的 @ 不会。请改为发布新评论。对于飞书，设置机器人 CLI、群、每个群的接收全部或仅 @ 模式，以及是否接收私信。
+1. **来源。** 在 **来源 → 新增来源** 选择类型并创建记录：GitHub 填仓库（`owner/name`）和智能体 CLI（例如 `/home/me/.local/bin/gh-agent`），GitLab 填 `group/project`，飞书选机器人 CLI 与群。同一类型可以创建多条记录，每条独立配置、轮询和健康状态。请求通常通过智能体账号的通知到达。提到该账号的新 Issue 或评论会在下次轮询时到达；通过编辑已有 Issue 正文添加的 @ 不会。请改为发布新评论。
 2. **策略。** 两条示例规则可以编辑或删除。在 **各来源** 下，添加可以发起工作的 GitHub 账号和飞书用户；名单中有人之前，任何请求都不能成为工单。对于飞书，可以选择一个群在启动时和 **立即同步** 时同步名单。
 3. **执行。** 目录根和准备命令。要给每个工单一个仓库检出：
 
@@ -206,8 +218,11 @@ API 保存具有面板的权限。与通过主会话工具进行的保存不同�
 | 请求 | 答复 |
 | --- | --- |
 | `GET state` | 每个页面读取的内容：`setup`，含 `problem` 和 `feishuProblem`，各自为 `null` 或带 `place`、`code`、`values` 和 `detail` 的安装问题；安装解析后的 `accounts`；`health`，每个部分一个条目（见下文），含 `state`（`starting`、`ready`、`paused` 或 `error`）、`detail` 和 `at`；`load`，即执行器会话 `running`、工单 `queued` 和 `maxWorkers`；`paused`；以及 `masterId` |
-| `GET settings` | `blocks`：`policy`、`eval` 和 `executor`，各自含 `value` 和 `revision`；`sources`：来源实例，各自含 `id`、`kind`、`installed`、其块的 `value`（`{"enabled": …, "config": {…}}`）、`revision`、其类型的表单，以及有安装问题时的 `problem`；`policyVersion`；以及 `environment`，即执行环境的 `root` 和 `variables` |
+| `GET settings` | `blocks`：`policy`、`eval` 和 `executor`，各自含 `value` 和 `revision`；`sources`：来源记录，各自含 `id`、`kind`、`installed`、其块的 `value`（`{"enabled": …, "config": {…}}`）、`revision`、其类型的表单，以及有安装问题时的 `problem`；`policyVersion`；以及 `environment`，即执行环境的 `root` 和 `variables` |
 | `GET sources` | 每个来源的状态：`state`（`missing`、`off`、`error`、`setup`、`starting`、`paused` 或 `ready`）、其各部分 `health`、安装 `problem`、过去一天的 `stats`、该日它 `filtered` 的触发器，以及该日它 `dropped` 的消息（最新丢弃在前，每条含 `channel`、`preview`、属于工单时的 `ticket`（`id` 和 `title`）、存储中存在时的 `thread`，以及 `dropped.at` 和 `dropped.reason`、`channelGone` 或 `channelIgnored`） |
+| `POST sources`，带 `{"kind": "github", "id": "github-2", "config": {…}}` | 新增来源记录：`200` 与 `{ "id": …, "revision": …, "restarting": true }`；`id` 省略时按 `kind`、`kind-2`… 生成；校验失败 `400` 与 `issues` |
+| `DELETE sources/<id>` | 删除来源记录：`200` 与 `{ "removed": true, "restarting": true }`；有未结束工单 `409` 与可读原因；记录不存在 `400`（`sourceNotInstalled`） |
+| `GET health` | 启动阶段、监听地址、状态目录与逐记录健康摘要；运行时就绪前也返回 `200` |
 | `PUT settings/<block>`，带 `{"value": …, "revision": n}` | 保存一个块：`saved`、该块的新 `revision`、`policy_changed` 和 `restarting`。`value` 是整个块，与 `GET settings` 中的形式一致；缺失的键取默认值 |
 | `POST executor/pause`，带 `{"paused": true}` 或 `false` | 暂停或恢复处理：`paused` |
 | `POST setup/check` | 通过重启 dsh-superagent 重新运行安装：`restarting: true`。没有可修复项时拒绝 |
@@ -224,7 +239,7 @@ API 保存具有面板的权限。与通过主会话工具进行的保存不同�
 | `evals` | 过去一小时内没有后续判断或忽略的未完成评估 |
 | `assessment`, `launch`, `delivery`, `relay`, `notice`, `reply` | [003 执行](003-execution.md) 中描述的已存储工作；delivery 计数等待中的工作，reply 涵盖渠道消息 |
 | `worker` | 执行器会话事件处理；首次失败后出现 |
-| `github`, `feishu`, `history` | 来源轮询、事件和历史恢复 |
+| `<记录 ID>`、`<记录 ID>:<名称>` | 来源轮询、事件和历史恢复，按记录区分（例如 `github-2`、`github-2:history`） |
 | `sync:<source id>` | 允许名单同步 |
 
 拒绝会带状态码和 `error`，其英文文本：
@@ -236,8 +251,8 @@ API 保存具有面板的权限。与通过主会话工具进行的保存不同�
 
 各块：
 
-- `source:github`、`source:feishu`：`{"enabled": true, "config": {…}}`。GitHub 的配置有 `repository` 和 `cli`，以及开关 `observeIssues`、`observePulls`、`observeComments` 和 `observeCi`，默认关闭，用于接收仓库中的每个新 Issue、新拉取请求和评论，以及默认分支的 CI；飞书的配置有 `cli`、`chats`（形式为 `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]`，或 `"all"`）、`directMessages`，以及 `otherChats`（`"none"` 或 `"mentions"`）。
-- `policy`：`{"rules": […], "sources": {"github": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "feishu": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}}}`。`bots` 列出其消息可以成为推断候选的机器人。`admission` 行以群 id、飞书的 `other` 或 `direct`，以及 GitHub 的 `issues`、`pulls`、`comments` 或 `ci` 为键；未设置的单元格取默认值（见 [002 授权](002-authorization.md)）。
+- `source:<记录 ID>`：`{"enabled": true, "config": {…}}`，记录 ID 由创建时生成或指定。`config` 由该类型的适配器 schema 定义：GitHub 有 `instanceUrl`、`repository` 和 `cli`，以及开关 `observeIssues`、`observePulls`、`observeComments` 和 `observeCi`，默认关闭，用于接收仓库中的每个新 Issue、新拉取请求和评论，以及默认分支的 CI；GitLab 有 `instanceUrl`、`project`、`cli`、`pollSeconds` 和同样的接收开关；飞书有 `instanceUrl`、`cli`、`chats`（形式为 `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]`，或 `"all"`）、`directMessages`，以及 `otherChats`（`"none"` 或 `"mentions"`）。
+- `policy`：`{"rules": […], "sources": {"<记录 ID>": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "feishu-1": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}}}`。`bots` 列出其消息可以成为推断候选的机器人。`admission` 行以群 id、飞书的 `other` 或 `direct`，以及 GitHub 的 `issues`、`pulls`、`comments` 或 `ci` 为键；未设置的单元格取默认值（见 [002 授权](002-authorization.md)）。
 - `eval`：`mode`、`timeoutSeconds` 和 `model`。
 - `executor`：`model`、`maxWorkers`、`directory`、`prepare` 和 `blockedCommands`。处理暂停是独立的设置 `paused`，由 `POST executor/pause` 设置。
 
@@ -254,11 +269,11 @@ curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json
 
 安装使用 DeepSeek Harness 的子进程服务，与执行器 shell 相同。它会移除名称包含 KEY、PASSWORD、SECRET 或 TOKEN 的环境变量。
 
-安装会验证 GitHub 仓库和智能体的推送权限，写入执行器环境，并检查 git 对 github.com 只使用智能体凭据。飞书安装失败只禁用飞书来源；GitLab 安装失败只禁用 GitLab 来源。
+安装会逐条记录验证 CLI、账号和目标（GitHub 仓库与推送权限、GitLab 项目权限、飞书机器人身份），写入执行器环境，并检查 git 对 github.com 只使用智能体凭据。某条记录检查失败只给该记录标记 `problem` 并暂停它的轮询，不影响其他记录，也不改写已保存的启用状态。
 
 安装写入的进程环境：
 
-- **命令垫片** 位于 `<stateDir>/worker-bin`，在 `PATH` 最前面：`gh` 运行智能体的 CLI；`lark-cli` 运行机器人的 CLI；被阻止的命令会失败。垫片在运行目标之前会从 `PATH` 中移除自己的目录。
+- **命令垫片** 位于 `<stateDir>/worker-bin`，在 `PATH` 最前面：`gh`、`glab` 和 `lark-cli` 按工单的来源记录选择该记录的 CLI 与账号；被阻止的命令会失败。垫片在运行目标之前会从 `PATH` 中移除自己的目录。
 - **git 配置** 位于 `<stateDir>/worker-gitconfig`：替换操作者的全局和系统 git 配置。它选择智能体 CLI 作为 github.com 的凭据助手，把 GitHub SSH 地址改写为 HTTPS，并定义 Git LFS 过滤器。HTTP 代理等个人 git 设置不生效。这里不设置提交身份，git 从不提示凭据，并会移除 `GH_TOKEN` 和 `GITHUB_TOKEN`。
 
 `worker-bin` 或 `worker-gitconfig` 中不是由 dsh-superagent 写入的文件会阻止安装。位于 git 仓库内、且该仓库自身配置添加了凭据的工单目录会使工单失败。

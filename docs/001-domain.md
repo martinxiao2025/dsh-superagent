@@ -79,7 +79,7 @@ flowchart LR
 | Agent | 智能体 | dsh-superagent 运行的自动化团队成员，通过 GitHub 账号和飞书机器人等身份在来源上行动 |
 | Main Session | 主 Session | 评估触发器、接单并派发工单、负责回复的 DSH 会话；代码和提示词中称 `orchestrator` |
 | Executor Session | 执行器 Session | 执行器为一个工单运行的 DSH 会话；代码和提示词中称 `worker` |
-| Source | 来源 | 事件流：插件提供的类型，加一份实例配置 |
+| Source | 来源 | 事件流：内置适配器提供的类型，加一份记录配置 |
 | Trigger | 触发 | 来自来源的一个不可变事件 |
 | Thread | 线程 | 按时间顺序排列的触发器；同一时间只运行一个评估的单元 |
 | Correlation | 关联 | 共享同一触发器的线程之间的关系；只补充上下文 |

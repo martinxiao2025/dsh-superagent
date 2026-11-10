@@ -41,7 +41,7 @@ export const USER_ERRORS = {
   promptTooLong: ['refused', 'Prompt configuration exceeds {limit} characters'],
   promptPlaceholders: ['refused', 'The “{part}” template must keep {placeholders}, which the system fills in'],
   promptPartEmpty: ['refused', 'The “{part}” part cannot be empty; reset it to follow its built-in text'],
-  sourceNotInstalled: ['refused', 'The {source} Source kind is not installed'],
+  sourceNotInstalled: ['refused', 'The {source} Source kind is not registered'],
   sourceKindUnknown: ['missing', 'Unknown Source kind: {kind}'],
   sourceExists: ['refused', 'A Source with the record ID {source} already exists'],
   sourceInUse: ['refused', 'The {source} Source still has {count} unfinished Tickets; disable it to end them'],

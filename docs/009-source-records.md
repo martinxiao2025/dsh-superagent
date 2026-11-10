@@ -66,7 +66,7 @@
 | 触发器去重 ID | `key('<记录ID>-issue', 编号)`，天然按记录隔离 |
 | KV 键 | `github-stream:<记录ID>:<stream>`、`gitlab-cursor:<记录ID>:<stream>`、`source-labels:<记录ID>` |
 | 健康项 | 首个声明名使用 `<记录ID>`，其余 `<记录ID>:<名称>`，例如 `gl-internal:history` |
-| 环境变量 | `DSH_SUPERAGENT_SOURCE_<ID>_<FIELD>`（ID 大写、`-` 转 `_`），另有 `DSH_SUPERAGENT_SOURCE_ID` 与 `DSH_SUPERAGENT_SOURCE_KIND` |
+| 环境变量 | `DSH_SUPERAGENT_SOURCE` 为记录 ID；记录自己的变量沿用适配器声明的名称，值按记录解析，工单只注入其来源记录的变量 |
 
 所有身份拼接集中在 `src/sources/identity.ts`，禁止在适配器里散落字符串拼接。
 
@@ -125,8 +125,8 @@ interface SourceAdapter {
 | `GET` | `/orchestrator/api/settings` | 来源记录卡片与 `kinds` 类型目录 |
 | `PUT` | `/orchestrator/api/settings/source:<id>` | 更新 `{ enabled, config }`，含启停 |
 | `GET` | `/orchestrator/api/sources` | 运行状态与健康 |
-| `POST` | `/orchestrator/api/sources` | 创建记录，body `{ kind, id?, config? }` |
-| `DELETE` | `/orchestrator/api/sources/:id` | 删除记录；有未结束工单时 `409` |
+| `POST` | `/orchestrator/api/sources` | 创建记录，body `{ kind, id?, config? }`，返回 `{ id, revision, restarting }` |
+| `DELETE` | `/orchestrator/api/sources/:id` | 删除记录，返回 `{ removed, restarting }`；有未结束工单时 `409`；记录不存在时 `400`（`sourceNotInstalled`） |
 | `GET` | `/orchestrator/api/health` | 插件注册阶段、初始化状态、监听地址与记录健康摘要 |
 
 所有管理路由要求 `x-orchestrator-request: 1`，并校验 Host 与同源。
@@ -151,14 +151,16 @@ interface SourceAdapter {
 
 ## 交付清单
 
-| 项 | 状态标记方式 |
-| --- | --- |
-| 记录模型与字段校验 | schema 单测 |
-| 同类型多记录、独立轮询与健康 | 注册表与适配器测试 |
-| 面板增删改启停 | HTTP 与面板测试 |
-| 可读校验错误、不静默禁用 | 反向用例 |
-| 旧模型与兼容分支清除 | 全仓检索与文档审查 |
-| 适配器注册表与新增类型流程 | 类型目录与注册测试 |
-| 凭据与实例地址 | 部署解析测试、链接测试 |
-| 404 加固与可诊断性 | 单元测试、桌面连续启动观测 |
-| 全量测试、构建、桌面验证 | `pnpm check`、`verification/` 记录 |
+状态与逐条证据见 `verification/2026-11-10-u8-delivery.md`；真实租户、面板点击等未验证项及其原因也在该记录第 5 节。
+
+| 项 | 状态 | 证据 |
+| --- | --- | --- |
+| 记录模型与字段校验 | 已交付 | `tests/settings.spec.ts`、`tests/policy.spec.ts` |
+| 同类型多记录、独立轮询与健康 | 已交付 | `tests/registry.spec.ts`、`tests/views.spec.ts` |
+| 面板增删改启停 | 已交付 | `tests/http.spec.ts`、`tests/panel-source.spec.tsx`、桌面产物实测 POST/DELETE |
+| 可读校验错误、不静默禁用 | 已交付 | `tests/settings.spec.ts`、`tests/registry.spec.ts` |
+| 旧模型与兼容分支清除 | 已交付 | 全仓检索、文档与示例配置校准 |
+| 适配器注册表与新增类型流程 | 已交付 | `src/sources/adapters.ts`、`tests/registry.spec.ts` |
+| 凭据与实例地址 | 已交付（真实租户未验证） | `tests/deployment.spec.ts`、`tests/resources.spec.ts` |
+| 404 加固与可诊断性 | 已交付 | `tests/startup.spec.ts`、`tests/index.spec.ts`、`verification/2026-11-10-desktop-404.md` |
+| 全量测试、构建、桌面安装 | 已交付 | `pnpm check`、`verification/2026-11-10-u8-delivery.md` |

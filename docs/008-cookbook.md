@@ -14,7 +14,7 @@
 - `hookq reply --conversation <id> --to <message id> --key <key> --text <text>` 在一条消息下回复，每个 key 只回复一次。对话已删除时，它在标准错误上以 `{"error": {"code": 410, "message": "…"}}` 失败。
 - `hookq thread --conversation <id> --root <message id> --json`，带 `--after <cursor>` 读取后续页，打印线程的一页，最旧在前：`{"items": […], "next": "<cursor>"}`，最后一页没有 `next`。
 
-把该 kind 及其插件入口放在 `src/sources/webhook.ts` 中，参照 `src/sources/github.ts`。如果来源变大，像飞书来源那样把转换、渠道和轮询代码拆到独立模块。
+把该 kind 与适配器放在 `src/sources/webhook.ts` 中，参照 `src/sources/gitlab.ts`。如果来源变大，像飞书来源那样把转换、渠道和轮询代码拆到独立模块。适配器在 `src/sources/adapters.ts` 的内置清单中登记，不需要单独的插件入口。
 
 ### 1. 把事件映射到领域
 
@@ -40,7 +40,8 @@ import { key, threadKey, type OutboundMessage, type Trigger } from '../core/inde
 import { CliError } from '../infra/commands.ts'
 import { KV } from '../kv.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
-import type { SourceKind } from './kind.ts'
+import { triggerKey } from './identity.ts'
+import type { SourceAdapter, SourceKind } from './kind.ts'
 ```
 
 ```ts
@@ -72,11 +73,11 @@ export const webhookKind: SourceKind<WebhookConfig> = {
 }
 ```
 
-- `kind` 是稳定的来源 id。它出现在触发器的 `source`、线程键前缀、`source:webhook` 设置块和来源策略中。
-- `schema` 校验已存储配置并提供默认值。操作者保存实例之前，registry 用这些默认值创建一个已启用的实例。让默认值不接收任何内容；本示例默认没有对话。
-- `fields` 无需自定义面板代码即可生成来源设置表单。`rows` 字段编辑以其第一列为键的条目；`advanced` 隐藏较少用的设置。如果来源能把 id 解析为显示名称，请实现 `refreshLabels`。把这些名称保存在 `KV.sources.labels(kind)` 下。带 `choose` 和 `refresh` 的列随后可以提供它们。
-- 可选的 `facts(deployment)` 显示安装派生的值，例如某个 CLI 背后的账号。安装目前只检查 `SETUP_FIELDS` 中列出的 GitHub 和飞书字段，因此本示例不提供事实。
-- `health` 声明来源的健康条目，初始为 `starting`。注册会认领每个名称，并拒绝与 `runtime`、`reply`、`worker` 或副作用 kind 等条目冲突。使用该 kind 的名称，并把 `sync:<id>` 留给策略同步。`error` 会让状态脚本以 2 退出，并让每小时检查通知操作者，因此只在可能需要人处理时才报告它。
+- `kind` 是稳定的类型名。每条来源记录的 ID 才是触发器的 `source`、线程键前缀、`source:<记录 ID>` 设置块和策略部分的键；`kind` 决定使用哪个适配器。
+- `schema` 校验记录配置并提供默认值。新增来源时由面板选择类型并提交配置，registry 不会自动创建默认记录；默认值应让记录暂不接收任何内容，本示例默认没有对话。
+- `fields` 无需自定义面板代码即可生成来源设置表单。`rows` 字段编辑以其第一列为键的条目；`advanced` 隐藏较少用的设置。如果来源能把 id 解析为显示名称，请实现 `refreshLabels`。把这些名称保存在 `KV.sources.labels(记录 ID)` 下。带 `choose` 和 `refresh` 的列随后可以提供它们。
+- 可选的 `facts(deployment)` 显示安装派生的值，例如某个 CLI 背后的账号。安装按每种类型的 `SETUP_FIELDS` 检查记录，本示例不提供事实。
+- `health` 声明来源的健康条目，初始为 `starting`。注册会按记录认领每个名称（第一项就是记录 ID，其余为 `<记录 ID>:<名称>`），并拒绝与 `runtime`、`reply`、`worker` 或副作用 kind 等条目冲突。使用该 kind 的名称，并把 `sync:<id>` 留给策略同步。`error` 会让状态脚本以 2 退出，并让每小时检查通知操作者，因此只在可能需要人处理时才报告它。
 
 ### 3. 把消息转换为触发器
 
@@ -96,20 +97,20 @@ const ThreadPageSchema = z.looseObject({ items: z.array(MessageSchema), next: z.
 ```
 
 ```ts
-/** 一条队列消息的触发器；智能体自己的消息不产生触发器。 */
-export function webhookTrigger(message: QueueMessage, me: string): Trigger | undefined {
+/** 一条队列消息的触发器；`source` 是产生它的来源记录 ID。智能体自己的消息不产生触发器。 */
+export function webhookTrigger(message: QueueMessage, me: string, source: string): Trigger | undefined {
   if (message.sender.id === me) return undefined
   const thread = `${message.conversation}:${message.thread ?? message.id}`
   return {
-    id: key('webhook', message.id),
-    source: 'webhook',
-    threads: [{ source: 'webhook', id: thread }],
-    actor: { source: 'webhook', id: message.sender.id },
+    id: triggerKey(source, 'message', message.id),
+    source,
+    threads: [{ source, id: thread }],
+    actor: { source, id: message.sender.id },
     human: !message.sender.bot,
     ...(message.mentions_me ? { addressed: 'mention' as const } : {}),
     at: message.at,
     text: message.text,
-    channel: { source: 'webhook', thread: `webhook:${thread}`,
+    channel: { source, thread: threadKey(source, thread),
       address: { conversation: message.conversation, message: message.id, ...(message.url ? { url: message.url } : {}) } },
     ...(message.url ? { url: message.url } : {}),
     meta: { conversation: message.conversation, messageId: message.id, root: message.thread ?? message.id },
@@ -117,8 +118,8 @@ export function webhookTrigger(message: QueueMessage, me: string): Trigger | und
 }
 ```
 
-- **稳定的 id。** 通过 `key` 从队列 id 派生触发器 id。对已存储的 id，`Engine.receive` 返回 `duplicate`，重复接受只创建一个工单。因此重复读取消息是安全的。若要把编辑视为新事件，请在 id 中包含编辑版本，就像 GitHub 对评论 `updated_at` 所做的那样。
-- **线程。** 第一个线程是主线程，拥有评估。其他线程补充关联上下文。来源选择 id；其完整键是 `webhook:<id>`。
+- **稳定的 id。** 用 `triggerKey(记录 ID, …)` 从队列 id 派生触发器 id。对已存储的 id，`Engine.receive` 返回 `duplicate`，重复接受只创建一个工单。因此重复读取消息是安全的。若要把编辑视为新事件，请在 id 中包含编辑版本，就像 GitHub 对评论 `updated_at` 所做的那样。
+- **线程。** 第一个线程是主线程，拥有评估。其他线程补充关联上下文。来源选择 id；其完整键由 `threadKey` 生成，即 `<记录 ID>:<id>`。
 - **发送者。** 在 `actor` 中使用来源原生 id。对机器人和 CI 设置 `human: false`。名单中的机器人只能成为推断候选。空的 actor id（如 CI）使用针对未列入名单、未对智能体说话的发送者的准入单元格。只有当消息确实对智能体说话时，才把 `addressed` 设为 `mention` 或 `direct`；这会让允许名单上的人的消息具有明确强度。绝不为智能体自己的消息产生触发器。
 - **回复目的地与元数据。** `channel` 指明回复的去处；`url` 链接到来源消息。`channel.thread` 对消息分组以便按序投递：工单较晚的消息会等待较早的消息，直到较早消息连续失败三次。其他工单不等待。把来源特有字段放在 `meta` 中，例如接收对话和线程根。`meta` 和 `text` 都是不可信数据，不是授权。
 
@@ -174,7 +175,7 @@ export async function sendWebhook(host: Pick<SourceContext, 'commands'>, message
 }
 ```
 
-- **幂等发送。** Outbox 调用 `SourceRegistry.send`，后者调用 `channel.send`。来源插件未加载时消息等待。远程服务可能已收到消息但发送仍失败，因此重试绝不能重复消息。把 `message.id` 用作幂等键：`hookq` 支持 `--key`；GitHub 存储一个隐藏的评论标记；飞书接受幂等键。
+- **幂等发送。** Outbox 调用 `SourceRegistry.send`，后者调用 `channel.send`。记录不存在或类型未登记时消息等待。远程服务可能已收到消息但发送仍失败，因此重试绝不能重复消息。把 `message.id` 用作幂等键：`hookq` 支持 `--key`；GitHub 存储一个隐藏的评论标记；飞书接受幂等键。
 - **永久失败与可重试失败。** 成功时返回 `sent`，只在投递永久不可能时返回 `gone`，例如示例中的 410。已消失的消息保留为已丢弃，永不再次入队；它出现在 `GET sources` 和来源页面上。其他失败请抛出，Outbox 会在 5 秒后重试，翻倍至 300 秒。`CliError.code` 是 CLI 输出报告的错误码。
 - **允许的目的地。** `allowed(address, config)` 只检查已保存的地址和当前配置。把每个必需事实放进地址；例如飞书会记录对话是否为私信。不再被监听的目的地会被丢弃，而关闭的来源会让消息等待。没有 `allowed` 时，来源启用期间所有地址都允许。
 - **链接。** `link(address, links)` 返回面板通过 `SourceRegistry.link` 显示的 URL 和标签。
@@ -206,7 +207,7 @@ export async function sendWebhook(host: Pick<SourceContext, 'commands'>, message
 如果消息回复更早的消息，请添加 `repliesTo(trigger)`。它返回对应的触发器 id，使跟进通知和执行器输入在已存储时能显示被回复的消息。例如，如果 `hookq` 提供 `reply_to`，转换把它存储为 `meta.replyTo`：
 
 ```ts
-  repliesTo: trigger => typeof trigger.meta.replyTo === 'string' ? key('webhook', trigger.meta.replyTo) : undefined,
+  repliesTo: trigger => typeof trigger.meta.replyTo === 'string' ? triggerKey(trigger.source, 'message', trigger.meta.replyTo) : undefined,
 ```
 
 ### 7. 谁能发起工作：策略中的来源部分
@@ -227,7 +228,7 @@ export async function sendWebhook(host: Pick<SourceContext, 'commands'>, message
   },
 ```
 
-- `schema` 校验来源策略，包括 `allowed` 发送者 id。id 比较不区分大小写。准入表单独校验，并在各 kind 之间共享。该策略部分保存在 `policy.sources.webhook`，并参与策略版本。
+- `schema` 校验来源策略，包括 `allowed` 发送者 id。id 比较不区分大小写。准入表单独校验，并在各 kind 之间共享。该策略部分保存在 `policy.sources.<记录 ID>`，并参与策略版本。
 - `fields` 在 **评估 → 各来源** 下生成表单，从 `allowed` 开始。`explicit` 说明如何对智能体说话。可选的 `unnamed: {person, bot}` 为不透明 id（例如飞书的 `ou_…`）提供显示标签；本示例因为队列 id 就是可读名称而省略它。
 - `rows(config)` 列出准入范围及其可用单元格。每个行 id 必须与 `scope` 返回的 `row` 匹配。未对智能体说话的消息单元格只在来源观察这些消息的地方可用。没有 `rows` 的 kind 使用默认单元格。
 - 可选的 `bots` 列出有资格成为推断候选的机器人，条目形态与 `allowed` 相同。没有它时，不接纳任何机器人。
@@ -240,34 +241,30 @@ export async function sendWebhook(host: Pick<SourceContext, 'commands'>, message
     variables: [{ key: 'DSH_SUPERAGENT_WEBHOOK_CONVERSATION', description: {
       zh: '接下工单的 webhook 对话；工单不是从这个来源来的时为空',
       en: 'The webhook conversation that started the ticket; empty when the ticket did not start on this Source' } }],
-    values: ({ trigger }) => ({
-      DSH_SUPERAGENT_WEBHOOK_CONVERSATION: trigger?.source === 'webhook' ? String(trigger.meta.conversation ?? '') : '' }),
+    values: ({ source, trigger }) => ({
+      DSH_SUPERAGENT_WEBHOOK_CONVERSATION: trigger?.source === source?.id ? String(trigger.meta.conversation ?? '') : '' }),
   },
 ```
 
-执行设置会在准备命令旁显示已声明的 `variables`，即使来源已关闭。来源启用期间，`values` 使用部署、配置和起始触发器提供工单专属的值。
+执行设置会在准备命令旁显示已声明的 `variables`，即使来源已关闭。来源启用期间，`values` 使用记录、配置和起始触发器提供工单专属的值。
 
-准备命令读取环境变量；执行器在其指令中读取它们的值。使用 `DSH_SUPERAGENT_<KIND>_…` 前缀，对来自其他来源的工单返回空值，绝不要包含凭据。
+准备命令读取环境变量；执行器在其指令中读取它们的值。变量名沿用 `DSH_SUPERAGENT_<KIND>_…` 形式，同一类型的多条记录共用一套名称，但运行时只注入工单来源记录的值；对来自其他记录的工单返回空值，绝不要包含凭据。
 
-### 9. 插件入口及其循环
+### 9. 适配器及其循环
 
 ```ts
-export const name = 'dsh-superagent-webhook'
-export const inject = ['orchestrator']
-export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.orchestrator.sources.register(webhookKind), 'webhook: source kind')
-  ctx.effect(() => {
-    const source = sourceContext(ctx.orchestrator, webhookKind)
-    const controller = new AbortController()
-    // DSH 遇到未处理的 rejection 会结束进程，因此逃出循环的失败会成为来源的健康状态。
-    const running = watch(source, controller.signal)
-      .catch((error: unknown) => { source.report('webhook', { state: 'error', detail: String(error) }) })
-    return async () => { controller.abort(); await running }
-  })
+export const webhookAdapter: SourceAdapter<WebhookConfig> = {
+  kind: webhookKind,
+  async watch(host, id, signal) {
+    const ctx = sourceContext(host, webhookKind, id)
+    // DSH 遇到未处理的 rejection 会结束进程，因此逃出循环的失败会成为该记录的健康状态。
+    try { await watch(ctx, signal) }
+    catch (error) { ctx.report('webhook', { state: 'error', detail: String(error) }) }
+  },
 }
 ```
 
-插件注入 `orchestrator`。其第一个 effect 注册该 kind，并在销毁时取消注册。第二个用 `SourceContext` 运行轮询循环。销毁会中止循环并等待完成，包括应用停止或重启期间。
+适配器由主插件加载，`watch` 为每条已启用的记录调用一次，`id` 是记录 ID。`sourceContext(host, kind, id)` 把 registry、部署、命令与健康项收窄到该记录；停用、删除或应用停止会中止 `signal`，循环退出。
 
 ```ts
 async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
@@ -276,7 +273,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   if (!ctx.configured()) { ctx.report('webhook', health('paused', 'setupPending')); return }
   let failures = 0
   while (!signal.aborted) {
-    const config = ctx.config<WebhookConfig>('webhook')
+    const config = ctx.config<WebhookConfig>()
     if (!config) ctx.report('webhook', health('paused', 'sourceOff'))
     else {
       const at = new Date().toISOString()
@@ -298,7 +295,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
 
 /** 读取游标之后的队列，接收每条消息，然后把游标移到它们之后。 */
 export async function pollQueue(ctx: SourceContext, signal: AbortSignal): Promise<{ read: number; unreadable: number }> {
-  const after = ctx.state.get(KV.webhook.cursor) ?? 0
+  const after = ctx.state.get(KV.webhook.cursor(ctx.id)) ?? 0
   const output = await ctx.commands.withSignal(signal).run('hookq', ['pull', '--after', String(after), '--json'])
   const page = PageSchema.parse(JSON.parse(output))
   let unreadable = 0
@@ -306,20 +303,20 @@ export async function pollQueue(ctx: SourceContext, signal: AbortSignal): Promis
     if (signal.aborted) throw new Error('The webhook Source stopped during the read')
     const message = MessageSchema.safeParse(item)
     if (!message.success) { unreadable++; continue }
-    const trigger = webhookTrigger(message.data, page.me)
+    const trigger = webhookTrigger(message.data, page.me, ctx.id)
     if (!trigger) continue
     await ctx.receive(trigger)
     const conversation = { label: { zh: '对话', en: 'Conversation' }, value: message.data.conversation }
-    for (const ref of trigger.threads) ctx.threads.describe(threadKey(ref), { facts: { conversation } })
+    for (const ref of trigger.threads) ctx.threads.describe(threadKey(ref.source, ref.id), { facts: { conversation } })
   }
-  ctx.state.set(KV.webhook.cursor, page.next)
+  ctx.state.set(KV.webhook.cursor(ctx.id), page.next)
   return { read: page.items.length, unreadable }
 }
 ```
 
 
-- **安装与开关。** 等待 `ctx.ready`，在 `ctx.configured()` 为 false 时不读取任何内容。每轮都读取 `ctx.config(kind)`：来源关闭时它为 undefined。
-- **游标。** 使用 `KV`（`src/kv.ts`）中带类型的条目把读取位置存入 `ctx.state`，例如 `webhook: {cursor: record<number>('webhook-cursor')}`。`tests/store.spec.ts` 要求键字面量只出现在该注册表中。外部包可以用导出的 `record` 和 `family` 定义键。把值设为 `undefined` 会删除记录；`ctx.atomic` 把写入分组到一个事务中。
+- **安装与开关。** 等待 `ctx.ready`，在 `ctx.configured()` 为 false 时不读取任何内容。每轮都读取 `ctx.config<WebhookConfig>()`：记录停用或配置无效时它为 undefined。
+- **游标。** 使用 `KV`（`src/kv.ts`）中带类型的条目把读取位置存入 `ctx.state`，并按记录 ID 分键，例如 `webhook: {cursor: family<number, [record: string]>('webhook-cursor:')}`。`tests/store.spec.ts` 要求键字面量只出现在该注册表中。外部包可以用导出的 `record` 和 `family` 定义键。把值设为 `undefined` 会删除记录；`ctx.atomic` 把写入分组到一个事务中。
 
   只有在覆盖的触发器全部存储后，才推进游标。被中断的一轮保持游标不变；稳定的 id 使重放安全。对于时间戳游标，`src/sources/poll.ts` 中的 `cursorAt(started)` 会减去五秒，以容纳远程写入的延迟。
 - **线程元数据。** 接收触发器后，调用 `ctx.threads.describe(key, {label, url, facts})` 填充其显示信息。`ctx.threads.patch(key, meta)` 委托给 `threads.patchMeta`，设置来源拥有的键，或在值为 `undefined` 时移除它们。两者都会忽略不存在的线程，包括已过滤触发器的线程。
@@ -331,24 +328,17 @@ export async function pollQueue(ctx: SourceContext, signal: AbortSignal): Promis
 
 它也不把线程绑定到工单完成。只有当来源的线程生命周期决定工作是否完成时（例如 GitHub 拉取请求），才使用 `ctx.tickets.bindThread` 和 `threadClosed`。工单何时结束仍由 Engine 决定。
 
-### 10. 注册插件
+### 10. 登记适配器
 
-把模块作为其在 `tsdown.config.ts` 中的独立入口构建：
+在 `src/sources/adapters.ts` 的内置清单中加入适配器：
 
 ```ts
-entry: { index: 'src/index.ts', 'github-watch': 'src/sources/github.ts', 'feishu-watch': 'src/sources/feishu.ts',
-  'webhook-watch': 'src/sources/webhook.ts' },
+import { webhookAdapter } from './webhook.ts'
+
+export const ADAPTERS: readonly SourceAdapter[] = [githubAdapter, gitlabAdapter, erased(feishuAdapter), erased(webhookAdapter)]
 ```
 
-然后在 `package.json` 中把构建产物加入 `exports`：添加 `"./webhook-watch": "./lib/webhook-watch.js"`，并把插件加入插件包 `cordis.patch.yml` 的 `insert` 列表，像飞书一样设为禁用：
-
-```yaml
-    - id: dsh-superagent-webhook
-      name: dsh-superagent/webhook-watch
-      disabled: true
-```
-
-在 profile 的 `cordis.patch.yml` 中用 `id: dsh-superagent-webhook` 和 `disabled: false` 启用插件。构建并重启。新来源会出现在来源设置中，以及 **评估 → 各来源** 下。
+主插件在启动后为每条已存储的来源记录运行其适配器。没有 `tsdown` 入口、没有 `package.json` 子路径导出、没有 `cordis.patch.yml` 条目，也没有 profile 开关。构建并重启后，在面板的 **来源 → 新增来源** 中选择该类型创建记录；记录会出现在来源设置中，以及 **评估 → 各来源** 下。
 
 把其模块和测试规格加入 [007 架构](007-architecture.md) 的模块表和测试表。`tests/docs.spec.ts` 会检查两个索引是否完整。
 
@@ -362,7 +352,7 @@ entry: { index: 'src/index.ts', 'github-watch': 'src/sources/github.ts', 'feishu
 function host(overrides: Partial<SourceContextDeps> = {}) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'webhook-')), 'db.sqlite'))
   store.saveSettings(SettingsSchema.parse({
-    sources: { webhook: { enabled: true, config: { conversations: [{ id: 'ops', listen: 'mentions' }] } } },
+    sources: { webhook: { kind: 'webhook', enabled: true, config: { conversations: [{ id: 'ops', listen: 'mentions' }] } } },
     policy: { sources: { webhook: { allowed: [{ id: 'alice' }] } } },
   }))
   // registry 在 board 上认领该 kind 的健康条目，测试从这里读取它们。
@@ -377,7 +367,7 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   // 来源自己的通知进入 outbox，后者保留其回执，在这里不发送任何内容。
   const deps: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources,
     deployment: testDeployment(), ready: Promise.resolve(), configured: () => true, receive, ...overrides }
-  return { ...deps, store, engine, commands, receive, health: board.all, ctx: sourceContextOf(deps, webhookKind) }
+  return { ...deps, store, engine, commands, receive, health: board.all, ctx: sourceContextOf(deps, webhookKind, 'webhook') }
 }
 /** `hookq` 答复的队列内容。 */
 function queue(h: ReturnType<typeof host>, answer: () => unknown) {
@@ -391,9 +381,9 @@ it('takes in what the queue holds after the cursor, once, and moves the cursor a
   expect(await pollQueue(h.ctx, new AbortController().signal)).toEqual({ read: 3, unreadable: 1 })
   expect(await h.receive.mock.results[0]!.value).toBe('stored')
   expect(await h.receive.mock.results[1]!.value).toBe('filtered')
-  expect(h.store.get(KV.webhook.cursor)).toBe(3)
+  expect(h.store.get(KV.webhook.cursor('webhook'))).toBe(3)
   // 名单上的发送者 @ 智能体，构成明确请求。
-  expect(h.engine.candidate(key('webhook', 'm1'))?.strength).toBe('explicit')
+  expect(h.engine.candidate(triggerKey('webhook', 'message', 'm1'))?.strength).toBe('explicit')
   await pollQueue(h.ctx, new AbortController().signal)
   expect(await h.receive.mock.results[2]!.value).toBe('duplicate')
   h.store.close()
@@ -407,7 +397,7 @@ it('takes in what the queue holds after the cursor, once, and moves the cursor a
 - 被提前中断的一轮，其游标保持不变；
 - `send`：`sent`、只在 410 时返回 `gone`，其他任何失败都抛出，CLI 的错误由 `commandError` 构造；
 - 线程上下文：一页的消息和下一页的游标，如同 `tests/registry.spec.ts` 通过 `SourceRegistry.threadContext` 读取某个 kind 的线程；
-- 插件：`apply` 注册该 kind，并在安装等待期间报告 `setupPending`，其销毁函数取消注册该 kind，逃出循环的失败成为来源的健康状态而不是未处理的 rejection；
+- 适配器：`watch` 为每条记录建立上下文，安装等待期间报告 `setupPending`，逃出循环的失败成为该记录的健康状态而不是未处理的 rejection；停用、删除或应用停止会中止信号；
 - 策略中的来源部分及其准入行，如同 `tests/registry.spec.ts` 和 `tests/policy.spec.ts` 检查飞书来源那样。
 
 ### 检查清单
@@ -420,6 +410,6 @@ it('takes in what the queue holds after the cursor, once, and moves the cursor a
 6. 如果来源能读取线程，为评估提供其线程上下文。
 7. 提供策略中的来源部分，含 `allowed` 和准入行。
 8. 注册其执行环境变量。
-9. 编写插件入口和循环：等待安装、跟随开关、在 `receive` 之后移动游标、逐项保留错误、报告健康并在中止时停止；在 `KV` 中命名游标。
-10. 添加构建入口、导出和 `cordis.patch.yml` 插入项，并在 007 的表格中列出该模块及其测试规格。
+9. 编写适配器和循环：等待安装、跟随开关、在 `receive` 之后移动游标（按记录 ID 分键）、逐项保留错误、报告健康并在中止时停止；在 `adapters.ts` 中登记；
+10. 在 `src/sources/adapters.ts` 登记适配器，并在 007 的表格中列出该模块及其测试规格。
 11. 像 `tests/sources.spec.ts` 测试其他来源那样测试它。

@@ -176,7 +176,7 @@ export class SourceRegistry implements SourceScope {
     if (!instance.enabled) return { listened: false, reason: 'source_disabled' }
     return kind.scope ? kind.scope({ meta: input.meta }, instance.config) : { listened: true, observed: false }
   }
-  /** 存储的配置校验失败时回退到 schema 默认值并禁用该记录。 */
+  /** 存储的配置校验失败时回退到 schema 默认值，并在运行时按停用处理；已保存的启用状态不变。 */
   private resolve(id: string, kind: SourceKind, stored: { enabled: boolean; config: Record<string, unknown> }): SourceInstance {
     const parsed = kind.schema.safeParse(stored.config ?? {})
     return { id, kind: kind.kind, enabled: parsed.success && stored.enabled, config: parsed.success ? parsed.data : kind.schema.parse({}) }

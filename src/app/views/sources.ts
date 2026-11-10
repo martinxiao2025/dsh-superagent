@@ -2,6 +2,7 @@
 import { threadKey } from '../../core/index.ts'
 import type { Deployment } from '../../deployment.ts'
 import type { Health } from '../../sources/host.ts'
+import { healthNames } from '../../sources/identity.ts'
 import type { SourceInstance } from '../../sources/kind.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
 import type { SetupProblem } from '../../setup.ts'
@@ -13,7 +14,7 @@ export type HealthMap = Record<string, Health>
 export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, health: HealthMap) {
   const kind = sources.kindByName(instance.kind)
   const starting: Health = { state: 'starting', detail: '' }
-  const parts = (kind?.health ?? []).map(name => {
+  const parts = healthNames(instance.id, kind?.health ?? []).map(name => {
     const entry = health[name]
     return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
   })

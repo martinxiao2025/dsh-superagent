@@ -1,6 +1,7 @@
 /** 概览视图：活跃的系统问题、等待人员处理的工单、执行器负载，以及 24 小时触发器流。 */
 import { reasonText, ticketStage, type Decision, type Thread } from '../../core/index.ts'
 import type { Health } from '../../sources/host.ts'
+import { healthNames } from '../../sources/identity.ts'
 import type { SetupProblem } from '../../setup.ts'
 import { anyoneAllowed } from '../../policy.ts'
 import type { Store } from '../store.ts'
@@ -44,7 +45,7 @@ export function overview(host: ViewHost, health: HealthMap, policyVersionValue: 
   const instances = sources.instances()
   const running = instances.filter(instance => instance.enabled && instance.installed).map(instance => sourceHealth(sources, instance, health))
   // 排除来源自身与策略同步的健康项，使只有核心运行时错误以 `runtime-error` 呈现。
-  const sourceParts = new Set(instances.flatMap(instance => sources.kindByName(instance.kind)?.health ?? []))
+  const sourceParts = new Set(instances.flatMap(instance => healthNames(instance.id, sources.kindByName(instance.kind)?.health ?? [])))
   const problems = [
     ...(setup ? [{ kind: 'setup' as const, ...setup }] : []),
     ...(running.length ? [] : [{ kind: 'no-source' as const }]),

@@ -32,7 +32,7 @@ flowchart TB
 
 启动时注册管理路由并运行安装。安装解析完成后，它安装会话和执行器钩子、确保主会话存在、启动策略同步、恢复被中断的派工，并启动轮次和副作用。`ready` 标记启动完成。
 
-关闭时取消回合，等待轮次、副作用和智能体，恢复进程环境，关闭 Store 并释放锁。来源插件通过狭窄的 `SourceHost` 接口把 Runtime 注入为 `orchestrator` 服务。
+关闭时取消回合，等待轮次、副作用和智能体，恢复进程环境，关闭 Store 并释放锁。内置来源适配器通过狭窄的 `SourceHost` 接口取得 registry 与逐记录上下文；主插件是唯一注册它们的地方。
 
 | 部分 | 模块 | 作用 |
 | --- | --- | --- |
@@ -184,13 +184,13 @@ Runtime 把 `ticket.ended`、`trigger.requeued` 和 `thread.unsubscribed` 变成
 
 来源通过 `SourceKind` 扩展宿主，该接口定义在 `src/sources/kind.ts`。一个 kind 声明其身份、标题、说明、配置 `schema` 和 `fields`、派生的 `facts` 以及 `health` 条目。可选行为包括 `scope`、`channel`（`allowed`、`send`、`link`）、`threadContext`、`find`、`policy`、`environment` 和 `refreshLabels`。
 
-`SourceRegistry`（`registry.ts`）拥有已注册的 kind 和已存储的实例，并实现 Engine 的 `SourceScope`。注册会在 `HealthBoard` 上认领健康条目；重复认领和保留的 `sync:` 名称会被拒绝。SourceContext 只通过其注册所认领的条目写入，因此注销后的报告什么都不做。
+`SourceRegistry`（`registry.ts`）拥有已注册的 kind 和已存储的记录，并实现 Engine 的 `SourceScope`。注册会在 `HealthBoard` 上认领健康条目；重复认领和保留的 `sync:` 名称会被拒绝。SourceContext 只通过其注册所认领的条目写入，因此注销后的报告什么都不做。
 
 Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、`validatePolicy`、`policyPart`、`channelAllowed`、`declarations`、`environments`、`find` 和 `scope`。`find` 询问每个支持搜索的 kind。
 
-通用代码通过 registry 访问来源行为。`send(message, commands)` 调用 kind 的渠道，返回 `sent`、`gone`，或在该 kind 未安装时返回 `waiting`。`link` 解析其渠道链接。`threadContext` 把 kind 的读取器与其配置配对，kind 没有读取器时返回空。无效的已存储配置会禁用该实例。
+通用代码通过 registry 访问来源行为。`send(message, commands)` 调用 kind 的渠道，返回 `sent`、`gone`，或在该 kind 未注册时返回 `waiting`。`link` 解析其渠道链接。`threadContext` 把 kind 的读取器与其配置配对，kind 没有读取器时返回空。无效的已存储配置在运行时按停用处理，已保存的启用状态不变。
 
-插件收到 `SourceHost`：registry 和 `context(kind)`。kind 本身使用更窄的 `SourceContext`，由 `src/app/source-context.ts` 中的 `sourceContextOf` 构建。
+适配器收到 `SourceHost`：registry 和 `context(kind, id)`。kind 本身使用更窄的 `SourceContext`，由 `src/app/source-context.ts` 中的 `sourceContextOf` 构建。
 
 该上下文提供部署和命令、安装就绪状态（`ready`、`configured`、`problem`）、配置、`receive`、`atomic` 和带类型的 `state`。它还暴露线程读取和元数据写入、工单读取以及绑定/关闭命令、触发器读取、通过 Outbox 的 `notify`，以及用于已声明健康条目的 `report`。
 
@@ -254,7 +254,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 ## 依赖规则
 
-- **显式、狭窄的依赖。** 每个类收到一个接口，指明它使用的内容，大多是其他类的 `Pick` 类型：核心类使用 `ExecutorHost`、`AssessorHost`、`SessionsHost`、`SettingsHost`、`SetupHost`、`PassesHost` 和 `OutboxHost`，胶水层使用 `HttpHost`、`MainToolsHost`、`ExecutorToolsHost`、`ResourceHost`、`LinkHost` 和 `SourceContextDeps`，Engine 则以调用它的角色 `Pick` 形式出现。Runtime 只在此类接口背后传递自身。来源插件注入 `orchestrator` 服务，其类型将其命名为 `SourceHost`：registry 和 `context(kind)`；该 kind 的代码只能看到自己的 `SourceContext`。
+- **显式、狭窄的依赖。** 每个类收到一个接口，指明它使用的内容，大多是其他类的 `Pick` 类型：核心类使用 `ExecutorHost`、`AssessorHost`、`SessionsHost`、`SettingsHost`、`SetupHost`、`PassesHost` 和 `OutboxHost`，胶水层使用 `HttpHost`、`MainToolsHost`、`ExecutorToolsHost`、`ResourceHost`、`LinkHost` 和 `SourceContextDeps`，Engine 则以调用它的角色 `Pick` 形式出现。Runtime 只在此类接口背后传递自身。内置适配器由主插件在 `src/index.ts` 注册，接入 `SourceHost`（registry 与逐记录上下文）；适配器代码只能看到该记录的 `SourceContext`。
 - **谁能导入什么。** 除 Node 的哈希外，`src/core` 不导入自身之外的任何内容，也不做 I/O。`src/sources` 不从 `src/app` 导入任何内容。面板只从宿主侧导入类型，以及 `src/admission.ts`、`src/limits.ts`、`src/setup.ts`、`src/navigation.ts`、`src/sources/host.ts`、`src/core/errors.ts`、`src/core/reasons.ts` 的普通值和 `src/app/api.ts` 的过滤列表。
 - **每种状态只有一个写入者。** 每种状态只有一个写入者，其他部分读取它或向该写入者询问。
 
@@ -282,8 +282,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 - Runtime 为已合并或已关闭的工单发送 `pullEndNotices`。
 - 执行器工具用 `readPull` 和 `claimPull` 绑定报告的拉取请求，使用 Runtime 暴露的 GitHub 上下文。
 - MasterAssessor 用 `readRepositoryPath` 读取仓库文件。
-- Sessions 和 Prompts 只为 GitHub 和飞书注册内置技能。迁移会转换它们的架构 10 记录。
-- 安装只探测 GitHub 和飞书账号字段（`SETUP_FIELDS`）。只有这些来源通过 `SourceContext.problem` 收到账号安装问题。
+- Sessions 和 Prompts 为 GitHub、GitLab 和飞书注册内置技能。
+- 安装按记录类型探测字段（`SETUP_FIELDS`），每条记录通过 `SourceContext.problem` 收到自己的账号安装问题。
 
 
 ## 模块
@@ -293,7 +293,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/index.ts` | 主插件入口：读取机器设置，先挂载管理路由并取得状态目录锁，再启动 Runtime；初始化失败时记录启动阶段并保持路由挂载 |
 | `src/app/startup.ts` | 启动记录与状态目录锁：`recordStartup` 写 `startup.json` 并轮转 `startup.prev.json`，`startupError` 折叠异常，`acquireStateLock` 在锁竞争时等待重试 |
 | `src/app/admin-mount.ts` | `AdminMount`：Runtime 创建之前挂载 `/orchestrator/api`，初始化失败时用启动状态回答健康探针与 503 |
-| `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveDeployment`、`resolveFeishuBot` 和 `resolveGitlab` 从来源设置读取仓库和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出安装读取的来源字段。代码不指名任何人、账号或组织 |
+| `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveGithubSource`、`resolveGitlabSource` 和 `resolveFeishuSource` 按记录解析仓库、项目和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出各类型安装读取的字段。代码不指名任何人、账号或组织 |
 | `src/setup.ts` | 安装问题：`SetupError`，带错误码、修复它的位置，以及日志、主会话和面板共享的英文文本 |
 | `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验 |
 | `src/admission.ts` | 准入表的取值、每个单元格的选项和默认值，与面板共享 |
@@ -350,7 +350,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/views/records.ts` | 视图共享的行：触发器、工单、线程、决定和渠道链接，以及 `ownersOf`（跟进的所有者，按一次请求读取时的形式） |
 | `src/app/views/tickets.ts` | 按阶段划分的工单列表、工单页面、授权依据事实以及执行器负载 |
 | `src/app/views/threads.ts` | 线程列表、线程时间线、搜索和决定列表 |
-| `src/app/views/sources.ts` | 来源状态：每个来源实例的状态、其过去一天的计数，以及该日过滤和丢弃的内容 |
+| `src/app/views/sources.ts` | 来源状态：每条来源记录的状态、其过去一天的计数，以及该日过滤和丢弃的内容 |
 | `src/app/views/settings.ts` | 设置页面的视图：每个块及其修订号、每个来源的设置及其 kind 的表单，以及执行环境 |
 | `src/app/views/overview.ts` | 概览：需要人处理的工单、问题、过去一天的流动以及执行器负载 |
 | `src/executor/dsh.ts` | DshExecutor、`WorkerSlots`、`ticketExecution`、`inputMessage` 和 `mandateInstructions` |
@@ -362,7 +362,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/infra/text.ts` | 字数统计和聊天消息限制、`fill` 和 `sameName` |
 | `src/infra/health.ts` | `HealthBoard`，每个部分的健康条目，各由其唯一写入者认领 |
 | `src/sources/kind.ts` | `SourceKind` 与 `SourceAdapter` 协议 |
-| `src/sources/identity.ts` | 记录作用域的身份拼接：线程键、触发器 ID、KV 键、健康项与环境变量名 |
+| `src/sources/identity.ts` | 记录作用域的身份拼接：线程键、触发器 ID、KV 键与健康项名称 |
 | `src/sources/registry.ts` | `SourceRegistry`：按来源记录解析类型、配置、策略、线程与健康项 |
 | `src/sources/adapters.ts` | 内置适配器清单（GitHub、GitLab、飞书）；新增类型只需实现并登记一个适配器 |
 | `src/sources/host.ts` | `SourceHost`、`SourceContext`、`Health`、`health` 以及固定健康文本 |
@@ -407,7 +407,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/locales.ts` | 两种语言的全部文案，以及 [001 领域模型](001-domain.md) 的术语表 |
 | `src/client/client.css`、`css.d.ts` | 面板的样式表，以文本加载 |
 
-`src/sources/github.ts`、`src/sources/feishu.ts` 和 `src/sources/gitlab.ts` 也是三个来源插件的入口，由 `tsdown.config.ts` 构建，并在 `package.json` 中导出为 `./github-watch`、`./feishu-watch` 和 `./gitlab-watch`。插件包的 `cordis.patch.yml` 插入四个插件，其中飞书和 GitLab 处于禁用状态。
+`src/sources/github.ts`、`src/sources/gitlab.ts` 和 `src/sources/feishu.ts` 导出适配器，由 `src/sources/adapters.ts` 汇总；主插件启动后为每条已存储来源记录运行其适配器。`package.json` 没有来源子路径导出，`cordis.patch.yml` 只插入主插件和两个会话预设。
 
 ## 测试
 
@@ -416,7 +416,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/core-engine.spec.ts` | 内存仓库上的领域规则：接收、评估、扇出、恢复与停止、被中断的派工、暂停、策略变更、报告与结果、关联、回复、失败的投递和被忽略的问题 |
 | `tests/stage.spec.ts` | 逐行覆盖工单阶段 |
 | `tests/policy.spec.ts` | 来源范围、准入层、准入表、授权重新校验、策略版本、设置迁移和评估结果 |
-| `tests/registry.spec.ts` | `SourceRegistry`：实例、校验、策略部分、渠道和线程上下文 |
+| `tests/registry.spec.ts` | `SourceRegistry`：记录、校验、策略部分、渠道和线程上下文 |
 | `tests/sources.spec.ts` | `SourceContext` 上的飞书和 GitHub 来源：翻译、轮询和读取位置、拉取请求规则、健康 |
 | `tests/gitlab.spec.ts` | 带假 `glab` 的 `SourceContext` 上的 GitLab 来源：Issue、合并请求和评论触发器，双流轮询和游标，已订阅线程的评论，回复及其去重，健康，策略行，`find` 和上下文读取 |
 | `tests/commands.spec.ts` | 以部署账号进行的 CLI 调用、渠道的答复，以及限定在仓库内的 GitHub 调用 |

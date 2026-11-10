@@ -7,9 +7,5 @@
 - id: dsh-superagent
   config:
     stateDir: <absolute path, for example /home/me/.dsh/state/superagent>
-# 飞书是可选的：取消注释以启用其来源，然后在飞书来源上设置机器人的 lark-cli。
-# - id: dsh-superagent-feishu
-#   disabled: false
-# GitLab 是可选的：取消注释以启用其来源，然后在 GitLab 来源上设置项目和 glab CLI。
-# - id: dsh-superagent-gitlab
-#   disabled: false
+# 来源（GitHub / GitLab / 飞书）是记录，不是插件条目：适配器随主插件加载，
+# 在管理面板的「来源 → 新增来源」里创建、启停和删除。
