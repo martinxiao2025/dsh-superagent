@@ -7,9 +7,10 @@ import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node
 import { realpathSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import type { SubprocessOutputReader, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { firstSource, hostOf, type Deployment } from '../deployment.ts'
+import { hostOf, type Deployment } from '../deployment.ts'
 import { SetupError } from '../setup.ts'
 import { CliError } from './commands.ts'
+import { workerDispatch, writeWorkerRecords, WORKER_DISPATCH_BODY, type WorkerRecord } from './worker-sources.ts'
 
 const MARKER = '# Written by dsh-superagent on every start; edits are lost.'
 /** 项目早先名称（`dsh-tag`、`dsh-go`、`dsh-freelancer`）下写入文件的标记，`dsh-superagent` 也拥有并会替换这些文件。 */
@@ -20,7 +21,8 @@ export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bi
 export const workerGitConfig = (stateDir: string): string => join(stateDir, 'worker-gitconfig')
 const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`
 const gitQuote = (value: string): string => `"${value.replace(/[\\"]/g, char => `\\${char}`)}"`
-export const credentialHelper = (cli: string): string => `!${shellQuote(cli)} auth git-credential`
+/** git 凭据助手：经由调度器按工单目录选择来源记录，再执行该记录的 `auth git-credential`。 */
+export const credentialHelper = (stateDir: string): string => `!${shellQuote(process.execPath)} ${shellQuote(workerDispatch(stateDir))} git-credential`
 
 export function sameDirectory(a: string, b: string): boolean {
   const real = (path: string): string => { try { return realpathSync(path) } catch { return resolve(path) } }
@@ -65,8 +67,8 @@ export function agentVariables(stateDir: string): Record<string, string | undefi
 async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
   const head = (await readFile(file, 'utf8')).split('\n', 2).map(line => line.replace(/\r$/, ''))
-  // 批处理垫片用 `rem` 标记自身，`cmd` 会忽略它，因此标记仍位于第二行。
-  return [MARKER, ...LEGACY_MARKERS].flatMap(marker => [marker, `rem ${marker}`]).some(marker => head.includes(marker))
+  // 批处理垫片用 `rem` 标记自身，调度器用 `//` 行注释；`cmd` 与 node 都会忽略它们。
+  return [MARKER, ...LEGACY_MARKERS].flatMap(marker => [marker, `rem ${marker}`, `// ${marker}`]).some(marker => head.includes(marker))
 }
 async function own(file: string, text: string, mode = 0o644): Promise<void> {
   let foreign = false
@@ -84,34 +86,14 @@ async function own(file: string, text: string, mode = 0o644): Promise<void> {
 export const shimFile = (name: string): string => process.platform === 'win32' ? `${name}.cmd` : name
 /** 批处理垫片：`cmd` 忽略第一行与标记行，然后执行正文。 */
 const batch = (body: readonly string[]): string => ['@echo off', `rem ${MARKER}`, ...body].join('\r\n') + '\r\n'
-/** 从 PATH 中移除垫片目录的 POSIX 行；垫片目录按 PATH 中的写法原样写入。 */
-const posixWithoutShims = (dir: string): string[] => [
-  `self=${shellQuote(dir)}`, 'rest=', 'IFS=:', 'set -f',
-  'for entry in $PATH; do [ "$entry" = "$self" ] || rest="${rest:+$rest:}$entry"; done',
-  'set +f', 'unset IFS', 'PATH=$rest', 'export PATH',
-]
 /**
- * 从 PATH 中移除垫片目录的 Windows 行，逐项比较完整路径与脚本所在目录。
- * 累加在子例程中执行，因为 `for` 块内的 `%rest%` 只会在解析块时展开一次，
- * 每一项都会覆盖前一个值，最终只留下最后一项。
+ * 按名称调用调度器的垫片正文：由调度器选择工单来源记录的 CLI，并在执行真实 CLI 前把垫片目录移出 PATH，
+ * 因此这里不再需要按平台清洗 PATH。`process.execPath` 用绝对路径，避免依赖工作单元的 PATH 中有 node。
  */
-const WINDOWS_WITHOUT_SHIMS = [
-  'set "self=%~dp0"', 'set "rest="',
-  'for %%P in ("%PATH:;=" "%") do call :dsh_keep "%%~P"',
-  'set "PATH=%rest:~1%"',
-  'goto :dsh_run',
-  ':dsh_keep',
-  'if /I not "%~f1\\"=="%self%" set "rest=%rest%;%~1"',
-  'exit /b 0',
-  ':dsh_run',
-]
-/**
- * 用调用方的参数运行 `program` 的垫片正文。垫片目录先离开 PATH，这样按名称调用 `gh` 的包装脚本
- * 会到达真实二进制，而不是再次回到这个垫片。
- */
-function shimRunning(program: string, dir: string): string {
-  if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\n${posixWithoutShims(dir).join('\n')}\nexec ${shellQuote(program)} "$@"\n`
-  return batch([...WINDOWS_WITHOUT_SHIMS, `"${program}" %*`, 'exit /b %ERRORLEVEL%'])
+function shimDispatching(name: string, stateDir: string): string {
+  const dispatch = workerDispatch(stateDir)
+  if (process.platform !== 'win32') return `#!/bin/sh\n${MARKER}\nexec ${shellQuote(process.execPath)} ${shellQuote(dispatch)} ${shellQuote(name)} "$@"\n`
+  return batch([`"${process.execPath}" "${dispatch}" ${name} %*`, 'exit /b %ERRORLEVEL%'])
 }
 /** 把 `message` 打印到标准错误并以 1 退出，用于被屏蔽的命令或缺失的飞书机器人。 */
 function shimFailing(message: string): string {
@@ -121,14 +103,14 @@ function shimFailing(message: string): string {
 }
 
 /**
- * 原子地把工作单元 CLI 垫片和隔离的 git 配置文件写入状态目录，拒绝覆盖外来文件。
- * 每个垫片在运行目标前先从 PATH 移除垫片目录，这样按名称解析 `gh` 或 `lark-cli` 的包装脚本会到达真实二进制。
+ * 原子地把工作单元 CLI 垫片、来源记录分发数据和隔离的 git 配置文件写入状态目录，拒绝覆盖外来文件。
+ * 垫片本身不绑定任何记录：调度器按工单目录（准备阶段按环境变量）选择来源记录的 CLI。
  */
 export async function writeEnvironment(deployment: Deployment, blockedCommands: readonly string[]): Promise<void> {
   const { stateDir, sources } = deployment
-  const github = firstSource(deployment, 'github')
-  const feishu = firstSource(deployment, 'feishu')
-  const gitlab = firstSource(deployment, 'gitlab')
+  const values = Object.values(sources)
+  const hasGithub = values.some(source => source.kind === 'github')
+  const hasGitlab = values.some(source => source.kind === 'gitlab')
   const dir = workerBin(stateDir)
   await mkdir(dir, { recursive: true })
   const before = await readdir(dir)
@@ -142,29 +124,33 @@ export async function writeEnvironment(deployment: Deployment, blockedCommands: 
     await rename(temporary, join(dir, file))
     kept.add(file)
   }
-  await shim('gh', github ? shimRunning(github.cli, dir) : shimFailing('gh is unavailable: this installation has no GitHub Source.'))
-  await shim('lark-cli', feishu ? shimRunning(feishu.cli, dir) : shimFailing('lark-cli is unavailable: this installation has no Feishu Source.'))
+  // 调度器与记录表先落盘：任何一次垫片调用都要求它们已经存在。
+  await own(workerDispatch(stateDir), `// ${MARKER}\n${WORKER_DISPATCH_BODY}`)
+  const records: Record<string, WorkerRecord> = Object.fromEntries(values.map(source => [source.id, { kind: source.kind, cli: source.cli }]))
+  await writeWorkerRecords(stateDir, records)
+  await shim('gh', shimDispatching('gh', stateDir))
+  await shim('lark-cli', shimDispatching('lark-cli', stateDir))
   // 只在配置了 GitLab 来源时遮蔽 PATH 上的 glab；否则保留运维者自带的 glab。
-  if (gitlab) await shim('glab', shimRunning(gitlab.cli, dir))
+  if (hasGitlab) await shim('glab', shimDispatching('glab', stateDir))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
-    const advice = github ? `use gh, which acts as ${github.login}` : 'no GitHub Source is configured'
+    const advice = hasGithub ? "use gh, which acts on the ticket's Source record" : 'no GitHub Source is configured'
     await shim(name, shimFailing(`${name} is blocked in this installation; ${advice}.`))
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
-  // 每个 GitHub 来源记录一个站点的凭据助手；同一站点只保留第一条记录。
-  const credentials = new Map<string, string>()
-  for (const source of Object.values(sources)) {
-    if (source.kind !== 'github') continue
-    const host = hostOf(source.instanceUrl, 'github.com')
-    if (!credentials.has(host)) credentials.set(host, credentialHelper(source.cli))
+  // 每个托管 Git 仓库的站点都使用同一个调度器助手；具体记录由工单目录决定，同一站点可以有多个账号。
+  const hosts = new Set<string>()
+  for (const source of values) {
+    if (source.kind === 'github') hosts.add(hostOf(source.instanceUrl, 'github.com'))
+    else if (source.kind === 'gitlab') hosts.add(hostOf(source.instanceUrl, 'gitlab.com'))
   }
+  const helper = credentialHelper(stateDir)
   await own(workerGitConfig(stateDir), [
     MARKER,
     // 让 git 在没有工作单元显式设置身份时拒绝提交，而不是从运维者的 OS 用户猜测。
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
-    ...credentials.size ? [...credentials].map(([host, helper]) => `[credential "https://${host}"]\n\thelper = ${gitQuote(helper)}`) : [],
-    ...credentials.has('github.com') ? ['[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/'] : [],
+    ...[...hosts].map(host => `[credential "https://${host}"]\n\thelper = ${gitQuote(helper)}`),
+    ...hosts.has('github.com') ? ['[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com:'] : [],
     // 包含 Git LFS 过滤器，因为运维者的全局 gitconfig（通常保存它们）被忽略。
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')
@@ -189,15 +175,20 @@ export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[],
   throw new CliError(read(handle.collected.stderr).trim() || `${argv.join(' ')} ${ended}`, undefined, exitCode ?? undefined)
 }
 
-/** 验证工作单元的 git 调用会解析到第一条 GitHub 来源记录的凭据助手；没有 GitHub 来源时不校验。 */
+/** 验证每个托管 Git 仓库的站点都解析到按工单记录分发的凭据助手；没有相关来源时不校验。 */
 export async function verifyEnvironment(deployment: Deployment, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
-  const { stateDir } = deployment
-  const github = firstSource(deployment, 'github')
-  if (!github) return
-  const host = hostOf(github.instanceUrl, 'github.com')
-  // `-z` 用 NUL 分隔字段，且从不引用路径。
-  const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', `credential.https://${host}.helper`], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
-  if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(github.cli), ''].join('\0')) throw new SetupError('gitTooOld')
+  const { stateDir, sources } = deployment
+  const hosts = new Set<string>()
+  for (const source of Object.values(sources)) {
+    if (source.kind === 'github') hosts.add(hostOf(source.instanceUrl, 'github.com'))
+    else if (source.kind === 'gitlab') hosts.add(hostOf(source.instanceUrl, 'gitlab.com'))
+  }
+  for (const host of hosts) {
+    // `-z` 用 NUL 分隔字段，且从不引用路径。
+    const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', `credential.https://${host}.helper`], stateDir,
+      AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
+    if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(stateDir), ''].join('\0')) throw new SetupError('gitTooOld')
+  }
 }
 
 /**

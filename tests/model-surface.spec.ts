@@ -10,6 +10,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { latestAssignment } from '../src/core/index.ts'
 import { promptParts } from '../src/app/prompts.ts'
+import { declaredVariables } from '../src/app/execution-environment.ts'
 import { RESOURCES } from '../src/app/resources.ts'
 import { TICKET_STATES } from '../src/app/cards.ts'
 import { Runtime } from '../src/app/runtime.ts'
@@ -84,9 +85,9 @@ async function start() {
     [`${BOT} auth status`]: JSON.stringify({ appId: 'cli_bot', brand: 'feishu', identities: { bot: { status: 'ready' } } }),
     [`${BOT} config strict-mode`]: 'strict-mode: bot (source: profile)',
     [`${BOT} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
-    ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT)}\0`,
+    ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(directory)}\0`,
     ['git config -z --show-scope --get-regexp ^(credential\\..*|http\\..*extraheader)$']:
-      `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT)}\0`,
+      `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(directory)}\0`,
   }
   const reader = (text: string) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
   const subprocess = { spawn: (spec: { argv: readonly string[] }) => {
@@ -308,7 +309,8 @@ function failures(): Map<string, string> {
   for (const name of ['decision', 'purpose', 'state']) expect(options.has(name), `${name} has options`).toBe(true)
   const tools = { orchestrator: new Set(toolsOf('orchestrator').keys()), worker: new Set(toolsOf('worker').keys()) }
   const registered = (token: string) => tools.orchestrator.has(token) || tools.worker.has(token)
-  const variables = new Set(host.runtime.ticketEnvironment(host.runtime.store.tickets.get(sessions.a)!).map(variable => variable.key))
+  // 提示词与技能面向所有已声明变量；执行环境只按工单来源记录注入其中一条记录的变量。
+  const variables = new Set(declaredVariables(host.runtime.sources, host.runtime.store.settings()).flatMap(section => section.variables.map(variable => variable.key)))
   for (const { where, owner, role, text } of surfaces) {
     const fail = (problem: string) => found.set(`${where}: ${problem}`, owner)
     for (const [token] of text.matchAll(/\borchestrator_[a-z_]+/g)) if (!registered(token)) fail(`${token} is not a tool`)

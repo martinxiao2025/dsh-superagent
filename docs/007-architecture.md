@@ -355,6 +355,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/executor/background.ts` | DeepSeek Harness 中执行器的后台工作、其会话拥有的 shell 任务（`ctx.jobs`）及其子代理（`ctx.subagents`）：`runningJobs`、`untilQuiet`、`killJobs`、`collectJobs`、`stopSubagents`、`stopBackground`、`until`，以及 `cancelled`（其子代理停止时取消了回合的执行器） |
 | `src/infra/commands.ts` | `Commands`，CLI 传输：`run`；`api` 和 `pages`，限制在已配置仓库并经过校验；`glab`、`gitlabApi` 和 `gitlabPages`，限制在已配置的 GitLab 项目并经过校验；以机器人身份运行的 `lark`；`git`。`CliError` 携带命令输出报告的错误码，例如 GitHub 或 GitLab 的 HTTP 状态；不打印任何内容的命令以结束方式失败，绝不带出其参数；`validItems` 跳过并计数列表中的格式错误项 |
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |
+| `src/infra/worker-sources.ts` | 执行侧的分发数据与调度器：工单目录到来源记录的登记（`recordTicketSource`）、记录到 CLI 的表（`writeWorkerRecords`），以及按记录选择 CLI 的 `WORKER_DISPATCH_BODY` |
 | `src/infra/paths.ts` | 包的根目录，即打包文件所在位置 |
 | `src/infra/text.ts` | 字数统计和聊天消息限制、`fill` 和 `sameName` |
 | `src/infra/health.ts` | `HealthBoard`，每个部分的健康条目，各由其唯一写入者认领 |
@@ -443,7 +444,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/prompts.spec.ts` | 提示词校验、组装和版本 |
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
-| `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境、插件入口，以及 Windows 启动器和 shell 行为 |
+| `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口，以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |

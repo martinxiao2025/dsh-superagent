@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -11,6 +11,7 @@ import { CliError, spawnCommand } from '../src/infra/commands.ts'
 import { testDeployment, testFeishu, testGithub } from './fixtures/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 import { programSource, runProgram } from './fixtures/program.ts'
+import { recordTicketSource } from '../src/infra/worker-sources.ts'
 
 // 测试套件并行运行时，Git 与 shell 子进程可能超过 5 秒的默认超时。
 vi.setConfig({ testTimeout: 30_000 })
@@ -45,7 +46,7 @@ return result.status === null ? 1 : result.status`)
     const { stdout } = await runProgram(join(bin, shimFile('gh')), ['api', 'user'], { env: { ...process.env, PATH: path }, timeout: 10_000 })
     expect(JSON.parse(stdout)).toEqual({ login: 'agent-bot', config: join(dir, 'agent-config'), path: [join(dir, 'venv'), join(dir, 'real'), '/usr/bin', '/bin'].join(delimiter) })
   })
-  it('make `lark-cli` fail without a Feishu bot and each blocked command fail with the agent\'s login', async () => {
+  it('make `lark-cli` fail without a Feishu bot and each blocked command fail without naming an account', async () => {
     await writeEnvironment(testDeployment({ stateDir: dir, feishu: undefined }), ['personal-gh'])
     const bin = workerBin(dir)
     const failure = async (name: string, args: string[], message: string): Promise<void> => {
@@ -54,7 +55,7 @@ return result.status === null ? 1 : result.status`)
       expect(lines(error.stderr)).toBe(message)
     }
     await failure('lark-cli', ['im', '+chat-list'], 'lark-cli is unavailable: this installation has no Feishu Source.')
-    await failure('personal-gh', [], 'personal-gh is blocked in this installation; use gh, which acts as agent-bot.')
+    await failure('personal-gh', [], "personal-gh is blocked in this installation; use gh, which acts on the ticket's Source record.")
   })
   it('keep `gh` and `lark-cli` working, and shim no `git`, when the blocked commands name the commands workers need', async () => {
     const gh = program(dir, 'gh-agent', `console.log(['gh', ...argv].join(' '))`)
@@ -64,6 +65,57 @@ return result.status === null ? 1 : result.status`)
     expect([lines((await runProgram(join(bin, shimFile('gh')), ['api', 'user'])).stdout), lines((await runProgram(join(bin, shimFile('lark-cli')), ['im'])).stdout)])
       .toEqual(['gh api user', 'lark im'])
     expect(readdirSync(bin)).not.toContain('git')
+  })
+  it('runs each ticket with the CLI of its own Source record, also from a subdirectory and during the prepare command', async () => {
+    const alpha = program(join(dir, 'real'), 'gh-alpha', `console.log('account-a')`)
+    const beta = program(join(dir, 'real'), 'gh-beta', `console.log('account-b')`)
+    await writeEnvironment(testDeployment({ stateDir: dir, sources: {
+      alpha: testGithub({ id: 'alpha', cli: alpha }), beta: testGithub({ id: 'beta', cli: beta }),
+    } }), [])
+    const first = join(dir, 'tickets', 'first'), second = join(dir, 'tickets', 'second')
+    mkdirSync(join(first, 'src'), { recursive: true }); mkdirSync(second, { recursive: true })
+    await recordTicketSource(dir, first, 'alpha')
+    await recordTicketSource(dir, second, 'beta')
+    const path = [workerBin(dir), join(dir, 'real')].join(delimiter)
+    const run = async (cwd: string, env: Record<string, string> = {}): Promise<string> =>
+      lines((await runProgram(join(workerBin(dir), shimFile('gh')), ['api', 'user'], { cwd, env: gitEnv({ PATH: path, ...env }), timeout: 10_000 })).stdout)
+    expect(await run(first)).toBe('account-a')
+    expect(await run(join(first, 'src'))).toBe('account-a')
+    expect(await run(second)).toBe('account-b')
+    // 准备命令在工单目录的父目录运行，目录尚未登记，因此显式记录优先。
+    expect(await run(join(dir, 'tickets'), { DSH_SUPERAGENT_SOURCE: 'beta' })).toBe('account-b')
+  })
+  it('refuses to pick a Source record by position when several exist outside a ticket directory', async () => {
+    const alpha = program(join(dir, 'real'), 'gh-alpha', `console.log('account-a')`)
+    const beta = program(join(dir, 'real'), 'gh-beta', `console.log('account-b')`)
+    await writeEnvironment(testDeployment({ stateDir: dir, sources: {
+      alpha: testGithub({ id: 'alpha', cli: alpha }), beta: testGithub({ id: 'beta', cli: beta }),
+    } }), [])
+    const error = await runProgram(join(workerBin(dir), shimFile('gh')), ['api', 'user'],
+      { env: gitEnv({ PATH: [workerBin(dir), join(dir, 'real')].join(delimiter) }) }).catch((e: unknown) => e) as { code?: number; stderr?: string }
+    expect(error).toMatchObject({ code: 1 })
+    expect(lines(error.stderr)).toBe("gh cannot choose a Source record: this installation has 2 GitHub Sources (alpha, beta); run it inside a ticket directory so it uses the ticket's Source record.")
+  })
+  it('answers git credentials with the Source record of the repository\'s ticket directory', async () => {
+    const cli = (account: string): string => program(join(dir, 'real'), `gh-${account}`, `if (argv[0] === 'auth' && argv[1] === 'git-credential') {
+  process.stdout.write('username=${account}\\npassword=${account}-secret\\n')
+  return 0
+}
+return 1`)
+    await writeEnvironment(testDeployment({ stateDir: dir, sources: {
+      alpha: testGithub({ id: 'alpha', cli: cli('account-a') }), beta: testGithub({ id: 'beta', cli: cli('account-b') }),
+    } }), [])
+    const first = join(dir, 'tickets', 'first'), second = join(dir, 'tickets', 'second')
+    mkdirSync(first, { recursive: true }); mkdirSync(second, { recursive: true })
+    await recordTicketSource(dir, first, 'alpha')
+    await recordTicketSource(dir, second, 'beta')
+    const fill = (cwd: string) => spawnSync('git', ['credential', 'fill'], {
+      cwd, input: 'protocol=https\nhost=github.com\n\n', encoding: 'utf8',
+      env: gitEnv({ GIT_CONFIG_GLOBAL: workerGitConfig(dir), GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '',
+        PATH: [workerBin(dir), process.env.PATH ?? ''].join(delimiter) }),
+    })
+    expect(fill(first).stdout).toContain('username=account-a')
+    expect(fill(second).stdout).toContain('username=account-b')
   })
   it('replace only what dsh-superagent wrote and refuse anything else in its places', async () => {
     await writeEnvironment(testDeployment({ stateDir: dir }), ['old-cli'])
@@ -106,7 +158,7 @@ describe('agent git configuration', () => {
     // `-z` 以 NUL 分隔字段且不转义路径；Windows 上 git 以 `/` 打印路径，两侧统一后比较。
     const slashed = (value: string): string => value.replaceAll('\\', '/')
     expect((await git('config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper')).split('\0').map(slashed))
-      .toEqual([`file:${slashed(workerGitConfig(dir))}`, credentialHelper('/opt/agent tools/gh'), ''])
+      .toEqual([`file:${slashed(workerGitConfig(dir))}`, slashed(credentialHelper(dir)), ''])
     expect(await git('config', '--get-all', 'credential.helper')).toBe('')
     await expect(git('config', 'commit.gpgsign')).rejects.toThrow()
     await expect(git('config', 'core.abbrev')).rejects.toThrow()

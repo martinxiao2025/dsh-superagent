@@ -11,6 +11,7 @@ export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] =
   { key: 'DSH_SUPERAGENT_DIR', ticket: true, description: { zh: '这个工单的执行目录；执行器 Session 在其中工作', en: 'This ticket\'s directory; the executor Session works in it' } },
   { key: 'DSH_SUPERAGENT_NAME', ticket: true, description: { zh: '工单的短名，也是执行目录的名字', en: 'The ticket\'s short name, also its directory\'s name' } },
   { key: 'DSH_SUPERAGENT_TICKET', ticket: true, description: { zh: '工单 id', en: 'The ticket id' } },
+  { key: 'DSH_SUPERAGENT_SOURCE', ticket: true, description: { zh: '这个工单的来源记录 id；执行环境只按该记录注入变量', en: 'This ticket\'s Source record id; the execution environment only uses that record' } },
   { key: 'DSH_SUPERAGENT_BLOCKED_COMMANDS', description: { zh: '这个执行环境禁止调用的命令，以空格分隔；不要运行它们', en: 'Commands blocked in this execution environment, separated by spaces; never run them' } },
 ]
 export interface Variable { key: string; value: string; description: Localized; owner: string }
@@ -24,11 +25,20 @@ export function declaredVariables(sources: SourceRegistry, settings?: Settings):
     ...sources.declarations().map(({ id, variables }) => ({ owner: id, enabled: on.has(id), variables }))]
 }
 
+/**
+ * 执行环境变量。有工单时只注入该工单来源记录的变量，其他记录不会混入（也不会有同名覆盖）；
+ * 没有工单的调用（主会话预览、设置页与文档）仍列出所有已启用的记录，作为声明视图。
+ */
 export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
   const { deployment, sources, settings, ticket, trigger } = input
-  const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
+  const executor: Record<string, string> = {
+    DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '),
+    ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id, DSH_SUPERAGENT_SOURCE: trigger?.source ?? '' } : {},
+  }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
   for (const { id, environment, config } of sources.environments(settings)) {
+    // 工单只认自己的来源记录；准备命令同样经由这里取环境变量，因此两者口径一致。
+    if (ticket && id !== trigger?.source) continue
     const values = environment.values({ source: deployment.sources[id], config, ...trigger?.source === id ? { trigger } : {} })
     for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: id })
   }

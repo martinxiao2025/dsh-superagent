@@ -32,6 +32,7 @@ import { commentTrigger, githubChannel } from '../src/sources/github-trigger.ts'
 import { IM_WORDS } from '../src/infra/text.ts'
 import { observePull, pullOf } from '../src/sources/github-pull.ts'
 import { credentialHelper, workerGitConfig } from '../src/infra/environment.ts'
+import { workerDispatch } from '../src/infra/worker-sources.ts'
 import { policyHistory } from '../src/app/settings-history.ts'
 import { overview } from '../src/app/views/overview.ts'
 import { preview, readable } from '../src/app/views/text.ts'
@@ -152,8 +153,8 @@ beforeEach(async () => {
     [`${BOT()} auth status`]: JSON.stringify({ appId: 'cli_bot', brand: 'feishu', identities: { bot: { status: 'ready' } } }),
     [`${BOT()} config strict-mode`]: 'strict-mode: bot (source: profile)',
     [`${BOT()} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
-    [HELPERS]: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT())}\0`,
-    [SCOPED]: `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT())}\0`,
+    [HELPERS]: `file:${workerGitConfig(directory)}\0${credentialHelper(directory)}\0`,
+    [SCOPED]: `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(directory)}\0`,
   }
   const ctx = new Context()
   agents = new Map()
@@ -228,7 +229,7 @@ it('relays an explicit member mention as a candidate and creates the ticket, ack
   expect(ticket).not.toHaveProperty('ended')
   // 工单的执行环境在接受时固定：它在执行根目录下的目录，以及来源值来自其触发器。
   expect(ticket.execution!.directory).toBe(join(directory, 'work', ticket.execution!.name))
-  expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_TICKET: ticket.id, DSH_SUPERAGENT_FEISHU_CHAT: CHAT, DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_GITHUB_ACCOUNT: 'agent-bot', DSH_SUPERAGENT_GITHUB_NUMBER: '' })
+  expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_TICKET: ticket.id, DSH_SUPERAGENT_SOURCE: 'feishu', DSH_SUPERAGENT_FEISHU_CHAT: CHAT })
   expect(ticket.assignments).toEqual([expect.objectContaining({ state: 'running', startedAt: expect.any(String) })])
   expect(sessionId).toBe(`worker-${ticket.id}`)
   expect(runtime.store.threads.get(`feishu:${CHAT}:om_1`)?.subscriptions).toEqual([ticket.id])
@@ -468,7 +469,7 @@ it('treats GitHub comments through the same gate: mentions by members are explic
   const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
   expect(ticket.channels).toEqual([expect.objectContaining({ source: 'github', address: expect.objectContaining({ number: '7' }) })])
   // PR 的 head 是工单执行环境中的变量；prepare 命令可以获取它。
-  expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_GITHUB_NUMBER: '7', DSH_SUPERAGENT_GITHUB_PR_HEAD: 'refs/pull/7/head', DSH_SUPERAGENT_FEISHU_CHAT: '' })
+  expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_SOURCE: 'github', DSH_SUPERAGENT_GITHUB_NUMBER: '7', DSH_SUPERAGENT_GITHUB_PR_HEAD: 'refs/pull/7/head' })
   const ci = { ...stranger, id: 'ci-1', human: false, text: 'GitHub PR #7 CI: failing', meta: { ci: true } }
   await receive(ci)
   expect(runtime.store.tickets.get(ticket.id)!.inputs).toEqual([expect.objectContaining({ triggerId: 'ci-1' })])
@@ -983,21 +984,24 @@ it('runs setup again while the Feishu bot check failed, and restores the process
   expect(process.env.PATH?.split(':')).not.toContain(join(directory, 'worker-bin'))
 })
 
-it('writes worker shims and the agent environment from the configuration only, and restores the environment on stop', async () => {
+it('writes worker shims that dispatch by Source record, and restores the environment on stop', async () => {
   const bin = join(directory, 'worker-bin')
-  // 垫片运行其配置的 CLI：POSIX 上使用 `exec`，Windows 上使用保留退出状态的直接调用。
-  const runs = (program: string) => process.platform === 'win32' ? `"${program}" %*` : `exec '${program}'`
+  const records = () => JSON.parse(readFileSync(join(directory, 'worker-sources.json'), 'utf8')) as { clis: Record<string, { kind: string; cli: string }> }
+  // 垫片不绑定任何记录：它把命令交给调度器，由调度器按工单目录选择该记录的 CLI。
   expect(readdirSync(bin).sort()).toEqual([shimFile('gh'), shimFile('lark-cli')])
-  expect(readFileSync(join(bin, shimFile('lark-cli')), 'utf8')).toContain(runs(BOT()))
+  expect(readFileSync(join(bin, shimFile('lark-cli')), 'utf8')).toContain(workerDispatch(directory))
+  expect(records().clis).toMatchObject({ github: { kind: 'github', cli: AGENT() }, feishu: { kind: 'feishu', cli: BOT() } })
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, blockedCommands: ['personal-gh'] } })
   const next = await restart({}, { feishu: null })
   await next.ready
   expect(readdirSync(bin).sort()).toEqual([shimFile('gh'), shimFile('lark-cli'), shimFile('personal-gh')])
-  expect(readFileSync(join(bin, shimFile('personal-gh')), 'utf8')).toContain('personal-gh is blocked in this installation; use gh, which acts as agent-bot.')
-  expect(readFileSync(join(bin, shimFile('lark-cli')), 'utf8')).toContain('lark-cli is unavailable: this installation has no Feishu Source.')
-  expect(readFileSync(join(bin, shimFile('gh')), 'utf8')).toContain(runs(AGENT()))
+  expect(readFileSync(join(bin, shimFile('personal-gh')), 'utf8')).toContain("personal-gh is blocked in this installation; use gh, which acts on the ticket's Source record.")
+  // 没有飞书记录时记录表不再提供 feishu，调度器于是让 lark-cli 以「没有 Feishu Source」失败。
+  expect(records().clis).not.toHaveProperty('feishu')
+  expect(readFileSync(workerDispatch(directory), 'utf8')).toContain('is unavailable: this installation has no ')
+  expect(readFileSync(join(bin, shimFile('gh')), 'utf8')).toContain(workerDispatch(directory))
   // git 会在引号值中转义反斜杠；反转义它们，以便与捆绑包写入的辅助程序比较。
-  expect(readFileSync(workerGitConfig(directory), 'utf8').replaceAll('\\\\', '\\')).toContain(`[credential "https://github.com"]\n\thelper = "${credentialHelper(AGENT())}"`)
+  expect(readFileSync(workerGitConfig(directory), 'utf8').replaceAll('\\\\', '\\')).toContain(`[credential "https://github.com"]\n\thelper = "${credentialHelper(directory)}"`)
   expect(process.env).toMatchObject({ GIT_CONFIG_GLOBAL: workerGitConfig(directory), GIT_CONFIG_NOSYSTEM: '1' })
   expect(process.env.GIT_AUTHOR_NAME).toBeUndefined()
   expect(process.env.PATH?.split(delimiter)[0]).toBe(bin)
@@ -1098,7 +1102,7 @@ it('runs the prepare command once for a new ticket, under the execution root wit
   prepare('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"')
   const { ticket } = await acceptedTicket()
   expect(runs()).toEqual([expect.objectContaining({ argv: shellArgv('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"'), cwd: join(directory, 'work'),
-    env: expect.objectContaining({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_FEISHU_CHAT: CHAT }) })])
+    env: expect.objectContaining({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_SOURCE: 'feishu', DSH_SUPERAGENT_FEISHU_CHAT: CHAT }) })])
   // 重试会复用已准备好的目录。
   await runTool(`worker-${ticket.id}`, 'orchestrator_report', { state: 'failed', summary: 'offline' })
   await runtime.engine.retryTicket(ticket.id)

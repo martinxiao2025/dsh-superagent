@@ -9,6 +9,7 @@ import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Execu
   from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
 import { runAsWorker, shellArgv, verifyDirectory } from '../infra/environment.ts'
+import { recordTicketSource } from '../infra/worker-sources.ts'
 import type { Settings } from '../policy.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
@@ -432,6 +433,8 @@ export class DshExecutor implements Executor {
     const source = sourceTrigger(this.host, ticket)
     const workspace = ticket.execution?.directory ?? ''
     if (!current()) return
+    // 工作单元会话的环境变量无法按工单注入；登记目录后，垫片与 git 凭据助手据此选择本工单的来源记录。
+    if (source && workspace) await recordTicketSource(this.host.machine.stateDir, workspace, source.source)
     // 工作区目录只准备一次；已存在的目录视为已准备，包括在 `prepare` 命令出现之前创建的工作树。
     if (!await stat(workspace).then(() => true, () => false)) {
       await this.prepareDirectory(ticket)
