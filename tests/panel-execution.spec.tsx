@@ -40,6 +40,17 @@ it('lists Tickets under Execution by who they wait on, with the Executor state a
   expect(server.settings).toMatchObject({ paused: true, executor: { maxWorkers: 4 } })
 })
 
+it('groups Tickets by project so several projects do not collapse into one list', async () => {
+  server.tickets.open = [ticketSummary({ id: 't1', directory: '/work/Demo.ProjectOnline' }),
+    ticketSummary({ id: 't2', directory: '/work/Demo.ProjectOnline' }), ticketSummary({ id: 't3', directory: '/work/ledger-app' }),
+    ticketSummary({ id: 't4', directory: '' })]
+  await mount()
+  await click(zh['tab.execution'])
+  expect(all('.dt-project-head').map(head => [head.querySelector('.dt-project-name')?.textContent,
+    head.querySelector('.dt-count')?.textContent])).toEqual([['Demo.ProjectOnline', '2'], ['ledger-app', '1'],
+    [zh.projectUnassigned, '1']])
+})
+
 it('stops an open Ticket from its page after confirmation', async () => {
   await mount()
   await click('修复回归')

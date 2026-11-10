@@ -25,6 +25,7 @@ const ICON_PATHS = {
   message: 'M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-5 4V6a1 1 0 0 1 1-1z',
   inbox: 'M4 13l2.5-8h11l2.5 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5',
   hash: 'M10 4L8 20M16 4l-2 16M5 9h15M4 15h15',
+  folder: 'M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10H3z',
   filter: 'M4 5h16l-6 7.5V18l-4 2v-7.5z',
   user: 'M12 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5',
   close: 'M6 6l12 12M18 6L6 18',

@@ -49,6 +49,7 @@ const TEXT = {
   'health.worker': ['执行器事件处理', 'Executor event handling'],
   'health.evals': ['未完成的评估', 'Unavailable Evals'],
   none: ['暂无。', 'None.'],
+  projectUnassigned: ['尚未分配项目', 'No project yet'],
   openSession: ['打开 Session', 'Open Session'],
   stop: ['停止', 'Stop'],
   policyVersion: ['策略版本', 'Policy version'],

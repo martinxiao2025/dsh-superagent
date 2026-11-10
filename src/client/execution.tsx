@@ -43,11 +43,29 @@ export function ExecutionStatus({ filter: current, state, reload }: {
     </div>
     {current === 'idle' && <Hint>{t('idleHint')}</Hint>}
     <LoadState error={error} loading={!data} />
-    {data && (data.items.length ? <ul className="dt-list">{data.items.map(ticket => ticket.stage === 'person'
-      ? <TicketLine key={ticket.id} ticket={ticket} question
-        onChanged={reloadTickets} /> : <TicketLine key={ticket.id} ticket={ticket} />)}</ul> : <Hint>{t('none')}</Hint>)}
+    {data && (data.items.length ? byProject(data.items, t('projectUnassigned')).map(group => <section key={group.project}
+      className="dt-project">
+      <h3 className="dt-project-head"><Icon name="folder" /><span className="dt-project-name">{group.project}</span>
+        <span className="dt-count">{group.tickets.length}</span></h3>
+      <ul className="dt-list">{group.tickets.map(ticket => ticket.stage === 'person'
+        ? <TicketLine key={ticket.id} ticket={ticket} question onChanged={reloadTickets} />
+        : <TicketLine key={ticket.id} ticket={ticket} />)}</ul>
+    </section>) : <Hint>{t('none')}</Hint>)}
     {data?.next_offset != null && <LoadMore onMore={() => setLimit(limit + 20)} />}
   </>
+}
+
+/**
+ * 按项目把工单分组：项目名取执行目录的最后一段（目录按项目命名），尚未开始的工单归入“待分配”。
+ * 分组只改变展示层次，不改变服务端返回的顺序；同一项目内部保持原有顺序。
+ */
+function byProject<T extends { directory?: string }>(items: readonly T[], unassigned: string): { project: string; tickets: T[] }[] {
+  const groups = new Map<string, T[]>()
+  for (const item of items) {
+    const project = item.directory?.split(/[\\/]+/).filter(Boolean).pop() || unassigned
+    groups.set(project, [...groups.get(project) ?? [], item])
+  }
+  return [...groups].map(([project, tickets]) => ({ project, tickets }))
 }
 
 const firstSentence = (text: string): string => /^[^。；;.]*(?:[。；;]|\.(?=\s|$))?/.exec(text)?.[0] ?? text
