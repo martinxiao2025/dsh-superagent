@@ -1,5 +1,6 @@
 /** 暴露给准备命令并记录在执行器会话说明中的执行环境变量；绝不包含凭据。 */
 import { join } from 'node:path'
+import { key } from '../core/ids.ts'
 import type { Ticket, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Settings } from '../policy.ts'
@@ -8,8 +9,8 @@ import type { SourceRegistry } from '../sources/registry.ts'
 
 /** 由执行器注册的变量；`ticket` 条目仅在有工单时填充。 */
 export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] = [
-  { key: 'DSH_SUPERAGENT_DIR', ticket: true, description: { zh: '这个工单的执行目录；执行器 Session 在其中工作', en: 'This ticket\'s directory; the executor Session works in it' } },
-  { key: 'DSH_SUPERAGENT_NAME', ticket: true, description: { zh: '工单的短名，用于分支与工单标识；执行目录按项目命名，见 DSH_SUPERAGENT_DIR', en: 'The ticket\'s short name, used for its branch; the directory is named after the project, see DSH_SUPERAGENT_DIR' } },
+  { key: 'DSH_SUPERAGENT_DIR', ticket: true, description: { zh: '这个工单的执行目录（项目目录下按工单 id 命名的子目录）；执行器 Session 在其中工作', en: 'This ticket\'s directory, a subdirectory named after the ticket id inside its project; the executor Session works in it' } },
+  { key: 'DSH_SUPERAGENT_NAME', ticket: true, description: { zh: '工单的短名，用于分支与工单标识；执行目录按项目和工单 id 命名，见 DSH_SUPERAGENT_DIR', en: 'The ticket\'s short name, used for its branch; the directory is named after the project and the ticket id, see DSH_SUPERAGENT_DIR' } },
   { key: 'DSH_SUPERAGENT_TICKET', ticket: true, description: { zh: '工单 id', en: 'The ticket id' } },
   { key: 'DSH_SUPERAGENT_SOURCE', ticket: true, description: { zh: '这个工单的来源记录 id；执行环境只按该记录注入变量', en: 'This ticket\'s Source record id; the execution environment only uses that record' } },
   { key: 'DSH_SUPERAGENT_BLOCKED_COMMANDS', description: { zh: '这个执行环境禁止调用的命令，以空格分隔；不要运行它们', en: 'Commands blocked in this execution environment, separated by spaces; never run them' } },
@@ -48,6 +49,19 @@ export function projectDirectory(settings: Settings, sourceId: string | undefine
   const own = nameOf(sourceId)
   const shared = Object.keys(settings.sources).some(id => id !== sourceId && nameOf(id) === own)
   return shared ? `${own}-${sourceId}` : own
+}
+
+/**
+ * 工单目录名：工单在每个项目目录下拥有自己的子目录，因此同一项目并发执行的工单不会互相覆盖。
+ * 清洗规则与项目名同一口径（Windows 非法字符、首尾点与空格、保留设备名）；清洗改变了 id 时追加原 id 的
+ * 短哈希，避免 `a/b` 与 `a\b` 这类不同工单落到同一个目录，空结果则退回 `ticket-<短哈希>`。
+ */
+export function ticketDirectoryName(raw: string): string {
+  const suffix = key('ticket-directory', raw).slice(0, 12)
+  if (!raw) return `ticket-${suffix}`
+  const cleaned = projectDirectoryName(raw)
+  if (cleaned === raw) return cleaned
+  return cleaned ? `${cleaned}-${suffix}` : `ticket-${suffix}`
 }
 
 /** 按来源记录分组列出所有已声明的变量；对于当前已关闭的记录，`enabled` 为 false。 */

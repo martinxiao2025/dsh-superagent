@@ -13,7 +13,7 @@ import { recordTicketSource } from '../infra/worker-sources.ts'
 import type { Settings } from '../policy.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
-import { executionRoot, projectDirectory, type Variable } from '../app/execution-environment.ts'
+import { executionRoot, projectDirectory, ticketDirectoryName, type Variable } from '../app/execution-environment.ts'
 import type { Sessions } from '../app/sessions.ts'
 import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
@@ -95,10 +95,11 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
     + 'internal to one module within the accepted rule scope. If it requires public-interface or behavior changes, new interaction, product '
     + 'decisions or clarification, stop and report dropped; do not expand scope.' : ''
 }
-/** 构建新接受工单的执行元数据：工单短名（用于分支）、按项目命名的目录和任务分配文本。 */
+/** 构建新接受工单的执行元数据：工单短名（用于分支）、项目名与工单子目录，以及任务分配文本。 */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
   stateDir: string, trigger?: Trigger): Execution {
   const name = ticketWorktreeName(outcome.name ?? '', ticket.id)
+  const project = projectDirectory(settings, trigger?.source, name)
   const note = outcome.note ? `\nRouting note (not the source request): ${outcome.note}` : ''
   const ruleIds = ticket.mandate.basis.rules
   const rules = settings.policy.rules.filter(rule => ruleIds?.includes(rule.id))
@@ -108,7 +109,9 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
   const assignment = ticket.mandate.strength === 'inferred' && ruleIds
     ? `Proactively accepted under ${ruleIds.join(', ')}. Scope: ${outcome.scope}.${precedence}${note}`
     : note.trim()
-  return { name, directory: join(executionRoot(settings, stateDir), projectDirectory(settings, trigger?.source, name)), assignment }
+  // 项目目录保留分组与归属，每张工单再在自己的子目录内执行，同项目并发时互不覆盖。
+  const directory = join(executionRoot(settings, stateDir), project, ticketDirectoryName(ticket.id))
+  return { name, project, directory, assignment }
 }
 /** 工作单元消息中内联任务分配和触发器文本的字符上限；更长的文本通过其资源读取。 */
 const ASSIGNMENT_CHARS = 1500, TRIGGER_CHARS = 600
@@ -235,7 +238,7 @@ export class DshExecutor implements Executor {
     // 失败的输入投递记录在工单本身上，而不通过 `delivery` 效果的健康条目报告（`quiet: true`）。
     host.effects.handle('delivery', payload => this.deliverQueued(payload.ticketId), { limit: () => host.paused() ? 0 : 4, quiet: true })
   }
-  /** 填充新接受工单的 `execution` 属性（工单短名、按项目命名的目录和任务分配文本）。 */
+  /** 填充新接受工单的 `execution` 属性（工单短名、项目名、项目下的工单子目录和任务分配文本）。 */
   prepare(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>): Ticket {
     return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir,
       sourceTrigger(this.host, ticket)) }
@@ -436,6 +439,7 @@ export class DshExecutor implements Executor {
     // 工作单元会话的环境变量无法按工单注入；登记目录后，垫片与 git 凭据助手据此选择本工单的来源记录。
     if (source && workspace) await recordTicketSource(this.host.machine.stateDir, workspace, source.source)
     // 工作区目录只准备一次；已存在的目录视为已准备，包括在 `prepare` 命令出现之前创建的工作树。
+    // 每个工单的子目录独立准备，因此同项目的另一张工单不会复用它或覆盖其中内容。
     if (!await stat(workspace).then(() => true, () => false)) {
       await this.prepareDirectory(ticket)
       if (!current()) return

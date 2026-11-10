@@ -1,7 +1,7 @@
 /** 执行环境按工单来源记录注入变量：其他记录不进入该工单，同名变量不再互相覆盖。 */
 import { describe, expect, it } from 'vitest'
 import type { Trigger } from '../src/core/index.ts'
-import { environmentOf, projectDirectory, projectDirectoryName } from '../src/app/execution-environment.ts'
+import { environmentOf, projectDirectory, projectDirectoryName, ticketDirectoryName } from '../src/app/execution-environment.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind } from '../src/sources/github.ts'
@@ -85,5 +85,25 @@ describe('project directory names', () => {
     expect(projectDirectoryName('..')).toBe('')
     expect(projectDirectoryName('CON')).toBe('project-CON')
     expect(projectDirectoryName('a:b*c?')).toBe('a-b-c-')
+  })
+})
+
+describe('ticket directory names', () => {
+  it('keeps an id that is already a safe directory name unchanged', () => {
+    expect(ticketDirectoryName('0123456789abcdef0123456789abcdef')).toBe('0123456789abcdef0123456789abcdef')
+  })
+
+  it('sanitizes illegal ids by the same rules as project names and adds a hash so distinct ids never share a directory', () => {
+    expect(ticketDirectoryName('a/b')).toMatch(/^b-[0-9a-f]{12}$/)
+    // 不同原始 id 清洗后相同，但哈希后缀把它们分开。
+    expect(ticketDirectoryName('a/b')).not.toBe(ticketDirectoryName('a\\b'))
+    expect(ticketDirectoryName('CON')).toMatch(/^project-CON-[0-9a-f]{12}$/)
+  })
+
+  it('falls back to a hashed ticket directory when nothing usable remains', () => {
+    expect(ticketDirectoryName('..')).toMatch(/^ticket-[0-9a-f]{12}$/)
+    expect(ticketDirectoryName('')).toMatch(/^ticket-[0-9a-f]{12}$/)
+    // 结果只由 id 决定，便于重试与重启后落到同一目录。
+    expect(ticketDirectoryName('..')).toBe(ticketDirectoryName('..'))
   })
 })

@@ -229,8 +229,9 @@ it('relays an explicit member mention as a candidate and creates the ticket, ack
   expect(ticket).toMatchObject({ title: '修复回归', mandate: { strength: 'explicit', basis: expect.objectContaining({ via: 'addressed', source: 'feishu', sender: 'Alice', addressed: 'mention', scope: expect.objectContaining({ chatId: CHAT }) }) },
     execution: expect.objectContaining({ name: expect.stringMatching(/^fix-regression-/) }), origin: expect.objectContaining({ triggerId: trigger.id }) })
   expect(ticket).not.toHaveProperty('ended')
-  // 工单的执行环境在接受时固定：执行目录按来源记录的项目命名（飞书没有项目标识，退回记录 ID），来源值来自其触发器。
-  expect(ticket.execution!.directory).toBe(join(directory, 'work', 'feishu'))
+  // 工单的执行环境在接受时固定：执行目录为来源记录的项目目录下按工单 id 命名的子目录（飞书没有项目标识，退回记录 ID），来源值来自其触发器。
+  expect(ticket.execution!.project).toBe('feishu')
+  expect(ticket.execution!.directory).toBe(join(directory, 'work', 'feishu', ticket.id))
   expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_TICKET: ticket.id, DSH_SUPERAGENT_SOURCE: 'feishu', DSH_SUPERAGENT_FEISHU_CHAT: CHAT })
   expect(ticket.assignments).toEqual([expect.objectContaining({ state: 'running', startedAt: expect.any(String) })])
   expect(sessionId).toBe(`worker-${ticket.id}`)
@@ -1098,24 +1099,25 @@ it('leaves auto-merge to the delivery requirements, with the agent\'s own gh and
   expect(runtime.prompts.preview(runtime.prompts.current().config).worker).not.toContain('gh-merge')
 })
 
-it('runs the prepare command once for a new ticket, under the execution root with the ticket\'s environment, and fails the ticket with its output', async () => {
+it('runs the prepare command once for a new ticket, in its project directory with the ticket\'s environment, and fails the ticket with its output', async () => {
   const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
   const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; cwd: string; env?: Record<string, string> }).filter(spec => spec.argv[0] === shellArgv('')[0])
   prepare('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"')
   const { ticket } = await acceptedTicket()
-  expect(runs()).toEqual([expect.objectContaining({ argv: shellArgv('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"'), cwd: join(directory, 'work'),
+  // 准备命令在项目目录中运行，由它创建本工单自己的子目录。
+  expect(runs()).toEqual([expect.objectContaining({ argv: shellArgv('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"'), cwd: join(directory, 'work', 'feishu'),
     env: expect.objectContaining({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_SOURCE: 'feishu', DSH_SUPERAGENT_FEISHU_CHAT: CHAT }) })])
-  // 重试会复用已准备好的目录。
+  // 重试会复用该工单已准备好的子目录，不再运行准备命令。
   await runTool(`worker-${ticket.id}`, 'orchestrator_report', { state: 'failed', summary: 'offline' })
   await runtime.engine.retryTicket(ticket.id)
   await runtime.idle()
   expect(runs()).toHaveLength(1)
   answers[shellArgv('exit 3').join(' ')] = new Error('fatal: no such clone')
   prepare('exit 3')
-  // 目录按项目命名后同一项目复用已准备好的工作区；删掉它，验证新工作区上的准备失败会让工单失败。
-  rmSync(join(directory, 'work', 'feishu'), { recursive: true, force: true })
+  // 同项目的另一张工单有自己的子目录，因此它的准备失败会让工单失败，而不受前一张工单影响。
   const failed = await acceptedTicket(feishu('9', '@bot 修一下标题'))
   await runtime.idle()
+  expect(failed.ticket.execution!.directory).toBe(join(directory, 'work', 'feishu', failed.ticket.id))
   expect(runtime.store.tickets.get(failed.ticket.id)!.assignments.at(-1)).toMatchObject({ report: expect.objectContaining({ state: 'failed', summary: expect.stringContaining('The prepare command failed: fatal: no such clone') }) })
   expect(waitsForPerson(runtime.store.tickets.get(failed.ticket.id)!)).toBe(true)
 })
@@ -1641,8 +1643,7 @@ it('runs a launch that fails for a passing reason again on the launch backoff th
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: 'exit 3' } })
   answers[shellArgv('exit 3').join(' ')] = new Error('fatal: unable to access: The requested URL returned error: 503')
   const before = runs()
-  // 项目工作区已被前面的工单准备好；删掉它，让这个工单重新运行 prepare 命令。
-  rmSync(join(directory, 'work', 'feishu'), { recursive: true, force: true })
+  // 新工单有自己的子目录，因此它一定会运行 prepare 命令，不会复用前面工单准备好的工作区。
   const prepared = await acceptedTicket(feishu('40', '@bot 修 prepare', { root_id: undefined }))
   await runtime.idle()
   expect(runtime.store.tickets.get(prepared.ticket.id)!.assignments.at(-1)!.report).toMatchObject({ state: 'failed', summary: expect.stringContaining('503') })

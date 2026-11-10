@@ -56,13 +56,13 @@ export function ExecutionStatus({ filter: current, state, reload }: {
 }
 
 /**
- * 按项目把工单分组：项目名取执行目录的最后一段（目录按项目命名），尚未开始的工单归入“待分配”。
+ * 按项目把工单分组：优先用服务端记录的项目名；旧工单没有项目名时退回执行目录的最后一段，尚未开始的工单归入“待分配”。
  * 分组只改变展示层次，不改变服务端返回的顺序；同一项目内部保持原有顺序。
  */
-function byProject<T extends { directory?: string }>(items: readonly T[], unassigned: string): { project: string; tickets: T[] }[] {
+function byProject<T extends { project?: string; directory?: string }>(items: readonly T[], unassigned: string): { project: string; tickets: T[] }[] {
   const groups = new Map<string, T[]>()
   for (const item of items) {
-    const project = item.directory?.split(/[\\/]+/).filter(Boolean).pop() || unassigned
+    const project = item.project || item.directory?.split(/[\\/]+/).filter(Boolean).pop() || unassigned
     groups.set(project, [...groups.get(project) ?? [], item])
   }
   return [...groups].map(([project, tickets]) => ({ project, tickets }))

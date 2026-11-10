@@ -167,11 +167,14 @@ interface TaskSourcePort {
 
 ### 工单目录
 
-- 工单目录为 `<executionRoot>/<项目名称>`，`executionRoot` 取 `executor.directory`，为空时取 `<stateDir>/work`；
+- 工单目录为 `<executionRoot>/<项目名称>/<工单ID>`，`executionRoot` 取 `executor.directory`，为空时取 `<stateDir>/work`；
 - 项目名称取来源记录项目标识的最后一段：GitHub 用 `repository`，GitLab 用 `project`；没有项目标识的来源（飞书）退回记录 ID；
 - 两条记录映射到同一名称时，两条都追加记录 ID（`<名称>-<记录ID>`），不会静默共用一个目录；
 - 名称会去掉 Windows 非法字符与首尾点、空格，保留设备名（`CON`、`NUL`、`COM1` 等）加 `project-` 前缀；
-- 同一项目的工单共享该目录，`executor.prepare` 只在该目录不存在时运行一次；**不迁移**旧版本按工单命名的目录，旧目录保留原样。
+- 项目层保留分组、归属与多项目扩展；每张工单在项目目录下拥有以工单 ID 命名的子目录，**同一项目的多张工单并发执行时各写各的产物，互不覆盖**，因此不需要同项目串行，并发契约仍是全局 `executor.maxWorkers`；
+- 工单子目录名与项目名同一套清洗规则；清洗会改变 ID 时追加原 ID 的 12 位哈希，空结果退回 `ticket-<哈希>`，不同工单不会因清洗落到同一目录；
+- `executor.prepare` 在工单子目录不存在时运行，工作目录是所属项目目录，命令通过 `DSH_SUPERAGENT_DIR` 创建该工单自己的目录；同一工单重试复用已准备好的子目录；
+- **不迁移**旧版本按项目命名的目录（`<executionRoot>/<项目名称>`）和更早按工单命名的目录，旧目录保留原样。
 
 ### 拆解
 

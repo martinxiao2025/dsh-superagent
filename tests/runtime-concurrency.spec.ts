@@ -1,7 +1,8 @@
 /** 重叠触发器、投递和 worker 启动时的并发运行时行为。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { latestAssignment, waitsForPerson, type Ticket, type Trigger } from '../src/core/index.ts'
 import { Later } from '../src/app/effects.ts'
 import { reportRelay } from '../src/app/notices.ts'
@@ -166,8 +167,7 @@ it('counts a launch under way against maxWorkers, so a bot\'s Input for an idle 
   // 第二个工单的启动在其 prepare 命令运行期间占用唯一槽位，早于其 worker 会话。
   const prepare = deferred()
   h.hooks.prepare = prepare.promise
-  // 目录按项目命名后同一项目复用已准备好的工作区；删掉它，让第二个工单的启动重新运行 prepare。
-  rmSync(join(h.directory, 'work', 'feishu'), { recursive: true, force: true })
+  // 每个工单有自己的子目录，因此第二个工单的启动一定会运行 prepare。
   h.runtime.receive(feishu('5', '@bot 修二')); await h.runtime.idle()
   await h.route({ kind: 'accept', trigger_id: feishu('5', '').id, title: 'two', worktree_name: 'fix-two', acknowledgement: '收到。' })
   await waitUntil(() => h.subprocess.spawn.mock.calls.filter(([spec]) => spec.argv[0] === shellArgv('')[0]).length === 2)
@@ -852,6 +852,53 @@ it('ends a worker\'s turn only when the stop that ended its Assignment commits',
   expect(h.runtime.store.tickets.get(one.ticket.id)!.ended).toBeUndefined()
   h.runtime.engine.stopTicket(one.ticket.id)
   expect(worker.cancel).toHaveBeenCalledOnce()
+})
+
+describe('ticket workspace directories', () => {
+  /** 用给定来源记录构造设置，来源只有 id 与类型，足以决定项目目录。 */
+  const settingsOf = (sources: Record<string, Record<string, unknown>>) => SettingsSchema.parse({ sources })
+  const ticketOf = (id: string) => ({ id, origin: { triggerId: 'tr1', triggerIds: [] },
+    mandate: { strength: 'explicit', policyVersion: 'v1', basis: {}, actor: { source: 'feishu', id: 'alice' }, scope: '' } }) as unknown as Ticket
+  /** 接受一张工单，返回它固定的项目名与执行目录。 */
+  const executionOf = (id: string, settings: ReturnType<typeof settingsOf>, source: string) => ticketExecution(ticketOf(id),
+    { kind: 'accept', title: 'Fix', scope: 'Fix', reason: 'r', name: 'fix-one' } as never, settings, h.directory,
+    { source, threads: [] } as unknown as Trigger)
+
+  it('gives two tickets of one project a shared project directory but separate ticket directories that do not overwrite each other', async () => {
+    const settings = settingsOf({ feishu: { kind: 'feishu', enabled: true, config: {} } })
+    const a = executionOf('ticket-a', settings, 'feishu'), b = executionOf('ticket-b', settings, 'feishu')
+    expect(a.project).toBe('feishu')
+    expect(dirname(a.directory)).toBe(join(h.directory, 'work', 'feishu'))
+    expect(dirname(b.directory)).toBe(dirname(a.directory))
+    expect(a.directory).not.toBe(b.directory)
+    // 两张工单同时写入各自产物：目录隔离使它们不覆盖对方。
+    await Promise.all([a, b].map(async (execution, index) => {
+      await mkdir(execution.directory, { recursive: true })
+      await writeFile(join(execution.directory, 'artifact.txt'), `ticket ${index}`)
+    }))
+    expect(readFileSync(join(a.directory, 'artifact.txt'), 'utf8')).toBe('ticket 0')
+    expect(readFileSync(join(b.directory, 'artifact.txt'), 'utf8')).toBe('ticket 1')
+  })
+
+  it('keeps two Source records that name the same project in two project directories, with each ticket below its own', () => {
+    const settings = settingsOf({ alpha: { kind: 'github', enabled: true, config: { repository: 'acme/app' } },
+      beta: { kind: 'github', enabled: true, config: { repository: 'other/app' } } })
+    const alpha = executionOf('ticket-a', settings, 'alpha'), beta = executionOf('ticket-b', settings, 'beta')
+    expect(alpha.project).toBe('app-alpha')
+    expect(beta.project).toBe('app-beta')
+    expect(dirname(alpha.directory)).toBe(join(h.directory, 'work', 'app-alpha'))
+    expect(dirname(beta.directory)).toBe(join(h.directory, 'work', 'app-beta'))
+  })
+
+  it('sanitizes an id with illegal characters into a deterministic ticket directory below its project', () => {
+    const settings = settingsOf({ feishu: { kind: 'feishu', enabled: true, config: {} } })
+    const execution = executionOf('a/b', settings, 'feishu')
+    expect(dirname(execution.directory)).toBe(join(h.directory, 'work', 'feishu'))
+    expect(execution.directory).toBe(join(h.directory, 'work', 'feishu', execution.directory.split(/[\\/]/).pop()!))
+    expect(execution.directory.split(/[\\/]/).pop()).toMatch(/^b-[0-9a-f]{12}$/)
+    // 结果只由工单 id 决定，重试与重启后仍是同一目录。
+    expect(executionOf('a/b', settings, 'feishu').directory).toBe(execution.directory)
+  })
 })
 
 describe('the Executor\'s parts', () => {

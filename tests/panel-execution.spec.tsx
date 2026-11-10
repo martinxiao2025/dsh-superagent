@@ -41,14 +41,16 @@ it('lists Tickets under Execution by who they wait on, with the Executor state a
 })
 
 it('groups Tickets by project so several projects do not collapse into one list', async () => {
-  server.tickets.open = [ticketSummary({ id: 't1', directory: '/work/Demo.ProjectOnline' }),
-    ticketSummary({ id: 't2', directory: '/work/Demo.ProjectOnline' }), ticketSummary({ id: 't3', directory: '/work/ledger-app' }),
-    ticketSummary({ id: 't4', directory: '' })]
+  server.tickets.open = [ticketSummary({ id: 't1', project: 'Demo.ProjectOnline', directory: '/work/Demo.ProjectOnline/t1' }),
+    ticketSummary({ id: 't2', project: 'Demo.ProjectOnline', directory: '/work/Demo.ProjectOnline/t2' }),
+    ticketSummary({ id: 't3', project: 'ledger-app', directory: '/work/ledger-app/t3' }),
+    // 旧工单没有项目名时退回执行目录的最后一段。
+    ticketSummary({ id: 't4', directory: '/work/legacy-app' }), ticketSummary({ id: 't5', directory: '' })]
   await mount()
   await click(zh['tab.execution'])
   expect(all('.dt-project-head').map(head => [head.querySelector('.dt-project-name')?.textContent,
     head.querySelector('.dt-count')?.textContent])).toEqual([['Demo.ProjectOnline', '2'], ['ledger-app', '1'],
-    [zh.projectUnassigned, '1']])
+    ['legacy-app', '1'], [zh.projectUnassigned, '1']])
 })
 
 it('stops an open Ticket from its page after confirmation', async () => {

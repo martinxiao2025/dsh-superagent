@@ -125,7 +125,7 @@ export function ticketSummary(ticket: Ticket) {
     // 工单中每个已开始的分配都在其唯一的共享执行器会话中运行。
     deliveryError: attribute(ticket.delivery?.error), sessionId: ticket.assignments.some(item => item.startedAt)
       ? workerSessionId(ticket.id) : '',
-    directory: attribute(ticket.execution?.directory), summary: latestReport(ticket)?.summary ?? '', createdAt: ticket.createdAt,
+    directory: attribute(ticket.execution?.directory), project: attribute(ticket.execution?.project), summary: latestReport(ticket)?.summary ?? '', createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt }
 }
 export type TicketSummaryView = ReturnType<typeof ticketSummary>
