@@ -76,7 +76,7 @@ export async function runPipeline(host: PipelineHost, signal: AbortSignal): Prom
   try {
     state('syncing-code')
     synced = await syncCode({ commands: host.commands, stateDir: host.stateDir, codeSource: config.codeSource,
-      branch: config.branch, directory: config.directory || defaultDirectory(host), signal })
+      remoteUrl: config.remoteUrl, branch: config.branch, directory: config.directory || defaultDirectory(host), signal })
     host.report('code', health('ready', 'pipelineCode', { commit: short(synced.commit) }))
   } catch (error) {
     state('failed', messageOf(error))

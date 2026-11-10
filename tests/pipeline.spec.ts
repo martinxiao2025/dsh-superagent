@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import { PipelineConfigSchema } from '../src/pipeline/config.ts'
+import { remoteOf } from '../src/pipeline/code.ts'
 import { parseDelimited, readTaskRows } from '../src/pipeline/excel.ts'
 import { serialize as serializeTable } from '../src/pipeline/writeback.ts'
 import { checklistTasks, feishuToken, tableRows } from '../src/pipeline/feishu.ts'
@@ -17,6 +18,22 @@ const columns = { id: 'id', title: 'title', description: 'description', status: 
 
 /** 创建临时目录，用于清单、代码镜像与运行状态。 */
 const temporary = (): string => mkdtempSync(join(tmpdir(), 'dsh-pipeline-'))
+
+describe('code remote', () => {
+  it('derives HTTPS remotes from source records and accepts an SSH override', () => {
+    expect(remoteOf({ kind: 'github', instanceUrl: '', repository: 'acme/app' })).toBe('https://github.com/acme/app.git')
+    expect(remoteOf({ kind: 'gitlab', instanceUrl: 'https://git.example.com', project: 'grp/app' })).toBe('https://git.example.com/grp/app.git')
+    expect(remoteOf({ kind: 'github', instanceUrl: '', repository: 'acme/app' }, 'git@github.com:acme/app.git'))
+      .toBe('git@github.com:acme/app.git')
+  })
+
+  it('rejects remotes that embed a password, in the record and in the config', () => {
+    expect(() => remoteOf({ kind: 'github', instanceUrl: '', repository: 'acme/app' }, 'https://user:pass@github.com/acme/app.git'))
+      .toThrow('代码来源远端地址不能包含用户名或密码')
+    expect(() => PipelineConfigSchema.parse({ remoteUrl: 'https://user:pass@gitlab.com/grp/app.git' }))
+      .toThrow('远端地址不能包含用户名或密码')
+  })
+})
 
 describe('task list parsing', () => {
   it('parses quoted CSV fields, embedded newlines and CRLF', () => {

@@ -23,6 +23,7 @@ export const pipelineKind: SourceKind<PipelineConfig> = {
   },
   fields: [
     { key: 'codeSource', type: 'text', label: label('代码来源记录', 'Code source record'), hint: label('填写 GitHub 或 GitLab 来源记录的 ID', 'ID of a GitHub or GitLab source record') },
+    { key: 'remoteUrl', type: 'text', label: label('远端地址', 'Remote URL'), hint: label('留空按来源记录生成；可填 SSH 地址（git@host:owner/repo.git），不要内嵌账号密码', 'Empty derives from the record; SSH like git@host:owner/repo.git is allowed, never embed credentials'), advanced: true },
     { key: 'branch', type: 'text', label: label('分支', 'Branch'), hint: label('留空使用仓库默认分支', 'Empty uses the default branch') },
     { key: 'taskKind', type: 'select', label: label('任务源类型', 'Task source'), options: [
       { value: 'excel', label: label('本地 Excel / CSV', 'Local Excel / CSV') },

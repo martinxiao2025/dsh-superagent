@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import type { Commands } from '../infra/commands.ts'
 import { hostOf } from '../deployment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
+import { hasEmbeddedCredentials } from './config.ts'
 
 /** 一次同步的结果：目录、检出的提交，以及提交是否发生变化。 */
 export interface CodeSyncResult { directory: string; commit: string; changed: boolean }
@@ -12,6 +13,8 @@ export interface CodeSyncInput {
   commands: Commands
   stateDir: string
   codeSource: string
+  /** 可选远端地址；非空时用它作为 origin，支持 `git@host:path` 形式的 SSH 地址。 */
+  remoteUrl?: string
   branch: string
   directory: string
   signal: AbortSignal
@@ -26,7 +29,7 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   const scoped = input.commands.scope(input.codeSource)
   const source = scoped.source
   if (source?.kind !== 'github' && source?.kind !== 'gitlab') throw new Error('代码来源记录必须是 GitHub 或 GitLab')
-  const remote = remoteOf(source)
+  const remote = remoteOf(source, input.remoteUrl)
   await mkdir(input.directory, { recursive: true })
   // 登记目录后，git 的凭据助手才会按目录选择该代码来源记录的凭据。
   await recordTicketSource(input.stateDir, input.directory, input.codeSource)
@@ -56,8 +59,17 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   return { directory: input.directory, commit, changed: commit !== before }
 }
 
-/** 代码来源的 HTTPS 远端地址；自建实例使用记录里的站点主机。 */
-export function remoteOf(source: { kind: 'github'; instanceUrl: string; repository: string } | { kind: 'gitlab'; instanceUrl: string; project: string }): string {
+/**
+ * 代码来源的远端地址。
+ * `remote` 非空时直接使用（例如 `git@github.com:owner/repo.git`），否则按来源记录生成 HTTPS 地址；
+ * 自建实例使用记录里的站点主机。内嵌凭据的地址会被拒绝，凭据只能来自按目录绑定的 git 助手。
+ */
+export function remoteOf(source: { kind: 'github'; instanceUrl: string; repository: string } | { kind: 'gitlab'; instanceUrl: string; project: string }, remote = ''): string {
+  const override = remote.trim()
+  if (override) {
+    if (hasEmbeddedCredentials(override)) throw new Error('代码来源远端地址不能包含用户名或密码')
+    return override
+  }
   if (source.kind === 'github') {
     if (!source.repository) throw new Error('代码来源记录尚未配置仓库')
     return `https://${hostOf(source.instanceUrl, 'github.com')}/${source.repository}.git`

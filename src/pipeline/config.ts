@@ -7,11 +7,25 @@ import { LIMITS } from '../limits.ts'
 const AbsolutePath = z.string().trim().refine(value => value === '' || isAbsolute(value), { message: '必须是绝对路径' })
 
 /**
+ * 判断远端地址是否内嵌了用户名与密码。
+ * `https://user:pass@host/repo` 会把凭据写进配置文件，因此一律拒绝；`git@host:path` 这类 SSH 地址不受影响。
+ */
+export function hasEmbeddedCredentials(remote: string): boolean {
+  return /[^/@\s]+:[^/@\s]+@/.test(remote)
+}
+
+/** 可选远端地址：为空表示按来源记录生成，非空时拒绝内嵌凭据。 */
+const RemoteUrl = z.string().trim().max(500)
+  .refine(value => !hasEmbeddedCredentials(value), { message: '远端地址不能包含用户名或密码' })
+
+/**
  * 一条 `pipeline` 来源记录的配置。字段保持扁平，便于面板按字段键直接读写；
  * 空值表示尚未配置，由 `pipelineProblems` 在运行时给出具体问题。
  */
 export const PipelineConfigSchema = z.object({
   codeSource: z.string().trim().max(64).default(''),
+  /** 可选远端地址；为空时按代码来源记录生成 HTTPS 地址。 */
+  remoteUrl: RemoteUrl.default(''),
   branch: z.string().trim().max(200).default(''),
   directory: AbsolutePath.default(''),
   taskKind: z.enum(['excel', 'feishu']).default('excel'),

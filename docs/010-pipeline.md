@@ -75,6 +75,7 @@ interface TaskSourcePort {
       "enabled": true,
       "config": {
         "codeSource": "github",
+        "remoteUrl": "",
         "branch": "main",
         "directory": "",
         "taskKind": "excel",
@@ -104,6 +105,7 @@ interface TaskSourcePort {
 | 字段 | 含义 |
 | --- | --- |
 | `codeSource` | 代码来源记录 ID；必须是已安装的 `github` 或 `gitlab` 记录 |
+| `remoteUrl` | 可选远端地址；空表示按来源记录生成 HTTPS 地址。可填 `ssh://git@host/owner/repo.git`，不得内嵌账号密码 |
 | `branch` | 分支；空表示该来源的默认分支（由 `git ls-remote` 解析远端 HEAD） |
 | `directory` | 本地同步目录；空表示 `<stateDir>/pipeline/<记录ID>/code` |
 | `taskKind` | `excel` 或 `feishu` |
@@ -123,6 +125,7 @@ interface TaskSourcePort {
 
 - 记录级校验失败只让该记录进入 `problem` 或等待配置，不静默停用，不影响其他来源；
 - `codeSource` 必须指向已安装、类型为 `github` 或 `gitlab` 的记录；
+- `remoteUrl` 为空时按记录生成 `https://<站点>/<仓库>.git`；非空时拒绝 `user:pass@` 形式的内嵌凭据；
 - `taskKind = excel` 时 `taskFile` 必须是非空绝对路径；`taskKind = feishu` 时 `wikiUrl` 与 `feishuSource` 必填；
 - 列映射中 `columnId`、`columnTitle` 必填，其余可留空；
 - `concurrency` 实际取值同时受 `extensions.executor.maxWorkers` 约束。
@@ -203,6 +206,7 @@ discovered → queued → running → succeeded → written-back
 
 - 代码源不新增凭据字段：`git` 通过现有 `worker-gitconfig` 的凭据助手按目录选择来源记录，选择逻辑与工单目录一致；
 - 流水线同步目录在首次同步时登记到该来源记录（`recordTicketSource`），因此凭据、实例地址和 CLI 都不进入流水线配置；
+- `remoteUrl` 只改 `origin` 地址，不改凭据选择：`https://` 远端仍由该目录绑定的记录提供凭据；`ssh://` 远端使用宿主 SSH 身份，而 `worker-gitconfig` 的 `insteadOf` 会把 `git@github.com:` 改写成 HTTPS，因此 SSH 地址应写成 `ssh://` 形式；
 - 飞书任务源通过该记录的 `lark-cli` 以机器人身份读取，令牌由 CLI 自身保存；
 - 任何 token、cookie、密码都不得写入设置、运行记录、健康详情或日志；错误信息只保留脱敏后的 CLI stderr。
 
