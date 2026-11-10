@@ -56,8 +56,10 @@ export function useAction<A extends unknown[]>(action: (...args: A) => Promise<u
 }
 
 const messages = (t: T): ApiMessages => ({
-  offline: t('offline'), notRunning: t('hostNotRunning'), serverError: status => t('serverError', { status }),
+  offline: t('offline'), notRunning: `${t('hostNotRunning')}\n${t('startupMissing')}`, serverError: status => t('serverError', { status }),
     requestFailed: status => t('requestFailed', { status }),
+  // 运行时未就绪时服务端返回阶段与状态目录；这里把它们展开成可操作的本地化提示。
+  startup: (phase, detail, stateDir) => `${t('startupPending', { phase, detail })}\n${t('startupHint', { stateDir })}`,
   setup: problem => problem.values.output ? `${setupText(t, problem)}\n${problem.values.output}` : setupText(t, problem),
   // 拒绝信息会以其标签命名提示词部分。
   user: ({ code, values }) => t(`userError.${code}`, values.part ? { ...values, part: valueLabel(t, 'promptPart', values.part) } : values),

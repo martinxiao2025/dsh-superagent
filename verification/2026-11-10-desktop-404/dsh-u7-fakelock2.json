@@ -1,0 +1,48 @@
+{
+  "tag": "fakelock2",
+  "buildHash": "887D0F30D5A082A6",
+  "buildAt": "2026-11-10 17:10:48",
+  "killAt": "17:16:12.907",
+  "startAt": "17:16:13.767",
+  "startDelayMs": 860,
+  "pauseSeconds": 0,
+  "lockBefore": "2026-11-10 17:15:45.492",
+  "lockAfterKill": "2026-11-10 17:15:45.492",
+  "fakeLock": true,
+  "fakeLockRemoved": true,
+  "port": "63867",
+  "exited": false,
+  "timeline": [
+    {
+      "ms": 9191,
+      "status": 200,
+      "phase": "ready",
+      "ok": true,
+      "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel"
+    }
+  ],
+  "startupTimeline": [
+    {
+      "ms": 954,
+      "phase": "ready",
+      "previous": "store-open"
+    },
+    {
+      "ms": 2998,
+      "phase": "locked",
+      "previous": "http-registered"
+    },
+    {
+      "ms": 9191,
+      "phase": "ready",
+      "previous": "store-open"
+    }
+  ],
+  "healthStatus": 200,
+  "healthBody": "{\"ok\":true,\"stage\":\"ready\",\"configured\":true,\"paused\":false,\"problem\":null,\"listen\":{\"host\":\"127.0.0.1\",\"port\":63867},\"phase\":\"ready\",\"detail\":\"dsh-superagent ready; the Superagent sidebar entry opens the management panel\",\"machine\":{\"stateDir\":\"C:/Users/61054/.dsh/state/superagent\"},\"sources\":[]}",
+  "stateStatus": 200,
+  "stateBodyLength": 1197,
+  "startupPhase": "ready",
+  "startupPrevPhase": "store-open",
+  "lockAfterStart": "2026-11-10 17:16:23.005"
+}

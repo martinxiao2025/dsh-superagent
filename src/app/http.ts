@@ -27,6 +27,7 @@ import { settingsView } from './views/settings.ts'
 import { sourceHealth, sourceState, sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
+import type { StartupStatus } from './startup.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -79,7 +80,8 @@ function json(res: ServerResponse, status: number, value: unknown): void {
 }
 export function sameOrigin(req: Pick<IncomingMessage, 'headers'>, port: number): boolean {
   const host = req.headers.host
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return false
+  // 回环地址包含 IPv4、localhost 与 IPv6 回环；端口必须是管理接口实际监听的端口。
+  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}` && host !== `[::1]:${port}`) return false
   return req.headers['x-orchestrator-request'] === '1' && (req.headers.origin === undefined || req.headers.origin === `http://${host}`)
 }
 /** 将错误映射为 HTTP 状态码和结构化载荷，面板会按界面语言对其进行本地化。 */
@@ -127,12 +129,14 @@ export type StateView = ReturnType<typeof stateView>
 /** 管理接口的实际监听地址；健康探针据此报告入口。 */
 export interface Listen { host: string; port: number }
 /** 构建 `/orchestrator/api/health` 探针视图：就绪阶段、监听地址与每条来源记录的状态摘要。 */
-export function healthView(runtime: HttpHost, listen: Listen) {
+export function healthView(runtime: HttpHost, listen: Listen, startup?: () => StartupStatus) {
   const setup = setupState(runtime)
   const ok = runtime.configured() && !runtime.setupProblem
   return {
     ok, stage: ok ? 'ready' as const : 'setup' as const, configured: runtime.configured(),
     paused: runtime.store.settings().paused, problem: runtime.setupProblem ?? null, listen,
+    // 启动阶段只在插件入口挂载管理路由时提供；独立运行时（测试）省略这两个字段。
+    ...startup === undefined ? {} : { phase: startup().phase, detail: startup().detail },
     machine: { stateDir: runtime.machine.stateDir },
     // 逐记录给出健康摘要；未安装类型按 `missing`，禁用记录按 `off`。
     sources: runtime.sources.instances().map(instance => {
@@ -181,7 +185,7 @@ const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().no
 const ResourceId = z.string().regex(/^[a-z][a-z0-9-]*$/)
 const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(), config: z.unknown().optional() })
 
-function routes(runtime: HttpHost, listen: Listen): Routes {
+function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupStatus): Routes {
   const { store } = runtime
   const ticket = (id: string) => { if (!store.tickets.get(id)) throw new RouteError(404, 'Ticket not found'); return id }
   const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
@@ -196,7 +200,8 @@ function routes(runtime: HttpHost, listen: Listen): Routes {
       return runtime.settings.createSource(request.kind, request.id, request.config, 'panel')
     },
     'DELETE sources/:id': ({ params }) => runtime.settings.removeSource(params.id, 'panel'),
-    'GET health': () => healthView(runtime, listen),
+    // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。
+    'GET health': () => healthView(runtime, listen(), startup),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
     'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),
     'GET threads': ({ query }) => {
@@ -266,21 +271,48 @@ function match(table: Routes, method: string, segments: string[]) {
   }
   return undefined
 }
-export function registerHttp(ctx: Context, runtime: HttpHost): () => void {
-  if (ctx.webServer.host !== '127.0.0.1') throw new Error('Orchestrator management requires a loopback Web server')
-  const table = routes(runtime, { host: ctx.webServer.host, port: ctx.webServer.port })
-  const disposers = [
-    ctx.webServer.register({ kind: 'prefix', path: '/orchestrator', handler: async (req, res) => {
-      const url = new URL(req.url ?? '/', 'http://localhost')
-      if (!url.pathname.startsWith('/orchestrator/api/')) { res.writeHead(404); res.end(); return }
-      if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
-      try {
-        await runtime.ready
-        const route = match(table, req.method ?? 'GET', url.pathname.slice('/orchestrator/api/'.length).split('/'))
-        if (!route) throw new RouteError(404, 'Unknown operation')
-        const query = Object.fromEntries(url.searchParams)
-        json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
-      } catch (error) { json(res, ...failure(error)) }
-    } })]
-  return () => { for (const dispose of disposers) dispose() }
+/**
+ * 挂载管理 API。第一种形式供 `Runtime` 自挂载（测试与独立运行时）；第二种形式供插件入口
+ * 在运行时创建之前先挂载，并在初始化失败时用启动状态回答健康探针与 503 诊断。
+ */
+export function registerHttp(ctx: Context, runtime: HttpHost): () => void
+export function registerHttp(ctx: Context, resolve: () => HttpHost | undefined, status: () => StartupStatus): () => void
+export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | undefined), status?: () => StartupStatus): () => void {
+  const resolve = typeof source === 'function' ? source : () => source
+  const state = status ?? ((): StartupStatus => ({ phase: 'ready', detail: '', stateDir: resolve()?.machine.stateDir ?? '' }))
+  // 端口在请求时读取：插件初始化阶段 Web 服务器可能尚未监听。
+  const listen = (): Listen => ({ host: ctx.webServer.host, port: ctx.webServer.port })
+  // 运行时只创建一次；缓存它的路由表，避免每个请求重建。
+  let cached: { runtime: HttpHost; table: Routes } | undefined
+  const tableFor = (runtime: HttpHost): Routes => {
+    if (cached?.runtime !== runtime) cached = { runtime, table: routes(runtime, listen, state) }
+    return cached.table
+  }
+  const dispose = ctx.webServer.register({ kind: 'prefix', path: '/orchestrator/api', handler: async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+    const method = req.method ?? 'GET'
+    // 前缀按路径边界匹配 `/orchestrator/api`，其余 `/orchestrator/*` 交给宿主的页面路由。
+    const path = url.pathname.slice('/orchestrator/api'.length).replace(/^\//, '')
+    const runtime = resolve()
+    if (!runtime) {
+      const { phase, detail, error, stateDir } = state()
+      // 运行时尚未创建或初始化失败：健康探针返回 200，其余接口以 503 说明阶段，而不是空体 404。
+      if (method === 'GET' && path === 'health') {
+        json(res, 200, { ok: false, stage: phase, phase, detail, error: error ?? null, configured: false, paused: false,
+          problem: null, listen: listen(), machine: { stateDir }, sources: [] })
+        return
+      }
+      json(res, 503, { error: detail || 'dsh-superagent is not ready', code: 'startupPending', phase, detail, stateDir })
+      return
+    }
+    try {
+      await runtime.ready
+      const route = match(tableFor(runtime), method, path.split('/'))
+      if (!route) throw new RouteError(404, 'Unknown operation')
+      const query = Object.fromEntries(url.searchParams)
+      json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
+    } catch (error) { json(res, ...failure(error)) }
+  } })
+  return () => { dispose() }
 }

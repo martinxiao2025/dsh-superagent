@@ -15,7 +15,9 @@ export interface UserFailure { code: UserErrorCode; values: Record<string, strin
  */
 export class ApiError extends Error {
   constructor(message: string, readonly status: number,
-    readonly details: { issues?: { path: string; message: string }[]; setup?: SetupProblem; user?: UserFailure; unreachable?: boolean } = {}) {
+    readonly details: { issues?: { path: string; message: string }[]; setup?: SetupProblem; user?: UserFailure; unreachable?: boolean
+      /** 插件尚未就绪时的启动阶段与诊断位置（来自 503 `startupPending`）。 */
+      phase?: string; detail?: string; stateDir?: string } = {}) {
     super(message)
   }
   get issues() { return this.details.issues ?? [] }
@@ -26,6 +28,8 @@ export interface ApiMessages {
   offline: string; notRunning: string; serverError: (status: number) => string; requestFailed: (status: number) => string
   setup: (problem: SetupProblem) => string
   user: (failure: UserFailure) => string
+  /** 管理路由已挂载但运行时未就绪时的本地化诊断（阶段、原因、状态目录）。 */
+  startup?: (phase: string, detail: string, stateDir: string) => string
 }
 const isUserError = (code: unknown): code is UserErrorCode => typeof code === 'string' && Object.hasOwn(USER_ERRORS, code)
 
@@ -43,15 +47,21 @@ async function api<T>(messages: ApiMessages, path: string, method: string, body?
   try { value = text ? JSON.parse(text) : {} } catch { value = undefined }
   if (!response.ok) {
     const failure = (value ?? {}) as { error?: unknown; issues?: unknown; setup?: SetupProblem; code?: unknown
-      values?: Record<string, string> }
+      values?: Record<string, string>; phase?: unknown; detail?: unknown; stateDir?: unknown }
     const issues = Array.isArray(failure.issues) ? failure.issues as { path: string; message: string }[] : []
     const user = isUserError(failure.code) ? { code: failure.code, values: failure.values ?? {} } : undefined
+    const phase = typeof failure.phase === 'string' ? failure.phase : undefined
+    const detail = typeof failure.detail === 'string' ? failure.detail : ''
+    const stateDir = typeof failure.stateDir === 'string' ? failure.stateDir : ''
+    // 插件入口在运行时未就绪时返回 503 `startupPending`：优先用本地化诊断，而不是英文原始消息。
+    const startup = failure.code === 'startupPending' && messages.startup ? messages.startup(phase ?? '', detail, stateDir) : undefined
     // dsh-superagent 总会返回响应体；启动或重启期间 dsh-superagent 路由被卸载时，空的 404 来自 DSH Web 服务器。
     const { status } = response
-    const message = failure.setup ? messages.setup(failure.setup) : user ? messages.user(user)
-      : typeof failure.error === 'string' ? failure.error : !text && status === 404 ? messages.notRunning
-      : status >= 500 ? messages.serverError(status) : messages.requestFailed(status)
+    const message = failure.setup ? messages.setup(failure.setup) : user ? messages.user(user) : startup
+      ?? (typeof failure.error === 'string' ? failure.error : !text && status === 404 ? messages.notRunning
+        : status >= 500 ? messages.serverError(status) : messages.requestFailed(status))
     throw new ApiError(message, status, { issues, ...failure.setup ? { setup: failure.setup } : {}, ...user ? { user } : {},
+      ...phase === undefined ? {} : { phase }, ...detail ? { detail } : {}, ...stateDir ? { stateDir } : {},
       ...text ? {} : { unreachable: true } })
   }
   return value as T

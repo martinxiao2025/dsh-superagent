@@ -143,3 +143,18 @@ it('tells a dsh-superagent that does not answer from a record it does not have, 
   expect(await failure(async () => Response.json({ error: 'Unknown ticket', code: 'unknownTicket' }, { status: 404 }))).toEqual({
     message: 'user unknownTicket', status: 404, missing: true, unreachable: false })
 })
+
+it('words a 503 startupPending with the startup phase, its reason and the state directory', async () => {
+  const messages = { offline: 'offline', notRunning: 'not running', serverError: (status: number) => `server ${status}`,
+    requestFailed: (status: number) => `request ${status}`, setup: () => 'setup', user: ({ code }: { code: string }) => `user ${code}`,
+    startup: (phase: string, detail: string, stateDir: string) => `startup ${phase}: ${detail} (${stateDir})` }
+  const call = caller(() => messages)
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: '状态目录锁被占用', code: 'startupPending',
+    phase: 'locked', detail: '状态目录锁被占用，最多等待 35 秒', stateDir: 'C:\\state' }, { status: 503 })))
+  const error = await call('GET tickets/:id', { id: 't1' }).then(() => undefined, (thrown: unknown) => thrown) as ApiError
+  // 启动诊断优先于服务端原文，并带出阶段与状态目录，便于定位 startup.json。
+  expect(error).toBeInstanceOf(ApiError)
+  expect(error.message).toBe('startup locked: 状态目录锁被占用，最多等待 35 秒 (C:\\state)')
+  expect(error.details).toMatchObject({ phase: 'locked', detail: '状态目录锁被占用，最多等待 35 秒', stateDir: 'C:\\state' })
+  expect(error.missing).toBe(false)
+})

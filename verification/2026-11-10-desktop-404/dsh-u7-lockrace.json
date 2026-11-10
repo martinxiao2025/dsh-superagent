@@ -1,0 +1,31 @@
+{
+  "tag": "lockrace",
+  "buildHash": "05E3524B98F8E533",
+  "buildAt": "2026-11-10 17:04:28",
+  "killAt": "17:06:51.312",
+  "startAt": "17:06:52.144",
+  "startDelayMs": 832,
+  "pauseSeconds": 0,
+  "lockBefore": "absent",
+  "lockAfterKill": "absent",
+  "fakeLock": false,
+  "fakeLockRemoved": true,
+  "port": "60719",
+  "exited": false,
+  "timeline": [
+    {
+      "ms": 3231,
+      "status": 200,
+      "phase": "failed",
+      "ok": false,
+      "detail": "dsh-superagent 初始化失败：resume failed for session \"orchestrator-16e875afaa8da3d45dce06f4e339925a\": Error: tools.restrict() names unknown global tool \"bash\"; known global tools: job_kill, job_list, job_output, pwsh, read, read_image, skill, working_directory"
+    }
+  ],
+  "healthStatus": 200,
+  "healthBody": "{\"ok\":false,\"stage\":\"failed\",\"phase\":\"failed\",\"detail\":\"dsh-superagent 初始化失败：resume failed for session \\\"orchestrator-16e875afaa8da3d45dce06f4e339925a\\\": Error: tools.restrict() names unknown global tool \\\"bash\\\"; known global tools: job_kill, job_list, job_output, pwsh, read, read_image, skill, working_directory\",\"error\":{\"name\":\"RemoteError\",\"message\":\"resume failed for session \\\"orchestrator-16",
+  "stateStatus": 503,
+  "stateBodyLength": 631,
+  "startupPhase": "failed",
+  "startupPrevPhase": "store-open",
+  "lockAfterStart": "2026-11-10 17:08:10.197"
+}

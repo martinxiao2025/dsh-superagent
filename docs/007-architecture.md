@@ -290,7 +290,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 | 路径 | 职责 |
 | --- | --- |
-| `src/index.ts` | 主插件入口：读取机器设置，启动 Runtime，并给它提供保存来源账号时使用的重启 |
+| `src/index.ts` | 主插件入口：读取机器设置，先挂载管理路由并取得状态目录锁，再启动 Runtime；初始化失败时记录启动阶段并保持路由挂载 |
+| `src/app/startup.ts` | 启动记录与状态目录锁：`recordStartup` 写 `startup.json` 并轮转 `startup.prev.json`，`startupError` 折叠异常，`acquireStateLock` 在锁竞争时等待重试 |
+| `src/app/admin-mount.ts` | `AdminMount`：Runtime 创建之前挂载 `/orchestrator/api`，初始化失败时用启动状态回答健康探针与 503 |
 | `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveDeployment`、`resolveFeishuBot` 和 `resolveGitlab` 从来源设置读取仓库和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出安装读取的来源字段。代码不指名任何人、账号或组织 |
 | `src/setup.ts` | 安装问题：`SetupError`，带错误码、修复它的位置，以及日志、主会话和面板共享的英文文本 |
 | `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验 |
@@ -436,7 +438,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/runtime.spec.ts` | 在模拟 DeepSeek Harness 宿主上通过工具和 HTTP 运行整个应用 |
 | `tests/tools.spec.ts` | 会话的工具：`orchestrator_read` 为每个角色读取什么，以及其他主会话工具的结构和检查 |
 | `tests/runtime-concurrency.spec.ts` | 重叠的工作：轮次期间的触发器、投递和启动期间发生变化的工单 |
-| `tests/http.spec.ts` | 同源和回环检查、每种失败的状态码、请求体上限、路径参数和查询 |
+| `tests/http.spec.ts` | 同源和回环检查、运行时未就绪时的健康探针与 503、每种失败的状态码、请求体上限、路径参数和查询 |
+| `tests/startup.spec.ts` | 启动记录的字段、轮转与 UTF-8 无 BOM，异常摘要，以及状态目录锁的重试与释放 |
 | `tests/settings.spec.ts` | 与模型或账号检查竞争的设置保存、被保存越过的策略同步，以及暂停、同步和块的拒绝 |
 | `tests/views.spec.ts` | 管理视图从 Store 派生的内容，例如被丢弃消息所属的线程 |
 | `tests/timeline.spec.ts` | 线程的页面和按时间再按 id 排序的触发器邻居，每个收到的触发器时间只有一种形态 |
@@ -445,7 +448,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/prompts.spec.ts` | 提示词校验、组装和版本 |
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
-| `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口，以及 Windows 启动器和 shell 行为 |
+| `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |
@@ -514,13 +517,13 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 设置保存选择 `policy`、`eval`、`executor`、`pause` 或 `source`；最后一种还要指出其来源 id。带 `preview: true` 的提示词保存只组装文本，不保存。
 
-主会话还有 DeepSeek Harness 的 `skill`、`bash`、`read`、`read_image`、`job_output`、`job_list` 和 `job_kill`。避免代码读取是提示词规则，而不是工具限制。
+主会话还有 DeepSeek Harness 的 `skill`、`read`、`read_image`、`job_output`、`job_list` 和 `job_kill`，以及宿主提供的 shell（`bash`，Windows 上为 `pwsh`）；限制列表只命名宿主确实提供的全局工具，否则 `tools.restrict` 会拒绝。避免代码读取是提示词规则，而不是工具限制。
 
 ### 预设与等待限制
 
 新的主会话使用 `dsh-superagent-router`（`ROUTER_PRESET`）。shell 命令和任务等待在 5 秒后返回。如果 Web UI 在第一个回合之前选择了其他预设，`Sessions` 会恢复该预设，执行器则恢复 `WORKER_PRESET`。
 
-`src/app/sessions.ts` 中的 `noWait` 守卫会拒绝在命令位置调用 `sleep` 的主会话 shell 命令、超过 30 秒的 shell `timeoutMs`，以及超过 5 秒的 `job_output` 等待。报告和任务结果会自动到达，因此等待只会延迟新候选。
+`src/app/sessions.ts` 中的 `noWait` 守卫会拒绝在命令位置调用 `sleep` 的主会话 shell 命令（`bash` 与 `pwsh` 同口径）、超过 30 秒的 shell `timeoutMs`，以及超过 5 秒的 `job_output` 等待。报告和任务结果会自动到达，因此等待只会延迟新候选。
 
 已在 `standard` 上的主会话也需要为前台命令和任务等待显式设置超时；否则该预设的默认值会分别把步骤挂起 60 秒和 30 秒。宿主通过 `presetForSession` 确定当前预设，回退到会话投影或页头，无法读取时假定为 `standard`。
 

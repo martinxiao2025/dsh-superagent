@@ -314,6 +314,9 @@ curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json
 | `status` 以 1 退出 | 服务未运行、运行了两份、没有响应，或其运行时报告错误；输出和最新日志会说明是哪一种 |
 | `… timed out after 90 s`、`… was stopped by …`、`… exited with code …` 或 `… could not run: …` | CLI 失败但没有打印原因；以操作者用户身份手动运行所指程序查看其自己的消息 |
 | 面板提示 dsh-superagent 没有响应 | 它正在重启，或因其配置未能启动；DeepSeek Harness 日志会指明原因 |
+| 面板或 API 返回 `503` `startupPending` | 管理路由已挂载但运行时未就绪：响应与 `<stateDir>/startup.json` 写明阶段；`locked` 表示另一个实例仍持有锁，等它退出或 30 秒锁过期 |
+| `/orchestrator/api/health` 返回空体 404 | 管理路由未挂载：重启 DeepSeek Harness，并查看 `<stateDir>/startup.json` 与 `startup.prev.json` 记录的最后阶段 |
+| health 返回 `200` 但 `ok: false` | 插件已挂载但未就绪，`phase` 与 `detail` 说明原因；`failed` 时 `error` 带异常摘要 |
 | `dsh-superagent configuration has keys it does not use`（日志） | 移除所指的键；消息会说明每个值现在位于何处 |
 | 日志说插件与运行中的 dsh 不兼容 | 安装处于 `engines.dsh` 范围内的 DeepSeek Harness 版本 |
 | 升级 DeepSeek Harness 后面板显示“Failed to load plugins” | 重启运行中的实例 |

@@ -68,13 +68,14 @@ const DEFAULT_WAIT = 'This shell waits up to 60 seconds by default: pass timeout
 /** 命令位置上的 `sleep`：开头，; & | ( { ! ` 或换行之后，或运行它的关键字或命令之后。 */
 const SLEEP = /(?:^|[;&|({!`\n]|\b(?:do|then|else|elif|if|while|until|time|exec|nohup|command|env)\s)\s*(?:\S*\/)?sleep\b/
 /**
- * 主会话的守卫：拒绝运行 sleep 或将步骤挂起超过 30 秒的 bash 命令，以及超过 5 秒的任务等待。在 `standard` 下，
+ * 主会话的守卫：拒绝运行 sleep 或将步骤挂起超过 30 秒的 shell 命令，以及超过 5 秒的任务等待。在 `standard` 下，
  * 作为在路由器预设之前创建的主会话，shell 会将命令挂起 60 秒，任务等待默认持续 30 秒，
  * 因此命令需要设置超时或放到后台，任务等待则需要设置超时；路由器预设会将两者都在 5 秒后结束。
+ * `bash` 与 `pwsh` 使用同一组参数名（Windows 的 DSH 暴露后者）。
  */
 function noWait({ name, arguments: input }: { name: string; arguments: unknown }, routed: () => boolean): string | undefined {
   const args = (input ?? {}) as { command?: unknown; timeoutMs?: unknown; run_in_background?: unknown; wait?: unknown; timeout_ms?: unknown }
-  if (name === 'bash') {
+  if (name === 'bash' || name === 'pwsh') {
     const sleeps = typeof args.command === 'string' && SLEEP.test(args.command)
     if (sleeps || typeof args.timeoutMs === 'number' && args.timeoutMs > 30_000) return NO_WAIT
     if (args.timeoutMs === undefined && args.run_in_background !== true && !routed()) return DEFAULT_WAIT
@@ -258,7 +259,11 @@ export class Sessions {
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
-      binding.disposers.push(agent.ctx.tools.restrict({ allow: ['skill', 'bash', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] }),
+      // 只在宿主实际提供该工具时命名它：Windows 的 DSH 暴露 `pwsh` 而不暴露 `bash`，
+      // 命名不存在的全局工具会让 tools.restrict 抛错，主会话因此无法创建或恢复。
+      const allow = ['skill', 'bash', 'pwsh', 'read', 'read_image', 'job_output', 'job_list', 'job_kill']
+        .filter(name => agent.ctx.tools.get(name, scopeParentOf(agent)))
+      binding.disposers.push(agent.ctx.tools.restrict({ allow }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
     } else {
       // 执行器会话保留其已有的配置文件工作工具（DSH 要求这些工具已知）；其自身工具不会被遮蔽。

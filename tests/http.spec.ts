@@ -5,17 +5,24 @@ import { registerHttp } from '../src/app/http.ts'
 import { PromptConflict } from '../src/app/prompts.ts'
 import { SettingsConflict } from '../src/app/settings.ts'
 import type { HttpHost } from '../src/app/http.ts'
+import type { StartupStatus } from '../src/app/startup.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { SetupError } from '../src/setup.ts'
 
 type Handler = (req: unknown, res: unknown) => Promise<void>
 type Headers = Record<string, string | undefined>
-/** 在伪造的 Web 服务器上挂载管理 HTTP 路由，并返回带默认面板头的请求辅助函数。 */
-function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.0.1') {
+type Route = { kind?: string; path?: string }
+/** 在伪造的 Web 服务器上登记管理路由，返回带默认面板头的请求辅助函数与登记参数。 */
+function mount(source: HttpHost | (() => HttpHost | undefined), status?: () => StartupStatus, host = '127.0.0.1') {
   let handler: Handler = async () => {}
-  const ctx = { webServer: { host, port: 3082, register: (route: { handler: Handler }) => { handler = route.handler; return () => {} } } }
-  registerHttp(ctx as never, { ready: Promise.resolve(), ...runtime } as unknown as HttpHost)
-  return async (method: string, path: string, body?: unknown, headers: Headers = {}) => {
+  const routes: Route[] = []
+  const ctx = { webServer: { host, port: 3082, register: (route: Route & { handler: Handler }) => {
+    handler = route.handler
+    routes.push({ kind: route.kind, path: route.path })
+    return () => {}
+  } } }
+  registerHttp(ctx as never, source as never, status as never)
+  const call = async (method: string, path: string, body?: unknown, headers: Headers = {}) => {
     let status = 0, text = ''
     const chunks = body === undefined ? [] : [Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))]
     const sent = Object.fromEntries(Object.entries({ host: '127.0.0.1:3082', 'x-orchestrator-request': '1', ...headers }).filter(([,
@@ -24,6 +31,15 @@ function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.
     await handler(req, { writeHead: (code: number) => { status = code }, end: (data: string) => { text = data } })
     return { status, body: JSON.parse(text) as Record<string, unknown> }
   }
+  return { call, routes }
+}
+/** 用已就绪的运行时挂载管理路由（`Runtime` 自挂载与测试的独立运行时都走这条路径）。 */
+function serve(runtime: Partial<Record<keyof HttpHost, unknown>>, host = '127.0.0.1') {
+  return mount({ ready: Promise.resolve(), ...runtime } as unknown as HttpHost, undefined, host).call
+}
+/** 运行时尚未创建或初始化失败：请求辅助函数与启动状态一起返回。 */
+function servePending(status: StartupStatus, host = '127.0.0.1') {
+  return mount(() => undefined, () => status, host)
 }
 
 it('creates and deletes Source records and answers the health probe', async () => {
@@ -113,8 +129,45 @@ it('answers only a same-origin request from the panel on the loopback address', 
       body: { error: 'Same-origin management request required' } })
   }
   expect(await post({ host: 'localhost:3082', origin: 'http://localhost:3082' })).toMatchObject({ status: 200 })
-  // 管理路由要求 Web 服务器监听回环地址。
-  expect(() => serve({}, '0.0.0.0')).toThrow('Orchestrator management requires a loopback Web server')
+  // IPv6 回环同样算回环地址；Host 校验移到请求期后，监听 0.0.0.0 不再在注册阶段抛错。
+  expect(await post({ host: '[::1]:3082', origin: 'http://[::1]:3082' })).toMatchObject({ status: 200 })
+  expect(await post({ host: '0.0.0.0:3082' })).toEqual({ status: 403,
+    body: { error: 'Same-origin management request required' } })
+  expect(() => serve({}, '0.0.0.0')).not.toThrow()
+})
+
+it('keeps the management prefix mounted and explains a pending or failed startup with 200 and 503', async () => {
+  const pending: StartupStatus = { phase: 'locked', detail: '状态目录锁被占用，最多等待 35 秒（已等待 2 秒）',
+    stateDir: 'C:\\state', error: { name: 'Error', message: 'Lock file is already being held' } }
+  const { call, routes } = servePending(pending)
+  // 前缀在运行时创建之前就登记，宽度恰好到 /orchestrator/api，其余 /orchestrator/* 仍归宿主页面路由。
+  expect(routes).toEqual([{ kind: 'prefix', path: '/orchestrator/api' }])
+  // 健康探针在初始化失败时仍返回 200，并给出阶段、原因与状态目录。
+  expect(await call('GET', 'health')).toEqual({ status: 200, body: { ok: false, stage: 'locked', phase: 'locked',
+    detail: pending.detail, error: { name: 'Error', message: 'Lock file is already being held' }, configured: false, paused: false,
+    problem: null, listen: { host: '127.0.0.1', port: 3082 }, machine: { stateDir: 'C:\\state' }, sources: [] } })
+  // 其余接口返回 503 诊断，而不是空体 404。
+  expect(await call('GET', 'state')).toEqual({ status: 503, body: { error: pending.detail, code: 'startupPending',
+    phase: 'locked', detail: pending.detail, stateDir: 'C:\\state' } })
+  const failed = servePending({ phase: 'failed', detail: '', stateDir: '/srv/state' })
+  expect(await failed.call('POST', 'tickets/t9/retry')).toEqual({ status: 503,
+    body: { error: 'dsh-superagent is not ready', code: 'startupPending', phase: 'failed', detail: '', stateDir: '/srv/state' } })
+})
+
+it('serves the runtime on an already mounted prefix once it is attached', async () => {
+  let runtime: HttpHost | undefined
+  // 与 AdminMount 一致：启动状态由取值函数提供，尚未挂上运行时时报告 starting。
+  const { call } = mount(() => runtime, () => runtime
+    ? { phase: 'ready', detail: '', stateDir: '/srv/state' }
+    : { phase: 'starting', detail: '', stateDir: '/srv/state' })
+  // 运行时还没创建：请求已经由本插件的前缀回答，健康探针 200、其余接口 503，宿主不再给出空体 404。
+  expect(await call('GET', 'health')).toMatchObject({ status: 200, body: { ok: false, phase: 'starting' } })
+  expect((await call('GET', 'state')).status).toBe(503)
+  runtime = { ready: Promise.resolve(), store: { settings: () => SettingsSchema.parse({}) },
+    sources: { instances: () => [] }, configured: () => true,
+    machine: { stateDir: '/srv/state' } } as unknown as HttpHost
+  expect(await call('GET', 'health')).toMatchObject({ status: 200,
+    body: { ok: true, stage: 'ready', phase: 'ready', machine: { stateDir: '/srv/state' } } })
 })
 
 it('answers a prompt save that lost a race with 409, and a settings body over 128 KiB with 400', async () => {

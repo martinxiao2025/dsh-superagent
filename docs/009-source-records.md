@@ -133,12 +133,15 @@ interface SourceAdapter {
 
 ## 启动诊断与 404
 
-桌面版曾出现 `/orchestrator` 前缀整体未注册（空体 404）。新实现：
+桌面版曾出现 `/orchestrator` 前缀整体未注册（空体 404）。现在：
 
-- HTTP 注册不再依赖 `webServer.host === '127.0.0.1'`；请求时校验 Host 白名单，非回环请求返回 `403`。
-- 初始化任何步骤失败都不再让插件注册回滚；失败写入结构化日志、`stateDir/startup.json` 与健康接口。
-- 启动记录包含：时间戳、pid、监听端口与 host、构建版本、阶段（`locked`、`store-open`、`http-registered`、`ready`、`failed`）、错误码与错误栈；上一份保留为 `startup.prev.json`。
-- 面板在收到空体 404 时显示诊断提示，指向 `stateDir` 与启动记录位置。
+- 管理路由在 `Runtime` 创建之前就注册（`src/app/admin-mount.ts`），初始化任何步骤失败都不会卸载它。
+- 请求时校验 Host 白名单（`127.0.0.1`、`localhost`、`[::1]` 与实际端口），非回环或非同源请求返回 `403`；注册不再依赖 `webServer.host`。
+- 锁竞争不再立即失败：`acquireStateLock` 最多等待 35 秒（覆盖强杀后 30 秒的锁过期窗口），超时以 `ELOCKED` 结束并进入 `locked` 阶段。
+- 运行时就绪前的接口约定：`GET /orchestrator/api/health` 返回 `200`，带 `phase`、`detail`、`error` 与 `stateDir`；其余接口返回 `503`，body 为 `{ error, code: "startupPending", phase, detail, stateDir }`，不再返回空体。
+- 启动记录 `stateDir/startup.json` 包含时间戳、pid、监听 host/port、阶段（`starting`、`http-registered`、`locked`、`store-open`、`ready`、`failed`）、说明与异常（name/message/stack）；上一份保留为 `startup.prev.json`。
+- 面板把 503 `startupPending` 显示为本地化的启动诊断，指向阶段、原因与 `stateDir`。
+- 2026-11-10 定位到第二个启动失败原因：主会话的工具限制命名了 `bash`，而 Windows 上的 DSH 只提供 `pwsh`，`tools.restrict` 在创建或恢复主会话时抛错；现在只限制宿主实际提供的 shell，`noWait` 对 `bash` 与 `pwsh` 同口径。
 
 排查步骤见 [006 部署](006-deployment.md) 的故障排查一节。
 

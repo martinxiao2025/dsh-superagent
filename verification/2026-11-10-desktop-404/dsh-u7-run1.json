@@ -1,0 +1,40 @@
+{
+  "tag": "run1",
+  "buildHash": "887D0F30D5A082A6",
+  "buildAt": "2026-11-10 17:10:48",
+  "killAt": "17:16:55.480",
+  "startAt": "17:16:56.352",
+  "startDelayMs": 872,
+  "pauseSeconds": 0,
+  "lockBefore": "2026-11-10 17:16:23.005",
+  "lockAfterKill": "2026-11-10 17:16:23.005",
+  "fakeLock": false,
+  "fakeLockRemoved": true,
+  "port": "49733",
+  "exited": false,
+  "timeline": [
+    {
+      "ms": 4022,
+      "status": 200,
+      "phase": "ready",
+      "ok": true,
+      "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel"
+    }
+  ],
+  "startupTimeline": [
+    {
+      "ms": 1026,
+      "at": "2026-11-10 17:16:22.954",
+      "phase": "ready",
+      "previous": "store-open",
+      "previousAt": "2026-11-10 17:16:22.776"
+    }
+  ],
+  "healthStatus": 200,
+  "healthBody": "{\"ok\":true,\"stage\":\"ready\",\"configured\":true,\"paused\":false,\"problem\":null,\"listen\":{\"host\":\"127.0.0.1\",\"port\":49733},\"phase\":\"ready\",\"detail\":\"dsh-superagent ready; the Superagent sidebar entry opens the management panel\",\"machine\":{\"stateDir\":\"C:/Users/61054/.dsh/state/superagent\"},\"sources\":[]}",
+  "stateStatus": 200,
+  "stateBodyLength": 1197,
+  "startupPhase": "ready",
+  "startupPrevPhase": "store-open",
+  "lockAfterStart": "2026-11-10 17:17:00.005"
+}

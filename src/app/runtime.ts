@@ -19,6 +19,8 @@ import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
 import { firstSource, type Deployment, type Machine } from '../deployment.ts'
 import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
+import type { AdminMount } from './admin-mount.ts'
+import type { StateLock } from './startup.ts'
 import type { SetupProblem } from '../setup.ts'
 import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { ticketCard } from './cards.ts'
@@ -53,6 +55,14 @@ declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceH
 const now = (): string => new Date().toISOString()
 
 /**
+ * 插件入口在构造 `Runtime` 之前完成的启动步骤：管理路由已经挂载、状态目录锁已经取得。
+ * 这样取锁失败不会让 `/orchestrator/api` 前缀从未注册，初始化失败也不会让它被卸载。
+ */
+export interface RuntimeBoot {
+  readonly mount: AdminMount
+  readonly lock: StateLock
+}
+/**
  * dsh-superagent 的组合根，连接 `Store`、`Setup`、`Engine`、`SourceRegistry`、`Effects`、`Outbox`、`Passes`、`Sessions`、`Settings`、`Prompts`、`DshExecutor` 和 `MasterAssessor`。
  * 在 Cordis 上下文中为来源插件暴露 `SourceHost` 服务，并协调启动、初始化检查、HTTP 路由注册和优雅关闭。
  * 在打开 SQLite 之前锁定状态目录，使并发进程无法破坏状态或重复迁移。
@@ -79,6 +89,7 @@ export class Runtime extends Service implements SourceHost {
   private readonly stopped = new AbortController()
   private readonly disposers: (() => void)[] = []
   private releaseLock?: () => Promise<void>
+  private readonly boot?: RuntimeBoot
   private closingFlag = false
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
@@ -86,14 +97,21 @@ export class Runtime extends Service implements SourceHost {
   private readonly loops = new Set<{ controller: AbortController; running: Promise<void> }>()
   /** 当主会话工具正在执行引擎命令时非零，用于抑制自触发的领域事件通知。 */
   private quiet = 0
-  constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
+  constructor(ctx: Context, readonly machine: Machine, restart: () => void, boot?: RuntimeBoot) {
     super(ctx, 'orchestrator')
     const runtime = this
-    // 在打开数据库之前锁定状态目录，使其他进程无法并发迁移或写入。
-    mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
+    this.boot = boot
     const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort() }
-    const release = lockSync(machine.stateDir, { stale: 30_000, onCompromised: compromised })
-    this.releaseLock = async () => { release() }
+    if (boot) {
+      // 锁由插件入口在管理路由挂载之后取得；这里只接收释放函数并补登记抢占处理。
+      this.releaseLock = boot.lock.release
+      boot.lock.onCompromised(compromised)
+    } else {
+      // 在打开数据库之前锁定状态目录，使其他进程无法并发迁移或写入。
+      mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
+      const release = lockSync(machine.stateDir, { stale: 30_000, onCompromised: compromised })
+      this.releaseLock = async () => { release() }
+    }
     let opened: Store | undefined
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
@@ -174,7 +192,7 @@ export class Runtime extends Service implements SourceHost {
       this.ready = this.initialize()
     } catch (error) {
       // 如果初始化失败，释放数据库和状态锁，以便进程内重启可以重新获取它们。
-      try { opened?.close() } finally { release() }
+      try { opened?.close() } finally { void this.releaseLock?.().catch(() => { /* 释放失败只影响下次启动的等待时长。 */ }) }
       throw error
     }
   }
@@ -241,8 +259,9 @@ export class Runtime extends Service implements SourceHost {
   /** 在暂停或等待初始化期间暂缓评估、调度和出站投递；来源仍会记录传入的触发器。 */
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }
   private async initialize(): Promise<void> {
-    // 在初始化完成前注册管理 HTTP 路由，使操作者可以在界面中修复初始化问题。
-    this.disposers.push(registerHttp(this.ctx, this.httpHost()))
+    // 管理路由由插件入口先挂载并按启动阶段报告；独立运行时（测试）没有挂载点时仍自行注册。
+    if (this.boot) this.boot.mount.attach(this.httpHost())
+    else this.disposers.push(registerHttp(this.ctx, this.httpHost()))
     if (!await this.setup.run(this.store.settings())) {
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
       return
