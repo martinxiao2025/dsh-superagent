@@ -74,12 +74,12 @@ it('writes a schema 10 database in its current shape once, so nothing reads an o
     basis: { source: 'github', scope: { number: 5 }, row: 'issues', admission: 'listedUnaddressed', observation: true, mode: 'auto' } }
   const thread = { key: 'github:5', ref: { source: 'github', id: '5' }, createdAt: '', subscriptions: [], correlated: [], pending: [], evaluating, meta: {} }
   schema10(path, {
-    settings: { policy: { rules: [{ id: 'copy', name: 'Copy', enabled: true, instruction: 'x', visual: true }] }, executor: { reviewer: 'bob', prepare: 'echo $DSH_TAG_DIR' },
-      sources: { 'github-issue': { enabled: true, config: {} }, github: { enabled: true, config: { mergeCli: 'gh' } } } },
+    settings: { policy: { rules: [{ id: 'copy', name: 'Copy', enabled: true, instruction: 'x' }] }, executor: { prepare: 'echo prepare' },
+      sources: { 'github-main': { kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: 'gh' } } } },
     'settings-version:1': { revision: 1, savedAt: '', source: 'web', policyVersion: '', policyChanged: false, notified: [],
-      settings: { allowedChats: ['oc_team'], members: [], sources: undefined } },
+      settings: { sources: { 'feishu-team': { kind: 'feishu', enabled: true, config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }] } } } } },
     'settings-version:2': { revision: 2, savedAt: '', source: 'orchestrator-tool', policyVersion: '', policyChanged: false, notified: [],
-      settings: { sources: { 'github-issue': { enabled: true, config: {} } } } },
+      settings: { sources: { 'github-main': { kind: 'github', enabled: true, config: {} } } } },
     'prompt-revision': 1,
     'github-ended:8': { at: '2026-09-01T00:00:00Z', reason: 'merged' },
     'problem-dismissed:d3': true,
@@ -100,22 +100,22 @@ it('writes a schema 10 database in its current shape once, so nothing reads an o
   const store = new Store(path)
   expect(store.get('schema')).toBe(SCHEMA_VERSION)
   const settings = store.settings()
-  expect(Object.keys(settings.sources)).toEqual(['github'])
-  expect(settings.sources.github!.config).not.toHaveProperty('mergeCli')
-  expect(settings.policy.rules[0]).not.toHaveProperty('visual')
-  expect(settings.executor).not.toHaveProperty('reviewer')
-  expect(settings.executor.prepare).toBe('echo $DSH_SUPERAGENT_DIR')
+  expect(Object.keys(settings.sources)).toEqual(['github-main'])
+  expect(settings.sources['github-main']).toEqual({ kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: 'gh' } })
+  expect(settings.executor.prepare).toBe('echo prepare')
   // 当前设置是最新的修订版本，由迁移保存，因为最近保存的那份与它们不同。
   const [current, , second, first] = store.settingsHistory()
   expect(current).toMatchObject({ revision: 4, source: 'internal', settings })
   expect(store.get('settings')).toBeUndefined()
-  expect(first).toMatchObject({ source: 'panel', settings: { sources: { feishu: { config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }] } } } } })
-  expect(second).toMatchObject({ source: 'tool', settings: { sources: { 'github-issue': { enabled: true } } } })
+  // 历史修订按原样保留：迁移不改写已保存的设置快照。
+  expect(first).toMatchObject({ source: 'web', settings: { sources: { 'feishu-team': { kind: 'feishu', enabled: true,
+    config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }] } } } } })
+  expect(second).toMatchObject({ source: 'orchestrator-tool', settings: { sources: { 'github-main': { kind: 'github', enabled: true, config: {} } } } })
   expect(store.get('prompt-version:1')).toMatchObject({ legacy: { config: { guides: { release: 'Use guide/github and dsh-tag-feishu.' } } },
     config: { skills: { release: 'Use the github section and dsh-superagent-feishu.' } } })
   // 无效的历史提示词版本会在 legacy 下保留原始值，并回退到前一个版本的配置。
   expect(store.get('prompt-version:2')).toMatchObject({ legacy: { config: { communication: 1 } }, config: store.get<{ config: object }>('prompt-version:1')!.config })
-  expect(store.get('settings-version:3')).toMatchObject({ source: 'panel', settings: { executor: { maxWorkers: 'many' } } })
+  expect(store.get('settings-version:3')).toMatchObject({ source: 'web', settings: { executor: { maxWorkers: 'many' } } })
   const migrated = store.tickets.get('t1')!
   expect(migrated).not.toHaveProperty('meta')
   expect(store.keys('github-ended:')).toEqual([])
@@ -202,7 +202,7 @@ it('changes nothing when one step fails: the database stays at schema 10 as it w
     updatedAt: '2', mandate: mandate({ via: 'listed' }), meta: { sourceTriggerId: 'trig-1', workspace: '/w/fix-1' } }
   // 当前设置必须能通过校验；无效值会中止迁移事务。
   schema10(path, { settings: { executor: { maxWorkers: 'many' } } }, { ticket: [ticket] })
-  expect(() => new Store(path)).toThrow(/^The orchestrator database is unchanged at schema 10: its migration to schema 11 failed: the settings: /)
+  expect(() => new Store(path)).toThrow(/^The orchestrator database is unchanged at schema 10: its migration to schema 11 failed: the current settings: /)
   const db = new DatabaseSync(path)
   expect(db.prepare("SELECT value FROM kv WHERE key='schema'").get()).toEqual({ value: '10' })
   expect(JSON.parse(String(db.prepare("SELECT value FROM ticket WHERE id='t1'").get()!.value))).toMatchObject({ meta: { workspace: '/w/fix-1' } })

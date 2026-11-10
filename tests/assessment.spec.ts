@@ -33,11 +33,12 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
       : (schema as { parse(value: unknown): unknown }).parse(await (commands as unknown as { gh(args: string[]): Promise<unknown> }).gh(['api', rest[0]!]))),
   } as unknown as Commands
   const repo = new MemoryRepositories()
-  const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+  const settings = () => SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} } } })
+  const sources = new SourceRegistry(settings)
   sources.register(githubKind)
   let engine!: Engine
   const host: AssessorHost = {
-    get engine() { return engine }, commands, deployment: testDeployment(), settings: () => SettingsSchema.parse({}),
+    get engine() { return engine }, commands, deployment: testDeployment(), settings,
     threadContext: threadContext ?? (trigger => sources.threadContext(trigger)),
     effects: { enqueue: () => {}, handle: () => {} }, paused: () => false, deliver: async () => {}, candidateCard: async candidate => ({ eval_id: candidate.evalId }),
   }

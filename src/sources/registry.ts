@@ -1,5 +1,5 @@
-/** 已安装来源种类、其配置实例以及引擎的 SourceScope 实现的注册表。 */
-import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
+/** 已安装来源种类、来源记录以及引擎的 SourceScope 实现的注册表。 */
+import { UserError, type ChannelRef, type OutboundMessage, type ScopeResult, type SourceScope, type Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
@@ -7,9 +7,8 @@ import type { ChannelLink, ChannelLinks, SourceInstance, SourceKind, TriggerCont
 
 
 /**
- * 管理已注册的 SourceKind 插件，校验其实例和策略配置，并为引擎实现 SourceScope。
- * 在 HealthBoard 上认领每个已注册种类的健康条目，并为 Runtime、Settings、Outbox 和 MasterAssessor
- * 调节对来源频道、链接、环境变量和线程上下文读取器的访问。
+ * 管理已注册的 SourceKind 插件与用户创建的来源记录，校验记录和策略配置，并为引擎实现 SourceScope。
+ * 记录 ID 是来源身份：触发器、策略、健康项、线程与 KV 键都以它为准；`kind` 只决定由哪个适配器处理。
  */
 export class SourceRegistry implements SourceScope {
   private readonly kinds = new Map<string, SourceKind>()
@@ -41,77 +40,102 @@ export class SourceRegistry implements SourceScope {
   healthEntries(names: readonly string[]): Map<string, HealthEntry> {
     return new Map(names.flatMap(name => { const entry = this.health.get(name); return entry ? [[name, entry] as const] : [] }))
   }
-  kind(id: string): SourceKind | undefined { return this.kinds.get(id) }
-  /** 每个已注册种类的实例按 ID 排序，其后是种类未安装的已存储实例（配置保持存储时的原样）。 */
+  /** 按适配器类型查找已安装的种类。 */
+  kindByName(kind: string): SourceKind | undefined { return this.kinds.get(kind) }
+  /** 按记录 ID 查找该记录使用的适配器类型。 */
+  kindOf(id: string, settings = this.settings()): SourceKind | undefined {
+    const record = settings.sources[id]
+    return record ? this.kinds.get(record.kind) : undefined
+  }
+  /** 存储的来源记录；记录不存在时返回 undefined。 */
+  record(id: string, settings = this.settings()) { return settings.sources[id] }
+  /** 记录 ID 按字典序排序；适配器未安装的记录保持存储时的原样。 */
   instances(settings = this.settings()): (SourceInstance & { installed: boolean })[] {
-    const installed = [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).map(kind => ({ ...this.resolve(kind, settings.sources[kind.kind]), installed: true }))
-    const orphaned = Object.entries(settings.sources).filter(([id]) => !this.kinds.has(id)).map(([id, stored]) => ({ id, kind: id, enabled: stored.enabled, config: stored.config, installed: false }))
-    return [...installed, ...orphaned]
+    return Object.entries(settings.sources).sort(([a], [b]) => a.localeCompare(b)).map(([id, stored]) => {
+      const kind = this.kinds.get(stored.kind)
+      return kind ? { ...this.resolve(id, kind, stored), installed: true } : { id, kind: stored.kind, enabled: stored.enabled, config: stored.config, installed: false }
+    })
   }
+  /** 已安装适配器的类型目录，供面板新增来源时选择。 */
+  kindsList(): SourceKind[] { return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)) }
   instance<C extends Record<string, unknown>>(id: string, settings = this.settings()): SourceInstance<C> | undefined {
-    const kind = this.kinds.get(id)
-    return kind ? this.resolve(kind, settings.sources[id]) as SourceInstance<C> : undefined
+    const record = settings.sources[id]
+    if (!record) return undefined
+    const kind = this.kinds.get(record.kind)
+    return kind ? this.resolve(id, kind, record) as SourceInstance<C> : undefined
   }
+  /** 按记录所属适配器校验提交的 `{ enabled, config }`；记录或适配器缺失时抛出可读错误。 */
   validate(id: string, value: { enabled: boolean; config: unknown }): { enabled: boolean; config: Record<string, unknown> } {
-    const kind = this.kinds.get(id)
-    if (!kind) throw new Error(`Source kind not installed: ${id}`)
+    const record = this.settings().sources[id]
+    if (!record) throw new UserError('sourceNotInstalled', { source: id })
+    const kind = this.kinds.get(record.kind)
+    if (!kind) throw new UserError('sourceNotInstalled', { source: id })
     return { enabled: value.enabled, config: kind.schema.parse(value.config) }
   }
-  /** 根据对应的种类校验提交策略中每个来源的部分；未安装来源种类的策略部分保持存储时的原样。 */
+  /** 根据记录对应的种类校验提交策略中每个来源的部分；未安装适配器的记录保持存储时的原样。 */
   validatePolicy(parts: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown> & { allowed: { id: string; name?: string }[] }> {
+    const settings = this.settings()
     return Object.fromEntries(Object.entries(parts).map(([id, part]) => {
-      const policy = this.kinds.get(id)?.policy
+      const policy = this.kindOf(id, settings)?.policy
       // `admission` 由策略自身的 schema 校验（所有种类共享），其余部分由种类校验。
       const { admission, ...rest } = part
       return [id, policy ? { ...policy.schema.parse(rest), admission: AdmissionTableSchema.parse(admission ?? {}) } : part as Record<string, unknown> & { allowed: { id: string; name?: string }[] }]
     }))
   }
   policyPart(id: string, settings = this.settings()) {
-    const policy = this.kinds.get(id)?.policy
+    const policy = this.kindOf(id, settings)?.policy
     if (!policy) return undefined
     const { admission, ...rest } = settings.policy.sources[id] ?? {}
     const parsed = policy.schema.safeParse(rest)
     return { ...parsed.success ? parsed.data : policy.schema.parse({}), admission: AdmissionTableSchema.safeParse(admission ?? {}).data ?? {} }
   }
   channelAllowed(channel: { source: string; address: Record<string, string> }, settings = this.settings()): boolean {
-    const kind = this.kinds.get(channel.source)
-    if (!kind) return false
-    const instance = this.resolve(kind, settings.sources[channel.source])
+    const instance = this.instance(channel.source, settings)
+    const kind = this.kindOf(channel.source, settings)
+    if (!kind || !instance) return false
     return instance.enabled && (kind.channel?.allowed?.(channel.address, instance.config) ?? true)
   }
-  /** 每个已安装种类的环境变量声明，无论启用还是禁用。 */
-  declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
-    return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => kind.environment ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
+  /** 每条记录的变量声明，无论启用还是禁用；`id` 是记录 ID，`kind` 是适配器类型。 */
+  declarations(settings = this.settings()): { id: string; kind: string; variables: readonly VariableSpec[] }[] {
+    return this.instances(settings).flatMap(instance => {
+      const kind = this.kinds.get(instance.kind)
+      return kind?.environment ? [{ id: instance.id, kind: instance.kind, variables: kind.environment.variables }] : []
+    })
   }
+  /** 每条已启用记录的运行环境；`kind` 是适配器种类，`config` 是该记录的配置。 */
   environments(settings = this.settings()) {
-    return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => {
-      const instance = this.resolve(kind, settings.sources[kind.kind])
-      return kind.environment && instance.enabled ? [{ kind, environment: kind.environment, config: instance.config }] : []
+    return this.instances(settings).flatMap(instance => {
+      const kind = this.kinds.get(instance.kind)
+      return kind?.environment && instance.enabled ? [{ id: instance.id, kind, environment: kind.environment, config: instance.config }] : []
     })
   }
   /**
-   * 通过其频道的种类幂等地发送消息；种类未安装时返回 `'waiting'`，
-   * 目标（或没有频道的种类）永远无法接收时返回 `'gone'`。
+   * 通过其频道的种类幂等地发送消息；记录不存在时返回 `'gone'`，记录存在但适配器未安装时返回 `'waiting'`。
    */
   async send(message: OutboundMessage, commands: Commands): Promise<'sent' | 'gone' | 'waiting'> {
-    const kind = this.kinds.get(message.channel.source)
+    const record = this.settings().sources[message.channel.source]
+    if (!record) return 'gone'
+    const kind = this.kinds.get(record.kind)
     if (!kind) return 'waiting'
     return kind.channel ? kind.channel.send({ commands }, message) : 'gone'
   }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
-    const link = this.kinds.get(channel.source)?.channel?.link(channel.address, links)
+    const kind = this.kindOf(channel.source)
+    const link = kind?.channel?.link(channel.address, links)
     return link ?? { url: '', label: { zh: channel.source, en: channel.source } }
   }
   find(query: string): { threads: string[]; terms: string[] } {
     const found = [...this.kinds.values()].flatMap(kind => kind.find ? [kind.find(query)] : [])
     return { threads: [...new Set(found.flatMap(item => item.threads))], terms: [...new Set(found.flatMap(item => item.terms))] }
   }
-  repliesTo(trigger: Trigger): string | undefined { return this.kinds.get(trigger.source)?.repliesTo?.(trigger) }
+  repliesTo(trigger: Trigger): string | undefined { return this.kindOf(trigger.source)?.repliesTo?.(trigger) }
   threadContext(trigger: Trigger, settings = this.settings()): TriggerContext | undefined {
-    const kind = this.kinds.get(trigger.source)
+    const kind = this.kindOf(trigger.source, settings)
     const context = kind?.threadContext
     if (!kind || !context) return undefined
-    const { config } = this.resolve(kind, settings.sources[kind.kind])
+    const record = settings.sources[trigger.source]
+    if (!record) return undefined
+    const { config } = this.resolve(trigger.source, kind, record)
     return {
       messageId: context.messageId(trigger),
       read: (commands, part, cursor) => context.read(commands, trigger, part, cursor, config),
@@ -123,17 +147,18 @@ export class SourceRegistry implements SourceScope {
     }
   }
   scope(input: { source: string; meta: Record<string, unknown> }, settings = this.settings()): ScopeResult {
-    const kind = this.kinds.get(input.source)
     const stored = settings.sources[input.source]
-    // 没有对应的种类插件时无法评估存储的作用域，因此已配置但插件缺失的来源不监听任何内容。
-    if (!kind) return stored ? { listened: false, reason: 'source_not_installed' } : { listened: true, observed: false }
-    const instance = this.resolve(kind, stored)
+    // 记录不存在等价于该来源未安装：它不再监听任何内容。
+    if (!stored) return { listened: false, reason: 'source_not_installed' }
+    const kind = this.kinds.get(stored.kind)
+    if (!kind) return { listened: false, reason: 'source_not_installed' }
+    const instance = this.resolve(input.source, kind, stored)
     if (!instance.enabled) return { listened: false, reason: 'source_disabled' }
     return kind.scope ? kind.scope({ meta: input.meta }, instance.config) : { listened: true, observed: false }
   }
-  /** 存储的配置校验失败时回退到 schema 默认值并禁用实例。 */
-  private resolve(kind: SourceKind, stored: { enabled: boolean; config: Record<string, unknown> } | undefined): SourceInstance {
-    const parsed = kind.schema.safeParse(stored?.config ?? {})
-    return { id: kind.kind, kind: kind.kind, enabled: parsed.success && (stored?.enabled ?? true), config: parsed.success ? parsed.data : kind.schema.parse({}) }
+  /** 存储的配置校验失败时回退到 schema 默认值并禁用该记录。 */
+  private resolve(id: string, kind: SourceKind, stored: { enabled: boolean; config: Record<string, unknown> }): SourceInstance {
+    const parsed = kind.schema.safeParse(stored.config ?? {})
+    return { id, kind: kind.kind, enabled: parsed.success && stored.enabled, config: parsed.success ? parsed.data : kind.schema.parse({}) }
   }
 }

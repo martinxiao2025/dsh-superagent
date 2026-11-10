@@ -11,7 +11,7 @@ import { preview } from './text.ts'
 export type HealthMap = Record<string, Health>
 /** 解析来源实例的健康项；已启用来源上过期的 `sourceOff` 项按 `starting` 处理。 */
 export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, health: HealthMap) {
-  const kind = sources.kind(instance.kind)
+  const kind = sources.kindByName(instance.kind)
   const starting: Health = { state: 'starting', detail: '' }
   const parts = (kind?.health ?? []).map(name => {
     const entry = health[name]

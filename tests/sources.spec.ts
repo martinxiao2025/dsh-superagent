@@ -27,7 +27,7 @@ import { join } from 'node:path'
 const MEMBER = 'ou_alice'
 function host(overrides: Partial<SourceContextDeps> = {}) {
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'sources-')), 'db.sqlite'))
-  const settings = SettingsSchema.parse({ policy: { sources: { feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }], syncChat: 'oc_team' }, github: { allowed: [{ id: 'alice' }] } } }, eval: { mode: 'auto' }, sources: { feishu: { enabled: true, config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }, { chatId: 'oc_observed', listen: 'all' }], directMessages: true } } } })
+  const settings = SettingsSchema.parse({ policy: { sources: { feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }], syncChat: 'oc_team' }, github: { allowed: [{ id: 'alice' }] } } }, eval: { mode: 'auto' }, sources: { feishu: { kind: 'feishu', enabled: true, config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }, { chatId: 'oc_observed', listen: 'all' }], directMessages: true } }, github: { kind: 'github', enabled: true, config: {} } } })
   store.saveSettings(settings)
   const board = new HealthBoard()
   const sources = new SourceRegistry(() => store.settings(), board)
@@ -98,7 +98,7 @@ describe('feishu source', () => {
       const disposers: (() => unknown)[] = []
       applyFeishu({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
       await vi.waitFor(() => expect(value.health.history).toBeDefined())
-      const registered = value.sources.kind('feishu')
+      const registered = value.sources.kindByName('feishu')
       // 在处置清除已注册条目之前快照健康状态。
       const health = { ...value.health }
       for (const dispose of disposers) await dispose()
@@ -766,7 +766,7 @@ describe('github source', () => {
       const start = async (overrides: Partial<SourceContextDeps>,
         github: { enabled: boolean; config: Record<string, unknown> } = { enabled: true, config: {} }) => {
         const board = new HealthBoard()
-        const settings = SettingsSchema.parse({ sources: { github } })
+        const settings = SettingsSchema.parse({ sources: { github: { kind: 'github', ...github } } })
         const sources = new SourceRegistry(() => settings, board)
         healthOf.set(sources, board)
         const value = host({ sources, ...overrides })
@@ -932,7 +932,7 @@ describe('github source', () => {
       updated_at: '2026-09-09T00:00:00Z' }
     const { routes } = notify(h, [issue(12, { created_at: '2026-08-01T00:00:00Z' })], { 12: [comment] })
     routes['issues/12/comments'] = () => {
-      h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, github: { enabled: false, config: {} } } })
+      h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, github: { kind: 'github', enabled: false, config: {} } } })
       return [comment]
     }
     await pollRound(h)
@@ -1006,7 +1006,7 @@ describe('source context', () => {
   it('reads the configuration of an instance that is on, removes a record set to undefined, and merges ticket meta', () => {
     const h = host()
     expect(h.config('feishu')).toMatchObject({ directMessages: true })
-    h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, feishu: { enabled: false, config: {} } } })
+    h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, feishu: { kind: 'feishu', enabled: false, config: {} } } })
     expect(h.config('feishu')).toBeUndefined()
     h.state.set('github-retry', { 1: {} })
     h.state.set('github-retry', undefined)
@@ -1072,7 +1072,7 @@ ${body}`)
   /** 飞书来源的上下文，位于一个开启飞书来源的新 Store 上，`cli` 作为机器人 CLI。 */
   function consumerSource(path: string, config: Record<string, unknown> = { chats: [] }) {
     const store = new Store(join(dir, 'db.sqlite'))
-    store.saveSettings(SettingsSchema.parse({ sources: { feishu: { enabled: true, config } } }))
+    store.saveSettings(SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config } } }))
     const board = new HealthBoard()
     const sources = new SourceRegistry(() => store.settings(), board)
     sources.register(feishuKind)
@@ -1086,7 +1086,7 @@ ${body}`)
     const commands = new Commands(() => deployment, {}, controller.signal)
     const deps: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment, ready: Promise.resolve(), configured: () => true,
       receive: (trigger: Trigger) => engine.receive(trigger) }
-    const turnOff = () => store.saveSettings(SettingsSchema.parse({ sources: { feishu: { enabled: false, config: { chats: [] } } } }))
+    const turnOff = () => store.saveSettings(SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: false, config: { chats: [] } } } }))
     return { ctx: sourceContextOf(deps, feishuKind), health, store, turnOff }
   }
 
@@ -1208,7 +1208,7 @@ describe('observing the GitHub repository', () => {
     body: 'details', state: 'open', created_at: at(0), updated_at: at(0),
     html_url: `https://github.com/acme/widgets/issues/${number}`, user: { login: 'carol', type: 'User' }, ...fields })
   const observe = (h: ReturnType<typeof host>, config: Record<string, boolean>) =>
-    h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, github: { enabled: true, config } } })
+    h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, github: { kind: 'github', enabled: true, config } } })
   /** GitHub 作为仓库列表及其默认分支作答；对未更改列表的 ETag 请求会返回 304。 */
   function repository(h: ReturnType<typeof host>, answers: { issues?: unknown[]; comments?: unknown[]; reviewComments?: unknown[];
     branch?: { sha: string; checks: unknown[] } }) {

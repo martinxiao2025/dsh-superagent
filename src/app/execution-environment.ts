@@ -17,20 +17,20 @@ export interface Variable { key: string; value: string; description: Localized; 
 
 export const executionRoot = (settings: Settings, stateDir: string): string => settings.executor.directory || join(stateDir, 'work')
 
-/** 按所有者分组列出所有已声明的变量；对于当前已关闭的来源，`enabled` 为 false。 */
+/** 按来源记录分组列出所有已声明的变量；对于当前已关闭的记录，`enabled` 为 false。 */
 export function declaredVariables(sources: SourceRegistry, settings?: Settings): { owner: string; enabled: boolean; variables: readonly VariableSpec[] }[] {
-  const on = new Set(sources.environments(settings).map(item => item.kind.kind))
+  const on = new Set(sources.environments(settings).map(item => item.id))
   return [{ owner: 'executor', enabled: true, variables: EXECUTOR_VARIABLES },
-    ...sources.declarations().map(({ kind, variables }) => ({ owner: kind, enabled: on.has(kind), variables }))]
+    ...sources.declarations().map(({ id, variables }) => ({ owner: id, enabled: on.has(id), variables }))]
 }
 
 export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
   const { deployment, sources, settings, ticket, trigger } = input
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
-  for (const { kind, environment, config } of sources.environments(settings)) {
-    const values = environment.values({ deployment, config, ...trigger ? { trigger } : {} })
-    for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind.kind })
+  for (const { id, environment, config } of sources.environments(settings)) {
+    const values = environment.values({ deployment, config, ...trigger?.source === id ? { trigger } : {} })
+    for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: id })
   }
   return result
 }

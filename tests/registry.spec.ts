@@ -4,7 +4,7 @@ import { SettingsSchema } from '../src/policy.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import type { SourceKind } from '../src/sources/kind.ts'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { OutboundMessage } from '../src/core/index.ts'
+import { UserError, type OutboundMessage } from '../src/core/index.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
@@ -20,26 +20,27 @@ const probe: SourceKind<{ interval: number }> = {
 }
 
 describe('Source registry', () => {
-  it('lists every installed kind with defaults, in id order, followed by stored instances whose kind is not installed', () => {
-    const settings = SettingsSchema.parse({ sources: { probe: { enabled: false, config: { interval: 9 } }, retired: { enabled: true, config: { x: 1 } } } })
+  it('lists the stored records in id order, marking those whose kind is not installed', () => {
+    const settings = SettingsSchema.parse({ sources: { probe: { kind: 'probe', enabled: false, config: { interval: 9 } }, retired: { kind: 'retired', enabled: true, config: { x: 1 } } } })
     const sources = new SourceRegistry(() => settings)
     sources.register(probe); sources.register(githubKind)
     expect(sources.instances()).toEqual([
-      { id: 'github', kind: 'github', enabled: true, config: { repository: '', cli: '', pollSeconds: 60, failuresBeforeError: 3,
-        observeIssues: false, observePulls: false, observeComments: false, observeCi: false }, installed: true },
       { id: 'probe', kind: 'probe', enabled: false, config: { interval: 9 }, installed: true },
       { id: 'retired', kind: 'retired', enabled: true, config: { x: 1 }, installed: false },
     ])
+    expect(sources.kindsList().map(kind => kind.kind)).toEqual(['github', 'probe'])
   })
-  it('validates submitted instances with the kind schema and refuses kinds that are not installed', () => {
-    const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+  it('validates submitted instances with the kind schema and refuses records or kinds that are not stored', () => {
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { probe: { kind: 'probe', enabled: true, config: {} } } }))
     sources.register(probe)
     expect(sources.validate('probe', { enabled: true, config: {} })).toEqual({ enabled: true, config: { interval: 5 } })
     expect(() => sources.validate('probe', { enabled: true, config: { interval: 0 } })).toThrow()
-    expect(() => sources.validate('missing', { enabled: true, config: {} })).toThrow('not installed')
+    expect(() => sources.validate('missing', { enabled: true, config: {} })).toThrow(UserError)
+    const retired = new SourceRegistry(() => SettingsSchema.parse({ sources: { retired: { kind: 'retired', enabled: true, config: {} } } }))
+    expect(() => retired.validate('retired', { enabled: true, config: {} })).toThrow(UserError)
   })
   it('sends, links and reads a kind\'s Threads through its own channel and context, and nothing for a kind without them', async () => {
-    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { probe: { enabled: true, config: { interval: 7 } } } }))
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { probe: { kind: 'probe', enabled: true, config: { interval: 7 } } } }))
     const sent: OutboundMessage[] = []
     const read: unknown[] = []
     sources.register({ ...probe,
@@ -55,8 +56,8 @@ describe('Source registry', () => {
       text: 'hi', kind: 'reply' })
     expect(await sources.send(message('probe'), commands)).toBe('sent')
     expect(sent).toEqual([message('probe')])
-    // 未安装的类型会让其回复保持等待；指向它的链接没有页面。
-    expect(await sources.send(message('retired'), commands)).toBe('waiting')
+    // 没有记录的来源视为已删除，其回复无法投递；指向它的链接没有页面。
+    expect(await sources.send(message('retired'), commands)).toBe('gone')
     expect(sources.link(message('probe').channel, {})).toEqual({ url: 'https://probe/r', label: { zh: '探针', en: 'Probe' } })
     expect(sources.link(message('retired').channel, {})).toEqual({ url: '', label: { zh: 'retired', en: 'retired' } })
     const trigger = { id: 't1', source: 'probe', threads: [{ source: 'probe', id: '1' }], actor: { source: 'probe', id: 'u' }, human: true,
@@ -81,7 +82,7 @@ describe('Source registry', () => {
     const unregister = sources.register(githubKind)
     expect(() => sources.register({ ...probe, health: ['github'] })).toThrow('declares the health entry github')
     for (const name of ['runtime', 'reply', 'sync:github']) expect(() => sources.register({ ...probe, health: ['probe', name] })).toThrow(name)
-    expect(sources.kind('probe')).toBeUndefined()
+    expect(sources.kindByName('probe')).toBeUndefined()
     sources.register({ ...probe, health: ['probe'] })
     const context = (kind: { kind: string; health: readonly string[] }) => sourceContextOf({ sources } as unknown as SourceContextDeps, kind)
     const first = context(githubKind)
@@ -99,7 +100,8 @@ describe('Source registry', () => {
     expect(board.all.github).toEqual({ state: 'ready', detail: 'again' })
   })
   it('names the Trigger whose message a Trigger\'s message answers, where its kind can', () => {
-    const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: {} },
+      github: { kind: 'github', enabled: true, config: {} } } }))
     sources.register(feishuKind); sources.register(githubKind)
     const reply = feishuTrigger({ message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: 'ou_alice', sender_type: 'user',
       content: 'yes', create_time: '1757376000000', parent_id: 'om_1' }, 'ou_bot', 'cli_bot')!
@@ -124,7 +126,8 @@ describe('Source registry', () => {
     expect(sources.instance('probe')).toBeUndefined()
   })
   it('validates each Source\'s part of the Policy with its kind, keeping parts of kinds that are not installed as stored', () => {
-    const sources = new SourceRegistry(() => SettingsSchema.parse({ policy: { sources: { feishu: { allowed: [{ id: 'ou_alice' }] } } } }))
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ policy: { sources: { feishu: { allowed: [{ id: 'ou_alice' }] } } },
+      sources: { feishu: { kind: 'feishu', enabled: true, config: {} }, github: { kind: 'github', enabled: true, config: {} } } }))
     sources.register(feishuKind); sources.register(githubKind)
     expect(sources.validatePolicy({ feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }] }, retired: { allowed: [], x: 1 } }))
       .toEqual({ feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }], syncChat: '', admission: {} }, retired: { allowed: [], x: 1 } })
@@ -135,7 +138,8 @@ describe('Source registry', () => {
     expect(sources.policyPart('probe')).toBeUndefined()
   })
   it('allows a reply only on a Channel whose Source still listens to its chat', () => {
-    const settings = SettingsSchema.parse({ sources: { feishu: { enabled: true, config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }], directMessages: false } } } })
+    const settings = SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }], directMessages: false } },
+      github: { kind: 'github', enabled: true, config: {} } } })
     const sources = new SourceRegistry(() => settings)
     expect(sources.channelAllowed({ source: 'feishu', address: { chatId: 'oc_team' } })).toBe(false)
     sources.register(feishuKind); sources.register(githubKind)
@@ -146,7 +150,7 @@ describe('Source registry', () => {
     expect(sources.channelAllowed({ source: 'github', address: { number: '7' } })).toBe(true)
   })
   it('delivers a reply to a direct message under the default settings', async () => {
-    const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: {} } } }))
     sources.register(feishuKind)
     const trigger = feishuTrigger({ message_id: 'om_dm', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: 'ou_alice', sender_type: 'user',
       content: 'fix it', create_time: '1757376000000' }, 'ou_bot', 'cli_bot')!

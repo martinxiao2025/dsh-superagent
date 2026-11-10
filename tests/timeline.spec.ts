@@ -18,10 +18,11 @@ beforeEach(() => {
   store = new Store(join(directory, 'orchestrator.sqlite'))
 })
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }) })
-const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+const settings = () => SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} } } })
+const sources = new SourceRegistry(settings)
 sources.register(githubKind)
 const host = () => ({ store, sources, links: (channel: ChannelRef) => githubLink(channel.address, {}) })
-const engine = () => new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(SettingsSchema.parse({}), sources),
+const engine = () => new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(settings(), sources),
   assessor: { request: () => {} }, executor: { start: async () => {}, deliver: async () => {}, stop: async () => {} },
   outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
 const comment = (id: string, at: string): Trigger => ({ id, source: 'github', threads: [{ source: 'github', id: '7' }], actor: { source: 'github', id: 'alice' },

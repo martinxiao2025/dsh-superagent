@@ -80,7 +80,7 @@ function host(config: Record<string, unknown> = {}) {
   writeFileSync(calls, '')
   const cli = programSource(dir, 'glab', glabBody(fixture, calls, PROJECT))
   const store = new Store(join(dir, 'oracle.sqlite'))
-  store.saveSettings(SettingsSchema.parse({ eval: { mode: 'auto' }, sources: { gitlab: { enabled: true, config: { project: PROJECT, ...config } } } }))
+  store.saveSettings(SettingsSchema.parse({ eval: { mode: 'auto' }, sources: { gitlab: { kind: 'gitlab', enabled: true, config: { project: PROJECT, ...config } } } }))
   const board = new HealthBoard()
   const sources = new SourceRegistry(() => store.settings(), board)
   sources.register(gitlabKind)

@@ -34,7 +34,6 @@ function step<T>(record: string, work: () => T): T {
 }
 /** 就地重写所有模式 10 记录为模式 11 结构。 */
 export function migrateTo11(store: Store): void {
-  step('the settings', () => { migrateSettingsRecords(store) })
   step('the prompt versions', () => { migratePrompts(store) })
   const answers = new Map<string, string[]>()
   for (const name of store.keys('answer-ready:')) {
@@ -176,77 +175,7 @@ function settingsAsVersions(store: Store): void {
   store.delete('settings')
 }
 
-/** 模式 11 之前版本记录的设置保存来源名称，映射到当前的 `SettingsOrigin` 值。 */
-const ORIGINS: Readonly<Record<string, SettingsOrigin>> = { web: 'panel', 'orchestrator-tool': 'tool', 'policy-sync': 'sync', 'member-sync': 'sync' }
-/** 从 dsh-superagent 中移除的来源类型；统一的 `github` 来源现在通过通知导入 Issue。 */
-const REMOVED_SOURCES: readonly string[] = ['github-issue']
-/**
- * 将当前和历史设置记录升级到模式 11 结构：从活动设置中剥离已移除的来源类型，
- * 同时在历史修订中保留它们，并映射历史来源名称。
- */
-function migrateSettingsRecords(store: Store): void {
-  const stored = store.get<unknown>('settings')
-  if (stored !== undefined) {
-    const settings = SettingsSchema.parse(migrateSettings(stored))
-    store.set('settings', { ...settings, sources: Object.fromEntries(Object.entries(settings.sources).filter(([id]) => !REMOVED_SOURCES.includes(id))) })
-  }
-  // 保持无法解析的历史修订原样，使损坏的历史条目不会阻塞启动。
-  for (const name of store.keys('settings-version:')) {
-    const version = store.get<{ source: string; settings: unknown }>(name)!
-    const settings = SettingsSchema.safeParse(migrateSettings(version.settings))
-    store.set(name, { ...version, source: ORIGINS[version.source] ?? version.source, ...settings.success ? { settings: settings.data } : {} })
-  }
-}
 interface Member { name?: string; feishuId?: string; github?: string }
-/**
- * 将旧版扁平设置（Policy 中的会话列表、顶层暂停标志）或模式 11 之前的领域设置转换为当前领域块：
- * 剥离被规则说明和提示词取代的字段（执行器审阅者和分支前缀、规则 `visual` 标志、`autoMergeLineLimit`、
- * 来源 `authority`、GitHub `mergeCli`），把 `paused` 提取到顶层，并将跨来源的 `members` 拆分为各来源的 `policy.sources` 条目。
- */
-export function migrateSettings(value: unknown): unknown {
-  if (!isObject(value)) return value
-  if (!('members' in value || 'allowedChats' in value || 'admission' in value)) return withoutRemovedFields(value)
-  const old = value as { models?: { orchestrator?: unknown; worker?: unknown }; paused?: boolean; allowedChats?: string[]; members?: unknown[];
-    allowDirectMessages?: boolean; pollSeconds?: number; maxWorkers?: number; admission?: { mode?: string; chats?: string[]; timeoutSeconds?: number; rules?: unknown[] } }
-  const chats = new Map<string, 'mentions' | 'all'>()
-  for (const chatId of old.allowedChats ?? []) chats.set(chatId, 'mentions')
-  // 观察到的会话仅在准入启用时才处于活动状态。
-  if (old.admission?.mode !== 'off') for (const chatId of old.admission?.chats ?? []) chats.set(chatId, 'all')
-  const feishu = { chats: [...chats].map(([chatId, listen]) => ({ chatId, listen })), directMessages: old.allowDirectMessages ?? true }
-  return withoutRemovedFields({
-    sources: { feishu: { enabled: true, config: feishu }, github: { enabled: true, config: { pollSeconds: old.pollSeconds ?? 60 } } },
-    policy: { ...(old.members ? { members: old.members } : {}), ...(old.admission?.rules ? { rules: old.admission.rules } : {}) },
-    eval: { ...(old.admission?.mode ? { mode: old.admission.mode } : {}), ...(old.admission?.timeoutSeconds ? { timeoutSeconds: old.admission.timeoutSeconds } : {}),
-      model: old.models?.orchestrator ?? null },
-    executor: { model: old.models?.worker ?? null, ...(old.maxWorkers ? { maxWorkers: old.maxWorkers } : {}), paused: old.paused ?? false },
-  })
-}
-function withoutRemovedFields(value: Stored): Stored {
-  const { executor, policy, sources, ...rest } = value as { executor?: Stored; policy?: Stored; sources?: Record<string, Stored> }
-  // `paused` 现在是顶层设置，而不再是 `executor` 上的字段。
-  const { reviewer: _reviewer, visualReviewer: _visualReviewer, branchPrefix: _branchPrefix, paused, ...kept } = executor ?? {}
-  const { members, memberChat, autoMergeLineLimit: _limit, rules: storedRules, ...policyRest } = policy ?? {}
-  const rules = Array.isArray(storedRules) ? storedRules.map((rule: unknown) => { if (!isObject(rule)) return rule; const { visual: _visual, ...fields } = rule; return fields })
-    : storedRules
-  const people = Array.isArray(members) ? members as Member[] : undefined
-  const parts = people ? {
-    feishu: { allowed: people.filter(member => member.feishuId).map(member => ({ id: member.feishuId!, ...(member.name ? { name: member.name } : {}) })),
-      ...(memberChat ? { syncChat: memberChat } : {}) },
-    github: { allowed: people.filter(member => member.github).map(member => ({ id: member.github! })) },
-  } : undefined
-  // GitHub 来源不再配置专用合并账户；自动合并策略现在位于提示词中。
-  const withoutMerge = (id: string, config: unknown) => { if (id !== 'github' || !isObject(config)) return config; const { mergeCli: _mergeCli, ...fields } = config; return fields }
-  const instances = sources ? Object.fromEntries(Object.entries(sources).map(([id, instance]) => {
-    const { authority: _authority, ...fields } = instance
-    return [id, 'config' in fields ? { ...fields, config: withoutMerge(id, fields.config) } : fields]
-  })) : undefined
-  // 重写 `prepare` 命令中来自项目早期名称的环境变量前缀。
-  if (typeof kept.prepare === 'string') kept.prepare = kept.prepare.replace(/\bDSH_(?:TAG|GO|FREELANCER)_/g, 'DSH_SUPERAGENT_')
-  return { ...rest, ...(typeof paused === 'boolean' ? { paused } : {}), ...(executor ? { executor: kept } : {}),
-    ...(instances ? { sources: instances } : {}),
-    ...(policy ? { policy: { ...policyRest, ...(rules ? { rules } : {}), ...(parts ? { sources: parts } : {}) } } : {}) }
-}
-
 /** 团队部分出现之前保存的提示词配置结构，当时所有部分（包括固定部分）都可编辑。 */
 const LegacyPromptConfigSchema = z.object({ shared: z.string(), orchestrator: z.string(), worker: z.string(), guides: z.record(z.string(), z.string()) })
 /** 旧版提示词配置中的引导名称，它们现在是固定的内置提示词部分或技能。 */
