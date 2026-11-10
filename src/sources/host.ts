@@ -1,5 +1,5 @@
 /** 连接来源插件与应用的宿主和上下文接口；Web 面板也会导入，因此不得导入仅限 Node 的模块。 */
-import type { ChannelRef, ReceiveResult, OutboundMessage, Thread, ThreadFact, ThreadRef, Ticket, Trigger } from '../core/index.ts'
+import type { ChannelRef, ReceiveResult, OutboundMessage, ScheduledTicket, Thread, ThreadFact, ThreadRef, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { Deployment, ResolvedSource } from '../deployment.ts'
 import type { SourceRegistry } from './registry.ts'
@@ -14,6 +14,14 @@ export const HEALTH_TEXT = {
   feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
   feishuBotMissing: 'Waiting for the Feishu bot',
   pollFailures: '{count} consecutive failed polls; last: {error}',
+  pipelineOff: 'The pipeline record is off',
+  pipelineUnset: 'Waiting for configuration: {detail}',
+  pipelineRunning: 'Running the scheduled pipeline',
+  pipelineDone: 'Opened {opened} tickets, wrote back {written}, deferred {deferred}',
+  pipelineRunFailed: 'Pipeline run failed: {error}',
+  pipelineCode: 'Code at {commit}',
+  pipelineTasks: '{total} task items, {pending} pending',
+  pipelineWritebackFailed: 'Writeback failed: {error}',
 } as const
 export type HealthCode = keyof typeof HEALTH_TEXT
 export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail: string; at?: string; code?: HealthCode; values?: Record<string, string> }
@@ -35,6 +43,8 @@ export interface SourceContext {
   /** 这条记录解析出的来源；记录尚未通过部署检查时为 undefined。 */
   readonly source: ResolvedSource | undefined
   readonly commands: Commands
+  /** 应用状态目录；流水线等需要自有工作目录的来源使用它。 */
+  readonly stateDir: string
   readonly ready: Promise<void>
   /** 设置解析出仓库和账号后为 true；来源只在此时轮询。 */
   configured(): boolean
@@ -44,6 +54,8 @@ export interface SourceContext {
   config<C extends Record<string, unknown>>(): C | undefined
   /** 把触发器接入引擎并安排下一次评估；调用方应在推进读取游标前等待完成。 */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
+  /** 定时准入：按来源配置直接创建工单，不经过评估；同一触发器幂等。 */
+  schedule(input: ScheduledTicket): { ticketId: string; created: boolean }
   atomic<T>(work: () => T): T
   /** 来源作用域的 KV 记录（例如读取游标）；设置 `undefined` 会删除条目。 */
   state: { get<V>(key: Key<V>): V | undefined; set<V>(key: Key<V>, value: V | undefined): void; keys<V>(family: Family<V, never>): Key<V>[] }

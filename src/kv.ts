@@ -57,6 +57,12 @@ export const KV = {
     history: family<string, [record: string, chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [record: string, chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  /**
+   * 任务流水线：按记录保存最近一次运行状态与任务项状态；
+   * 任务项状态用稳定键索引，用于去重、续跑与回写。
+   */
+  pipeline: { state: family<import('./pipeline/runner.ts').RunState, [record: string]>('pipeline-state:'),
+    items: family<import('./pipeline/tasks.ts').ItemRecords, [record: string]>('pipeline-items:') },
   /** GitLab Source: 每个记录、每个流（issues/merge_requests）独立的光标，以及每个记录与 Thread 的 notes 光标。 */
   gitlab: { cursor: family<string, [record: string, stream: 'issues' | 'merge_requests']>('gitlab-cursor:'),
     notes: family<string, [record: string, thread: string]>('gitlab-notes:') },

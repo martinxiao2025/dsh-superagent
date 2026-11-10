@@ -41,7 +41,7 @@ function host(overrides: Partial<SourceContextDeps> = {}, records: Record<string
   const receive = vi.fn(async (trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
   // 在存储中记录出站消息，而不发送它们。
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
-    ready: Promise.resolve(), configured: () => true, receive, ...overrides }
+    stateDir: '', ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   // 来源的函数接收上下文；插件条目与类型回调接收宿主，宿主会构建每个类型的上下文。
   const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }, id: string) => sourceContextOf(parts, kind, id) }
   // 测试直接调用各类型的来源函数，所以每种类型各给一个上下文：默认返回的是 GitHub 上下文，
@@ -1094,7 +1094,7 @@ ${body}`)
     const deployment = testDeployment({ feishu: testFeishu({ cli: path }) })
     const health = board.all
     const commands = new Commands(() => deployment, {}, controller.signal)
-    const deps: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment, ready: Promise.resolve(), configured: () => true,
+    const deps: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment, stateDir: '', ready: Promise.resolve(), configured: () => true,
       receive: (trigger: Trigger) => engine.receive(trigger) }
     const turnOff = () => store.saveSettings(SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: false, config: { chats: [] } } } }))
     return { ctx: sourceContextOf(deps, feishuKind, 'feishu'), health, store, turnOff }

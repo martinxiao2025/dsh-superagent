@@ -384,6 +384,15 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/sources/feishu-read.ts` | 对触发器消息、其根、父级和话题的 `feishu/` 读取，以及 `feishuThreadContext`（把它们的图片一并提供给评估） |
 | `src/sources/admission-context.ts` | 评估起步时的有界窗口：通过其 kind 读取的触发器线程前几页，以及触发器周围的消息 |
 | `src/sources/feishu-image.ts` | 把飞书消息中的图片作为附件读取给评估会话 |
+| `src/pipeline/pipeline.ts` | `pipeline` 来源种类与适配器：配置字段、健康条目、监听范围，以及把来源上下文组装为运行器能力 |
+| `src/pipeline/config.ts` | 流水线平铺配置架构、列映射、待办状态集合与配置问题检查 |
+| `src/pipeline/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解、去重规划与稳定键 |
+| `src/pipeline/task-source.ts` | 任务源端口 `TaskSourcePort` 及按 `kind` 创建 Excel / 飞书适配器 |
+| `src/pipeline/excel.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
+| `src/pipeline/feishu.ts` | 飞书知识库任务源：节点解析、文档纯文本读取、Markdown 表格与复选框还原 |
+| `src/pipeline/code.ts` | 代码源同步：按来源记录解析远端地址、注册目录凭据、初始化/快进合并并返回提交 |
+| `src/pipeline/runner.ts` | 流水线运行器：运行状态机、单飞循环、并发准入、等待工单、失败重试与崩溃恢复 |
+| `src/pipeline/writeback.ts` | 任务结果回写：按任务聚合状态，仅更新 CSV/TSV 匹配行；`.xlsx` 与飞书明确报未支持 |
 | `src/client/index.tsx` | 客户端插件入口：侧边栏条目、主面板，以及 DeepSeek Harness 插件管理器中的页面 |
 | `src/client/app.tsx` | 面板：页头、搜索、术语表、标签页以及当前路由的页面 |
 | `src/client/provider.tsx` | 每个页面从宿主读取的内容：文案、调用、导航、通知、状态轮询，以及 `restart`（在 dsh-superagent 重启期间快速读取状态） |
@@ -407,7 +416,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/locales.ts` | 两种语言的全部文案，以及 [001 领域模型](001-domain.md) 的术语表 |
 | `src/client/client.css`、`css.d.ts` | 面板的样式表，以文本加载 |
 
-`src/sources/github.ts`、`src/sources/gitlab.ts` 和 `src/sources/feishu.ts` 导出适配器，由 `src/sources/adapters.ts` 汇总；主插件启动后为每条已存储来源记录运行其适配器。`package.json` 没有来源子路径导出，`cordis.patch.yml` 只插入主插件和两个会话预设。
+`src/sources/github.ts`、`src/sources/gitlab.ts`、`src/sources/feishu.ts` 和 `src/pipeline/pipeline.ts` 导出适配器，由 `src/sources/adapters.ts` 汇总；主插件启动后为每条已存储来源记录运行其适配器。`package.json` 没有来源子路径导出，`cordis.patch.yml` 只插入主插件和两个会话预设。
 
 ## 测试
 
@@ -450,6 +459,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
+| `tests/scheduled.spec.ts` | 定时准入：不经过评估直接建单、显式授权依据、同一触发器幂等，以及流水线与代码来源记录停用后的授权重新校验 |
+| `tests/pipeline.spec.ts` | 任务流水线：CSV/TSV 与 `.xlsx` 读取、拆解与去重、飞书表格/复选框解析、CSV 回写、代码同步与开单/重试/回写的端到端状态机 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |
 | `tests/panel-settings.spec.tsx`、`panel-prompts.spec.tsx`、`panel-deployment.spec.tsx`、`panel-panel.spec.tsx` | 设置分组、草稿和历史、提示词、部署页面，以及面板的搜索、术语表和路由记忆 |
