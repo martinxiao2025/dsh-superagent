@@ -222,6 +222,11 @@ export function settingsPolicy(settings: Settings, sources: SourceScope): Policy
       const { source } = basis
       const current = source && basis.scope ? listened(sources, source, basis.scope) : undefined
       if (current && !current.listened) return false
+      // 定时任务源的授权：代码来源与流水线记录都必须仍然有效；任务项标识缺失视为无效。
+      if (basis.via === 'scheduled') {
+        if (!basis.pipeline || !basis.task || !source || !basis.scope) return false
+        return !!current?.listened && listened(sources, basis.pipeline, { scheduled: true }).listened
+      }
       const rulesOn = (rules: string[] | undefined) => (rules ?? []).every(id => settings.policy.rules.some(rule => rule.enabled && rule.id === id))
       // 显式跟进保持有效；推断的跟进要求 auto 模式且匹配的规则仍启用。
       if (basis.via === 'followup') return mandate.strength === 'explicit' || (mode === 'auto' && rulesOn(basis.rules))

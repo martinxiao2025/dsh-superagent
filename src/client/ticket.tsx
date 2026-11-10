@@ -73,6 +73,7 @@ function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: stri
     if (item.name === 'mode' || item.name === 'addressed') return valueLabel(t, item.name, item.value)
     if (item.name === 'admission') return valueLabel(t, 'admissionCell', item.value)
     if (item.name === 'rules') return item.value.map(rule => rule.name).join(t('listSeparator'))
+    if (item.name === 'scheduled') return `${t('basis.scheduled')} · ${item.value}`
     return item.name === 'sender' ? item.value : t('yes')
   }
   const { legacy } = ticket.basis

@@ -1,7 +1,8 @@
 /** 领域引擎：核心的唯一入口，以及调用方获得的各角色接口。 */
 import { UserError } from './errors.ts'
-import { isoTime, liveTicket } from './model.ts'
-import type { ChannelRef, Decision, PolicyEffect, ThreadRef, Ticket, Trigger } from './model.ts'
+import { key } from './ids.ts'
+import { isoTime, liveTicket, threadKey } from './model.ts'
+import type { ChannelRef, Decision, Mandate, PolicyEffect, ThreadRef, Ticket, Trigger } from './model.ts'
 import type { Candidate, Repositories } from './ports.ts'
 import type { EngineOptions } from './part.ts'
 import { Assignments, type WorkerReport } from './assignments.ts'
@@ -15,6 +16,21 @@ export type { WorkerReport } from './assignments.ts'
 export type { Outcome } from './evals.ts'
 export type { ReceiveResult } from './intake.ts'
 export type { Reply, ReplyRequest } from './replies.ts'
+
+/** 流水线定时准入的输入：触发器决定线程与来源，标题、范围与名称决定工单与工作树。 */
+export interface ScheduledTicket {
+  trigger: Trigger
+  /** 流水线记录 ID，用于授权重新校验。 */
+  pipeline: string
+  /** 任务项标识，用于授权审计与去重。 */
+  task: string
+  title: string
+  scope: string
+  /** 工作树短名称；缺省时由工单 ID 派生。 */
+  name?: string
+  /** 记录到决策中的原因文本。 */
+  reason?: string
+}
 
 /**
  * 变更触发器、线程、决策、工单和任务分配的唯一事务性入口。
@@ -46,6 +62,38 @@ export class Engine {
    * 在该线程的评估运行期间到达的触发器会一起等待下一次评估。
    */
   receive(trigger: Trigger): ReceiveResult { return this.repo.atomic(() => this.intake.receive(trigger)) }
+  /**
+   * 定时准入：流水线任务源按配置直接创建工单，不经过模型评估。
+   * 同一触发器只创建一个工单；重复调用返回既有工单且不重复派工。
+   * @returns 由该触发器创建的工单及其是否为本轮新建。
+   */
+  schedule(input: ScheduledTicket): { ticketId: string; created: boolean } {
+    return this.repo.atomic(() => {
+      const trigger = input.trigger
+      const ticketId = key('ticket', trigger.id)
+      const existing = this.repo.tickets.get(ticketId)
+      if (existing) return { ticketId, created: false }
+      const at = this.now()
+      const ref = trigger.threads[0]!
+      const threadKeyValue = threadKey(ref)
+      const thread = this.repo.threads.get(threadKeyValue)
+        ?? { key: threadKeyValue, ref: { source: ref.source, id: ref.id }, createdAt: at, subscriptions: [], correlated: [], pending: [], meta: {} }
+      if (!thread.lastAt || trigger.at > thread.lastAt) thread.lastAt = trigger.at
+      this.repo.threads.save(thread)
+      this.repo.triggers.save(trigger)
+      const policyVersion = this.options.policy().version
+      const mandate: Mandate = { strength: 'explicit', policyVersion, scope: input.scope, actor: trigger.actor,
+        basis: { via: 'scheduled', source: trigger.source, scope: trigger.meta, pipeline: input.pipeline, task: input.task } }
+      const decision: Decision = { id: key('decision', trigger.id), evalId: '', threadKey: threadKeyValue, triggerIds: [trigger.id],
+        policyVersion, at, kind: 'accept', reason: [{ code: 'said', values: { text: input.reason ?? 'Scheduled task' } }], strength: 'explicit',
+        ticketId, mandate }
+      this.tickets.create(ticketId, decision.id, mandate, { triggerIds: [trigger.id], primary: trigger.id }, { kind: 'accept', title: input.title,
+        scope: input.scope, reason: input.reason ?? 'Scheduled task', ...(input.name ? { name: input.name } : {}) }, at)
+      this.repo.decisions.save(decision)
+      this.repo.triggers.saveDisposition(trigger.id, { evalId: '', decisionId: decision.id, fanout: [ticketId], at })
+      return { ticketId, created: true }
+    })
+  }
   /**
    * 某个来源请求让一个未结束的工单关注其某个线程，例如其拉取请求的线程；`own` 表示该工单打开了该线程：
    * 工单订阅它，而 ready 报告只有在其 `followsDone` 成立时才结束工单（见 `Tickets.followsDone`）。
@@ -247,10 +295,13 @@ export class Engine {
   policyChanged(from: string, to: string, effects: ReadonlyMap<string, PolicyEffect> = new Map()): void {
     this.repo.atomic(() => { this.tickets.policyChanged(from, to, effects); this.evals.policyChanged(from, to) })
   }
+
+  /** 引擎当前使用的时钟；测试可注入固定时间。 */
+  private now(): string { return this.options.now?.() ?? new Date().toISOString() }
 }
 
 /** 来源向引擎询问和告知的内容。 */
-export type EngineForSources = Pick<Engine, 'receive' | 'bindThread' | 'threadClosed'>
+export type EngineForSources = Pick<Engine, 'receive' | 'bindThread' | 'threadClosed' | 'schedule'>
 /** 主会话向引擎询问的内容。 */
 export type EngineForMainSession = Pick<Engine, 'candidate' | 'candidateDelivered' | 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'>
 /** 人通过面板或主会话向引擎询问的内容。 */

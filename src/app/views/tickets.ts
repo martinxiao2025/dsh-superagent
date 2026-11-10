@@ -10,7 +10,7 @@ import { markdown, preview } from './text.ts'
 export type BasisFact =
   | { name: 'addressed'; value: 'mention' | 'direct' } | { name: 'followup' } | { name: 'admission'; value: AdmissionCell } | { name: 'observation' }
   | { name: 'mode'; value: AcceptMode } | { name: 'rules'; value: { id: string; name: string }[] } | { name: 'sender'; value: string }
-  | { name: 'legacyAuthority'; value: string } | { name: 'bot' }
+  | { name: 'legacyAuthority'; value: string } | { name: 'bot' } | { name: 'scheduled'; value: string }
 /**
  * 按阅读顺序提取可展示的授权准入信息（省略接收范围，它只用于重新校验），
  * 并把仅有 `authority` 的前 scope 时期记录标记为 `legacy`。
@@ -19,7 +19,8 @@ export function basisFacts(basis: MandateBasis, rule: Snapshot['rule']): { facts
   const facts: BasisFact[] = []
   if (basis.sender) facts.push({ name: 'sender', value: basis.sender })
   if (basis.via === 'bot') facts.push({ name: 'bot' })
-  if (basis.via !== 'followup' && basis.addressed) facts.push({ name: 'addressed', value: basis.addressed })
+  if (basis.via !== 'followup' && basis.via !== 'scheduled' && basis.addressed) facts.push({ name: 'addressed', value: basis.addressed })
+  if (basis.via === 'scheduled') facts.push({ name: 'scheduled', value: basis.task })
   // 已导入的依据已在 `authority` 中记录其后续来源。
   if (basis.via === 'followup' && !basis.authority) facts.push({ name: 'followup' })
   if (basis.via === 'admission') facts.push({ name: 'admission', value: basis.cell })

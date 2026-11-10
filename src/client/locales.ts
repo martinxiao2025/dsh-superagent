@@ -33,6 +33,9 @@ const TEXT = {
   'source.github': ['GitHub', 'GitHub'],
   'source.github-issue': ['GitHub Issue', 'GitHub Issue'],
   'health.github': ['GitHub 来源', 'GitHub Source'],
+  'health.pipeline': ['任务流水线', 'Task pipeline'],
+  'health.pipeline:code': ['代码同步', 'Code sync'],
+  'health.pipeline:tasks': ['任务清单', 'Task list'],
   'health.feishu': ['飞书来源', 'Feishu Source'],
   'health.history': ['飞书补收', 'Feishu recovery'],
   'health.runtime': ['dsh-superagent', 'dsh-superagent'],
@@ -332,6 +335,7 @@ const TEXT = {
   'basis.mode': ['接单模式', 'Accept mode'],
   'basis.rules': ['命中规则', 'Matched rules'],
   'basis.legacyAuthority': ['旧版授权', 'Legacy authority'],
+  'basis.scheduled': ['定时任务', 'Scheduled task'],
   'legacy.explicit_mention': ['@ 智能体', 'Mention'],
   'legacy.proactive_rule': ['主动规则', 'Proactive rule'],
   'legacy.thread_followup': ['线程内跟进', 'Thread follow-up'],
@@ -777,6 +781,14 @@ const TEXT = {
   'healthCode.feishuCliUnset': ['来源已打开，还没有设置机器人的 lark-cli', HEALTH_TEXT.feishuCliUnset],
   'healthCode.feishuBotMissing': ['等待飞书机器人', HEALTH_TEXT.feishuBotMissing],
   'healthCode.pollFailures': ['连续 {count} 次轮询失败，最近一次：{error}', HEALTH_TEXT.pollFailures],
+  'healthCode.pipelineOff': ['流水线记录已关闭', HEALTH_TEXT.pipelineOff],
+  'healthCode.pipelineUnset': ['等待配置：{detail}', HEALTH_TEXT.pipelineUnset],
+  'healthCode.pipelineRunning': ['正在运行定时流水线', HEALTH_TEXT.pipelineRunning],
+  'healthCode.pipelineDone': ['已开工单 {opened}，回写 {written}，待下轮 {deferred}', HEALTH_TEXT.pipelineDone],
+  'healthCode.pipelineRunFailed': ['流水线运行失败：{error}', HEALTH_TEXT.pipelineRunFailed],
+  'healthCode.pipelineCode': ['代码已同步到 {commit}', HEALTH_TEXT.pipelineCode],
+  'healthCode.pipelineTasks': ['任务共 {total} 项，其中待办 {pending} 项', HEALTH_TEXT.pipelineTasks],
+  'healthCode.pipelineWritebackFailed': ['回写失败：{error}', HEALTH_TEXT.pipelineWritebackFailed],
 } as const satisfies Record<string, readonly [string, string]>
 export type DshSuperagentKey = keyof typeof TEXT
 const language = (index: 0 | 1) => Object.fromEntries(Object.entries(TEXT).map(([key, pair]) => [key, pair[index]])) as Record<DshSuperagentKey, string>
