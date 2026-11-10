@@ -29,6 +29,7 @@ dsh-superagent 是面向单个 GitHub 仓库的主动式编码智能体，可同
 - [006 部署](docs/006-deployment.md)：手动安装、配置、升级与故障排查
 - [007 架构](docs/007-architecture.md)
 - [008 操作手册](docs/008-cookbook.md)：新增一个来源
+- [009 来源记录](docs/009-source-records.md)：来源记录模型、身份规则与管理接口
 
 ## 开发
 
