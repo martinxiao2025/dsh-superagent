@@ -162,7 +162,12 @@ export class Runtime extends Service implements SourceHost {
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get sourceProblems() { return setup.sourceProblems }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
-        get github() { return runtime.context({ kind: 'github', health: ['github'] }, runtime.sources.instances().find(item => item.kind === 'github')?.id ?? '') },
+        githubFor: (source: string) => {
+          const githubs = runtime.sources.instances().filter(item => item.installed && item.enabled && item.kind === 'github')
+          // 触发器来自 GitHub 记录时用它；其他来源的工单只有在部署恰有一条 GitHub 记录时才能确定归属。
+          const record = runtime.sources.kindOf(source)?.kind === 'github' ? source : githubs.length === 1 ? githubs[0]!.id : undefined
+          return record ? runtime.context({ kind: 'github', health: ['github'] }, record) : undefined
+        },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
@@ -217,7 +222,7 @@ export class Runtime extends Service implements SourceHost {
     const sources = this.setup.configured() ? this.setup.deployment.sources : {}
     return channel => {
       const source = sources[channel.source]
-      return this.sources.link(channel, source?.kind === 'github' ? { repository: source.repository } : source?.kind === 'feishu' ? { feishu: source }
+      return this.sources.link(channel, source?.kind === 'github' ? { github: source } : source?.kind === 'feishu' ? { feishu: source }
         : source?.kind === 'gitlab' ? { gitlab: source } : {})
     }
   }

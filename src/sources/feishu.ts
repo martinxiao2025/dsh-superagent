@@ -65,7 +65,7 @@ export const feishuKind: SourceKind<FeishuConfig> = {
     send: sendFeishu, link: feishuLink,
   },
   threadContext: feishuThreadContext,
-  find: query => ({ threads: [], terms: [...new Set(query.match(/om_[A-Za-z0-9_-]+/g) ?? [])] }),
+  find: (_instance, query) => ({ threads: [], terms: [...new Set(query.match(/om_[A-Za-z0-9_-]+/g) ?? [])] }),
   // 消息的触发器以该消息命名，因此它所回复的消息以其父消息命名。
   repliesTo: trigger => typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.meta.parentId) : undefined,
   policy: {

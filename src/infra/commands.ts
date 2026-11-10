@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { Deployment, ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
+import { hostOf } from '../deployment.ts'
 
 const exec = promisify(execFile)
 const TIMEOUT_MS = 90_000
@@ -118,9 +119,15 @@ export class Commands {
     try {
       const { file, args: argv, windowsVerbatimArguments } = spawnCommand(program, args)
       const { stdout } = await exec(file, argv, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, windowsVerbatimArguments,
-        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
+        env: { ...process.env, ...this.environment, ...this.hostEnvironment(), GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
       return stdout
     } catch (error) { throw commandError(error, program) }
+  }
+  /** 企业实例的 `gh` 调用需要以 `GH_HOST` 路由到该站点；github.com 不设置，保持默认行为。 */
+  private hostEnvironment(): Record<string, string> {
+    const source = this.source
+    if (source?.kind !== 'github' || !source.instanceUrl) return {}
+    return { GH_HOST: hostOf(source.instanceUrl, '') }
   }
   /** 运行智能体的 GitHub CLI 并解析其 JSON 输出；调用方应优先使用 `api`，它会限制在配置的仓库内并校验输出。 */
   async gh<T>(args: string[]): Promise<T> { return JSON.parse(await this.run(this.github.cli, args)) as T }

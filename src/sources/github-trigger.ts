@@ -1,22 +1,37 @@
 /** 把 GitHub Issue、PR、评论、评审和 CI 状态变化归一化为领域触发器。 */
 import { z } from 'zod'
-import { key, type ChannelRef, type Trigger } from '../core/index.ts'
+import type { ChannelRef, Trigger } from '../core/index.ts'
+import { webBaseOf } from '../deployment.ts'
 import { sameName } from '../infra/text.ts'
 import { mentions } from './forge.ts'
+import { threadKey, triggerKey } from './identity.ts'
 export { mentions } from './forge.ts'
 
 export const SOURCE = 'github'
-/** GitHub 回复地址：Issue/PR 会话，或 `url` 指向讨论评论时的评审线程。 */
-export const githubChannel = (number: number, url?: string): ChannelRef =>
-  ({ source: SOURCE, thread: `github:${number}`, address: { number: String(number), ...(url ? { url } : {}) } })
-export const githubPage = (repository: string, number: number, pr = false): string =>
-  `https://github.com/${repository}/${pr ? 'pull' : 'issues'}/${number}`
-/** 解析 `repository` 中 Issue、PR 或评审评论的网页或 API URL；其他 URL 或仓库返回 undefined。 */
-export function githubAddress(url: string, repository: string): { number: number; pr: boolean; discussion?: number } | undefined {
-  const address = /^https:\/\/(?:api\.github\.com\/repos|github\.com)\/([^/]+\/[^/]+)\/(issues|pulls?)\/(\d+)\/?(?:#discussion_r(\d+)|#[\w-]*)?$/i
-  const match = address.exec(url)
-  if (!match || !sameName(match[1]!, repository)) return undefined
-  return { number: Number(match[3]), pr: match[2]!.toLowerCase() !== 'issues', ...match[4] ? { discussion: Number(match[4]) } : {} }
+/** 记录 `instanceUrl` 所指向的 GitHub 站点根地址；企业实例去掉末尾斜杠。 */
+const siteOf = (instanceUrl: string): string => webBaseOf(instanceUrl, 'https://github.com').replace(/\/+$/, '')
+/** GitHub 回复地址：Issue/PR 会话，或 `url` 指向讨论评论时的评审线程；线程与来源都用记录 ID。 */
+export const githubChannel = (record: string, number: number, url?: string): ChannelRef =>
+  ({ source: record, thread: threadKey(record, String(number)), address: { number: String(number), ...(url ? { url } : {}) } })
+/** 记录实例上的 Issue/PR 页面地址。 */
+export const githubPage = (instanceUrl: string, repository: string, number: number, pr = false): string =>
+  `${siteOf(instanceUrl)}/${repository}/${pr ? 'pull' : 'issues'}/${number}`
+/**
+ * 解析 `repository` 中 Issue、PR 或评审评论的网页或 API URL；其他站点、仓库或 URL 返回 undefined。
+ * `instanceUrl` 为空时只认 github.com 与 api.github.com；企业实例只认自己的网页主机与 `<instanceUrl>/api/v3`。
+ */
+export function githubAddress(url: string, repository: string, instanceUrl = ''): { number: number; pr: boolean; discussion?: number } | undefined {
+  const site = siteOf(instanceUrl)
+  const api = instanceUrl ? `${site}/api/v3` : 'https://api.github.com'
+  const after = (prefix: string): string | undefined => url.slice(0, prefix.length).toLowerCase() === prefix.toLowerCase()
+    ? url.slice(prefix.length) : undefined
+  const rest = after(`${api}/repos/`) ?? after(`${site}/`)
+  if (rest === undefined) return undefined
+  const [path = '', hash = ''] = rest.split('#', 2)
+  const match = /^([^/]+)\/([^/]+)\/(issues|pulls?)\/(\d+)\/?$/.exec(path)
+  if (!match || !sameName(`${match[1]}/${match[2]}`, repository)) return undefined
+  const discussion = /^discussion_r(\d+)$/.exec(hash)
+  return { number: Number(match[4]), pr: match[3]!.toLowerCase() !== 'issues', ...discussion ? { discussion: Number(discussion[1]) } : {} }
 }
 /** GitHub 把已删除的账号返回为 `null`，并显示为 `ghost`。 */
 export const UserSchema = z.looseObject({ login: z.string(), type: z.string().optional() }).nullable()
@@ -59,17 +74,17 @@ function commentText(comment: GithubComment, kind: 'conversation' | 'inline' | '
   const place = kind === 'inline' && comment.path ? reviewPlace(comment) : ''
   return [decision, place, comment.body ?? ''].filter(Boolean).join('\n\n')
 }
-const author = (user: { login: string; type?: string }, agent: string) =>
-  ({ actor: { source: SOURCE, id: user.login }, human: isHumanLogin(user) && !sameName(user.login, agent) })
+const author = (record: string, user: { login: string; type?: string }, agent: string) =>
+  ({ actor: { source: record, id: user.login }, human: isHumanLogin(user) && !sameName(user.login, agent) })
 /** 为评论或评审构建触发器；没有正文的评论或正文为空的 `COMMENTED` 评审，其 text 为空。 */
-export function commentTrigger(comment: GithubComment, ref: PullRef, kind: 'conversation' | 'inline' | 'review', agent: string): Trigger {
+export function commentTrigger(record: string, comment: GithubComment, ref: PullRef, kind: 'conversation' | 'inline' | 'review', agent: string): Trigger {
   const at = comment.updated_at ?? comment.submitted_at ?? comment.created_at ?? new Date().toISOString()
   const version = comment.updated_at ?? comment.submitted_at ?? ''
-  const id = key('github-comment', comment.html_url ?? `github:${ref.number}`, String(comment.id), version)
-  return { id, source: SOURCE, threads: [{ source: SOURCE, id: String(ref.number) }], ...author(comment.user, agent), at,
+  const id = triggerKey(record, 'comment', comment.html_url ?? threadKey(record, String(ref.number)), String(comment.id), version)
+  return { id, source: record, threads: [{ source: record, id: String(ref.number) }], ...author(record, comment.user, agent), at,
     text: commentText(comment, kind),
     ...(mentions(comment.body ?? '', agent) ? { addressed: 'mention' as const } : {}),
-    channel: githubChannel(ref.number, comment.html_url ?? undefined),
+    channel: githubChannel(record, ref.number, comment.html_url ?? undefined),
     ...(comment.html_url ?? ref.url ? { url: comment.html_url ?? ref.url } : {}),
     meta: { number: ref.number, isPr: ref.isPr, ...(ref.prAuthor ? { prAuthor: ref.prAuthor } : {}), commentId: comment.id, kind,
       ...comment.path ? { path: comment.path, line: comment.line ?? comment.original_line ?? null } : {},
@@ -79,30 +94,30 @@ export function commentTrigger(comment: GithubComment, ref: PullRef, kind: 'conv
  * 为新打开的 Issue 的标题和正文构建触发器。
  * ID 与以前存储 Issue 正文时相同，因此已存储的正文不会被再次接入。
  */
-export function issueTrigger(issue: Opened, agent: string): Trigger {
+export function issueTrigger(record: string, issue: Opened, agent: string): Trigger {
   const body = issue.body ?? ''
-  return { id: key('github-issue', String(issue.number)), source: SOURCE,
-    threads: [{ source: SOURCE, id: String(issue.number) }], ...author(issue.user, agent), at: issue.created_at,
+  return { id: triggerKey(record, 'issue', String(issue.number)), source: record,
+    threads: [{ source: record, id: String(issue.number) }], ...author(record, issue.user, agent), at: issue.created_at,
     text: `${issue.title}\n\n${body}`,
     ...(mentions(body, agent) ? { addressed: 'mention' as const } : {}),
-    channel: githubChannel(issue.number, issue.html_url), url: issue.html_url, meta: { number: issue.number, isPr: false, kind: 'issue' } }
+    channel: githubChannel(record, issue.number, issue.html_url), url: issue.html_url, meta: { number: issue.number, isPr: false, kind: 'issue' } }
 }
 /**
  * 为新打开的 PR 的标题和描述构建触发器。
  * GitHub 中 PR 与 Issue 共用同一编号序列且不会冲突，因此复用 `issueTrigger` 的 `github-issue` ID 格式。
  */
-export function pullTrigger(pull: Opened, agent: string): Trigger {
-  return { ...issueTrigger(pull, agent), meta: { number: pull.number, isPr: true, prAuthor: pull.user.login, kind: 'pull' } }
+export function pullTrigger(record: string, pull: Opened, agent: string): Trigger {
+  return { ...issueTrigger(record, pull, agent), meta: { number: pull.number, isPr: true, prAuthor: pull.user.login, kind: 'pull' } }
 }
 /** 为默认分支 CI 状态变化构建触发器；默认分支 CI 没有可回复的人，因此没有 `channel`。 */
-export function branchCiTrigger(branch: string, sha: string, revision: number, summary: string, url: string): Trigger {
-  return { id: key('github-ci', `branch:${branch}`, String(revision)), source: SOURCE,
-    threads: [{ source: SOURCE, id: `ci:${branch}` }], actor: { source: SOURCE, id: '' }, human: false, at: new Date().toISOString(),
+export function branchCiTrigger(record: string, branch: string, sha: string, revision: number, summary: string, url: string): Trigger {
+  return { id: triggerKey(record, 'ci', `branch:${branch}`, String(revision)), source: record,
+    threads: [{ source: record, id: `ci:${branch}` }], actor: { source: record, id: '' }, human: false, at: new Date().toISOString(),
     text: summary, url, meta: { ci: true, branch, sha, revision } }
 }
-export function ciTrigger(pr: { number: number; html_url: string; user: { login: string } }, revision: number, summary: string): Trigger {
-  return { id: key('github-ci', String(pr.number), String(revision)), source: SOURCE, threads: [{ source: SOURCE, id: String(pr.number) }],
-    actor: { source: SOURCE, id: '' }, human: false, at: new Date().toISOString(),
-    text: summary, channel: githubChannel(pr.number), url: pr.html_url,
+export function ciTrigger(record: string, pr: { number: number; html_url: string; user: { login: string } }, revision: number, summary: string): Trigger {
+  return { id: triggerKey(record, 'ci', String(pr.number), String(revision)), source: record, threads: [{ source: record, id: String(pr.number) }],
+    actor: { source: record, id: '' }, human: false, at: new Date().toISOString(),
+    text: summary, channel: githubChannel(record, pr.number), url: pr.html_url,
     meta: { number: pr.number, isPr: true, prAuthor: pr.user.login, ci: true, revision } }
 }

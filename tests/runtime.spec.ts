@@ -458,10 +458,10 @@ it('acknowledges a follow-up from the worker once and rejects events outside the
 })
 
 it('treats GitHub comments through the same gate: mentions by members are explicit, others need an existing task', async () => {
-  const stranger = commentTrigger({ id: 1, body: 'looks wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-1', created_at: '2026-09-09T00:00:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
+  const stranger = commentTrigger('github', { id: 1, body: 'looks wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-1', created_at: '2026-09-09T00:00:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
   await receive(stranger)
   expect(runtime.store.decisions.byThread('github:7')).toEqual([expect.objectContaining({ kind: 'ignore', reason: [expect.objectContaining({ code: 'not_a_member' })] })])
-  const mention = commentTrigger({ id: 2, body: '@agent-bot please fix', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-2', created_at: '2026-09-09T00:01:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
+  const mention = commentTrigger('github', { id: 2, body: '@agent-bot please fix', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-2', created_at: '2026-09-09T00:01:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
   await receive(mention)
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'candidate', strength: 'explicit', trigger_id: mention.id })
   const result = await route({ kind: 'accept', trigger_id: mention.id, title: 'Fix PR 7', worktree_name: 'fix-pr', acknowledgement: 'On it: fixing the review finding.' })
@@ -482,7 +482,7 @@ it('relays an allowed sender\'s mention in a new Issue as an explicit candidate 
   vi.spyOn(Commands.prototype, 'run').mockResolvedValue(`HTTP/2.0 200 OK\r\nX-Poll-Interval: 60\r\n\r\n${JSON.stringify([notification])}`)
   vi.spyOn(Commands.prototype, 'gh').mockResolvedValue(issue)
   vi.spyOn(Commands.prototype, 'pages').mockResolvedValue([])
-  runtime.store.set('github-since', '2026-09-08T23:59:00.000Z')
+  runtime.store.set('github-since:github', '2026-09-08T23:59:00.000Z')
   await pollRound(runtime.context(githubKind, 'github'))
   await runtime.idle()
   const candidate = relays(runtime.masterId).at(-1)
@@ -497,7 +497,7 @@ it('ignores an allowed sender\'s new Issue that does not mention the agent, and 
     vi.spyOn(Commands.prototype, 'run').mockResolvedValue(`HTTP/2.0 200 OK\r\nX-Poll-Interval: 60\r\n\r\n${JSON.stringify([notification])}`)
     vi.spyOn(Commands.prototype, 'gh').mockResolvedValue(issue)
     vi.spyOn(Commands.prototype, 'pages').mockResolvedValue([])
-    runtime.store.set('github-since', '2026-09-08T23:59:00.000Z')
+    runtime.store.set('github-since:github', '2026-09-08T23:59:00.000Z')
     await pollRound(runtime.context(githubKind, 'github'))
     await runtime.idle()
   await runtime.idle()
@@ -746,7 +746,7 @@ it('counts every step of the day\'s flow over the same arriving messages and lis
 })
 
 it('queues a requeued trigger visibly and tells the orchestrator', async () => {
-  const stranger = commentTrigger({ id: 3, body: 'looks wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/8#issuecomment-3', created_at: '2026-09-09T00:00:00Z' }, { number: 8, isPr: true }, 'conversation', 'agent-bot')
+  const stranger = commentTrigger('github', { id: 3, body: 'looks wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/8#issuecomment-3', created_at: '2026-09-09T00:00:00Z' }, { number: 8, isPr: true }, 'conversation', 'agent-bot')
   await receive(stranger)
   runtime.store.saveSettings({ ...runtime.store.settings(), paused: true })
   expect(runtime.engine.reevaluate(stranger.id)).toBe(true)
@@ -757,7 +757,7 @@ it('queues a requeued trigger visibly and tells the orchestrator', async () => {
 it('asks a question where the human message that raised it was written, not in the ticket\'s original conversation', async () => {
   const { ticket, trigger, sessionId } = await acceptedTicket()
   subscribe(ticket.id, { source: 'github', id: '42' })
-  const review = commentTrigger({ id: 5, body: 'Can you add the reason?', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/42#pullrequestreview-5', created_at: '2026-09-09T00:02:00Z' }, { number: 42, isPr: true }, 'review', 'agent-bot')
+  const review = commentTrigger('github', { id: 5, body: 'Can you add the reason?', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/42#pullrequestreview-5', created_at: '2026-09-09T00:02:00Z' }, { number: 42, isPr: true }, 'review', 'agent-bot')
   await receive(review)
   await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'x', question_for_trigger_id: review.id })).rejects.toThrow('needs the question it raised')
   await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'x', human_action: 'Keep it?', question_for_trigger_id: 'unknown' })).rejects.toThrow('the person\'s message that raised it')
@@ -772,7 +772,7 @@ it('asks a question where the human message that raised it was written, not in t
 })
 
 it('finds triggers by #PR number, GitHub link prefix and Feishu message id', async () => {
-  const comment = commentTrigger({ id: 4, body: 'please check', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/9#issuecomment-4', created_at: '2026-09-09T00:00:00Z' }, { number: 9, isPr: true }, 'conversation', 'agent-bot')
+  const comment = commentTrigger('github', { id: 4, body: 'please check', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/9#issuecomment-4', created_at: '2026-09-09T00:00:00Z' }, { number: 9, isPr: true }, 'conversation', 'agent-bot')
   await receive(comment)
   expect(search(viewsOf(runtime), '#9', new TextCache(0)).threads).toEqual([expect.objectContaining({ key: 'github:9' })])
   expect(search(viewsOf(runtime), 'https://github.com/acme/widgets/pull/9', new TextCache(0)).items.map(item => item.id)).toContain(comment.id)
@@ -1203,7 +1203,7 @@ describe('the order of a Ticket\'s messages to one conversation', () => {
     runtime.outbox.send(message('result-a', 'a'))
     // 同一聊天中的另一个工单，以及 Issue 中的同一工单，是其他订单。
     runtime.outbox.send(message('ack-b', 'b', feishuChannel(CHAT, 'om_2')))
-    runtime.outbox.send(message('issue-a', 'a', githubChannel(7)))
+    runtime.outbox.send(message('issue-a', 'a', githubChannel('github', 7)))
     await runtime.sendReplies()
     expect([runtime.outbox.status('result-a'), sent]).toEqual(['pending', ['ack-b', 'issue-a']])
     await at(5000)
@@ -1360,7 +1360,7 @@ it('records a report, the PR it binds and its relay together, or none of them', 
 })
 
 it('tells the main Session of each requeue of the same Trigger', async () => {
-  const stranger = commentTrigger({ id: 4, body: 'still wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/8#issuecomment-4', created_at: '2026-09-09T00:00:00Z' },
+  const stranger = commentTrigger('github', { id: 4, body: 'still wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/8#issuecomment-4', created_at: '2026-09-09T00:00:00Z' },
     { number: 8, isPr: true, url: 'https://github.com/acme/widgets/pull/8' }, 'conversation', 'agent-bot')
   await receive(stranger)
   const requeued = () => agents.get(runtime.masterId)!.inject.mock.calls.filter(([message]) => JSON.stringify(message).includes('trigger_requeued')).length

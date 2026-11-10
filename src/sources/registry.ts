@@ -140,8 +140,12 @@ export class SourceRegistry implements SourceScope {
     const link = kind?.channel?.link(channel.address, links)
     return link ?? { url: '', label: { zh: channel.source, en: channel.source } }
   }
+  /** 让每条已安装的记录把查询映射为它自己的候选线程键。 */
   find(query: string): { threads: string[]; terms: string[] } {
-    const found = [...this.kinds.values()].flatMap(kind => kind.find ? [kind.find(query)] : [])
+    const found = this.instances().flatMap(instance => {
+      const kind = this.kinds.get(instance.kind)
+      return kind?.find ? [kind.find(instance, query)] : []
+    })
     return { threads: [...new Set(found.flatMap(item => item.threads))], terms: [...new Set(found.flatMap(item => item.terms))] }
   }
   repliesTo(trigger: Trigger): string | undefined { return this.kindOf(trigger.source)?.repliesTo?.(trigger) }

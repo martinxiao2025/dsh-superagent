@@ -72,7 +72,7 @@ export const promptVersion = (revision: number, config: PromptsView['current']['
 export const droppedReply = (id: string, hoursAgo: number, source: 'feishu' | 'github', reason: DroppedReply['dropped']['reason'],
   { ticket, thread }: { ticket?: DroppedReply['ticket']; thread?: false } = {}): DroppedReply => ({
   id, preview: `Reply ${id}`, kind: 'reply',
-  channel: source === 'feishu' ? feishuChannel('oc_1', 'om_root') : githubChannel(42),
+  channel: source === 'feishu' ? feishuChannel('oc_1', 'om_root') : githubChannel('github', 42),
   dropped: { at: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), reason }, ...ticket ? { ticket } : {},
   ...thread === false ? {} : { thread: source === 'feishu' ? 'feishu:oc_1:om_root' : 'github:42' },
 })

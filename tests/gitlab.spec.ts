@@ -126,10 +126,11 @@ describe('gitlab triggers', () => {
     expect(noteTrigger({ ...note('mine'), author: { username: LOGIN } }, ref, LOGIN).human).toBe(false)
   })
   it('finds Issues, merge requests and their URLs', () => {
-    expect(gitlabKind.find!('#12')).toEqual({ threads: ['gitlab:issue:12'], terms: [] })
-    expect(gitlabKind.find!('!12')).toEqual({ threads: ['gitlab:mr:12'], terms: [] })
-    expect(gitlabKind.find!(`${URL}/-/issues/12`)).toEqual({ threads: ['gitlab:issue:12'], terms: [] })
-    expect(gitlabKind.find!(`${URL}/-/merge_requests/3`)).toEqual({ threads: ['gitlab:mr:3'], terms: [] })
+    const instance = { id: 'gitlab', kind: 'gitlab', enabled: true, config: {} }
+    expect(gitlabKind.find!(instance, '#12')).toEqual({ threads: ['gitlab:issue:12'], terms: [] })
+    expect(gitlabKind.find!(instance, '!12')).toEqual({ threads: ['gitlab:mr:12'], terms: [] })
+    expect(gitlabKind.find!(instance, `${URL}/-/issues/12`)).toEqual({ threads: ['gitlab:issue:12'], terms: [] })
+    expect(gitlabKind.find!(instance, `${URL}/-/merge_requests/3`)).toEqual({ threads: ['gitlab:mr:3'], terms: [] })
   })
   it('maps receive scopes and Policy rows through the shared forge policy', () => {
     const config = GitlabConfigSchema.parse({ project: PROJECT, observeIssues: true, observeComments: true })

@@ -56,7 +56,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   channel: { allowed: address => address.kind === 'issue' || address.kind === 'mr', send: sendGitlab, link: gitlabLink },
   threadContext: gitlabThreadContext,
   // `#12`、`!12` 或 GitLab 网页 URL 分别指向 Issue 与 MR；两者编号独立。
-  find: query => {
+  find: (_instance, query) => {
     const text = query.trim()
     const issue = (/^#(\d+)$/.exec(text) ?? /^(\d+)$/.exec(text) ?? /\/-\/issues\/(\d+)/.exec(text))?.[1]
     const mr = (/^!(\d+)$/.exec(text) ?? /\/-\/merge_requests\/(\d+)/.exec(text))?.[1]

@@ -42,7 +42,7 @@ it('names the Thread of each dropped message: the one of the Trigger its Channel
   store.threads.save({ key: 'github:42', ref: { source: 'github', id: '42' }, createdAt: '', subscriptions: [], correlated: [], pending: [],
     meta: {} })
   drop('a', feishuChannel('oc_1', 'om_reply'))
-  drop('b', githubChannel(42))
+  drop('b', githubChannel('github', 42))
   // 触发器与线程在存储中都已不存在的消息不会链接到任何地方。
   drop('c', feishuChannel('oc_2', 'om_gone'))
   expect(Object.fromEntries(droppedReplies({ store, links }).map(item => [item.id, item.thread])))

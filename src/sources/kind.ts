@@ -2,7 +2,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { z } from 'zod'
 import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
-import type { ResolvedFeishuSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
+import type { ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
 
@@ -41,7 +41,7 @@ export interface SourcePolicyPart<P extends Record<string, unknown>> {
 }
 /** 频道地址的 UI 链接；`triggerId` 指定触发器，在可用时优先使用它自己的深链。 */
 export interface ChannelLink { url: string; label: Localized; triggerId?: string }
-export type ChannelLinks = { repository?: string; feishu?: ResolvedFeishuSource; gitlab?: ResolvedGitlabSource }
+export type ChannelLinks = { github?: ResolvedGithubSource; feishu?: ResolvedFeishuSource; gitlab?: ResolvedGitlabSource }
 /** 来源种类的线程所用的出站消息适配器。 */
 export interface SourceChannel<C> {
   /** 回复是否仍可发往 `address`；没有它时，任何地址都可以收到回复。 */
@@ -100,8 +100,8 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   channel?: SourceChannel<C>
   /** 评估用的有界上下文读取器；没有 `threadContext` 的种类的评估不读取任何内容。 */
   threadContext?: ThreadContext<C>
-  /** 把搜索查询映射为候选线程键（例如 `github:12`）和触发器搜索词（例如飞书 `om_` ID）。 */
-  find?(query: string): { threads: string[]; terms: string[] }
+  /** 把搜索查询映射为一条来源记录的候选线程键（例如 `github:12`）和触发器搜索词（例如飞书 `om_` ID）。 */
+  find?(instance: SourceInstance, query: string): { threads: string[]; terms: string[] }
   /** 在不进行网络读取即可推导时，返回此触发器所回复消息的触发器 ID。 */
   repliesTo?(trigger: Trigger): string | undefined
   /** 发送者拥有自身身份的种类所用的策略部分。 */

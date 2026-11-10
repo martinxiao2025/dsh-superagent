@@ -23,7 +23,7 @@ export async function sendGithub(host: Pick<SourceContext, 'commands'>, message:
   if (!number) throw new Error('Missing GitHub reply target')
   try {
     // 保留的触发器 URL 也会为线程感知投递之前排队的回复提供路由。
-    const address = githubAddress(message.channel.address.url ?? '', repository)
+    const address = githubAddress(message.channel.address.url ?? '', repository, github.instanceUrl)
     let rootId: number | undefined
     if (address?.pr && address.discussion && address.number === number) {
       // 目标行内评审评论被删除时，退回为顶层 PR 评论。
@@ -46,8 +46,9 @@ export async function sendGithub(host: Pick<SourceContext, 'commands'>, message:
 }
 export function githubLink(address: Record<string, string>, links: ChannelLinks): ChannelLink {
   const number = address.number ?? ''
-  const review = !!links.repository && !!githubAddress(address.url ?? '', links.repository)?.discussion
-  return { url: address.url ?? (links.repository ? githubPage(links.repository, Number(number)) : ''),
+  const { github } = links
+  const review = !!github && !!githubAddress(address.url ?? '', github.repository, github.instanceUrl)?.discussion
+  return { url: address.url ?? (github ? githubPage(github.instanceUrl, github.repository, Number(number)) : ''),
     label: review ? { zh: `GitHub #${number} 的 review 讨论`, en: `Review discussion on GitHub #${number}` }
       : { zh: `GitHub #${number}`, en: `GitHub #${number}` } }
 }

@@ -39,15 +39,16 @@ export const KV = {
   /** 按来源解析的显示名称，把有名称的 ID（例如飞书会话 ID）映射到其显示名称。 */
   sources: { labels: family<Record<string, string>, [source: string]>('source-labels:') },
   /**
-   * GitHub 来源：通知游标和待处理重试；按 Issue/PR 记录的读取游标，由通知读取和轮询读取共用；
-   * 按流记录的游标、按类型记录的启动时间，以及 ETag；默认分支 CI 状态；以及按 PR 记录的 CI 指纹和修订号
+   * GitHub 来源：按记录记录的通知游标和待处理重试；按记录与 Issue/PR 记录的读取游标，由通知读取和轮询读取共用；
+   * 按记录与流记录的游标、按类型记录的启动时间，以及 ETag；按记录记录的默认分支 CI 状态；
+   * 以及按记录与 PR 记录的 CI 指纹和修订号
    * （`revision` 统计已报告的 CI 变化次数，使每次变化都产生不同的触发器 ID）。
    */
-  github: { since: record<string>('github-since'), retries: record<Record<string, Retry>>('github-retry'),
-    cursor: family<string, [number: number]>('github-cursor:'),
-    stream: family<{ since: string; started: Record<string, string>; etag?: string }, [stream: string]>('github-stream:'),
-    branchCi: record<{ branch?: string; failures?: string[]; revision: number }>('github-branch-ci'),
-    ci: family<{ fingerprint: string; revision: number }, [number: number]>('github-ci:') },
+  github: { since: family<string, [record: string]>('github-since:'), retries: family<Record<string, Retry>, [record: string]>('github-retry:'),
+    cursor: family<string, [record: string, number: number]>('github-cursor:'),
+    stream: family<{ since: string; started: Record<string, string>; etag?: string }, [record: string, stream: string]>('github-stream:'),
+    branchCi: family<{ branch?: string; failures?: string[]; revision: number }, [record: string]>('github-branch-ci:'),
+    ci: family<{ fingerprint: string; revision: number }, [record: string, number: number]>('github-ci:') },
   /**
    * 飞书来源：已知会话（私聊为 `true`）；按会话记录的历史游标，以及把话题 ID 映射到最近可见时间戳的活动话题；
    * 以及按轮询线程记录的已见消息 ID 和初始化标记。

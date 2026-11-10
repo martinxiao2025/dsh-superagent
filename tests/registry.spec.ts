@@ -128,11 +128,15 @@ describe('Source registry', () => {
     expect(sources.repliesTo({ ...reply, meta: { ...reply.meta, parentId: undefined } })).toBeUndefined()
     expect(sources.repliesTo({ ...reply, source: 'github' })).toBeUndefined()
   })
-  it('finds what a search query names in each kind\'s terms', () => {
-    const sources = new SourceRegistry(() => SettingsSchema.parse({}))
+  it('finds what a search query names in each installed record', () => {
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: {
+      feishu: { kind: 'feishu', enabled: true, config: {} },
+      github: { kind: 'github', enabled: true, config: { repository: 'acme/widgets' } },
+      'github-ghe': { kind: 'github', enabled: true, config: { repository: 'acme/widgets', instanceUrl: 'https://ghe.example.com' } } } }))
     sources.register(feishuKind); sources.register(githubKind)
-    expect(sources.find('#12')).toEqual({ threads: ['github:12'], terms: [] })
+    expect(sources.find('#12')).toEqual({ threads: ['github:12', 'github-ghe:12'], terms: [] })
     expect(sources.find('https://github.com/acme/widgets/pull/7#issuecomment-3')).toEqual({ threads: ['github:7'], terms: [] })
+    expect(sources.find('https://ghe.example.com/acme/widgets/issues/3')).toEqual({ threads: ['github-ghe:3'], terms: [] })
     expect(sources.find('see om_abc and om_abc, om_def')).toEqual({ threads: [], terms: ['om_abc', 'om_def'] })
     expect(sources.find('login fails')).toEqual({ threads: [], terms: [] })
     expect(feishuKind.policy!.unnamed).toEqual({ person: { zh: '飞书用户', en: 'Feishu user' }, bot: { zh: '飞书机器人', en: 'Feishu bot' } })
