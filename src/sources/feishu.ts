@@ -1,5 +1,4 @@
-/** 飞书来源种类定义、策略同步和 Cordis 插件入口。 */
-import type { Context } from '@deepseek-ai/cordis'
+/** 飞书来源种类定义、策略同步与消息循环。 */
 import { z } from 'zod'
 import { FeishuBotSchema } from '../deployment.ts'
 import { feishuLink, sendFeishu } from './feishu-channel.ts'
@@ -7,7 +6,7 @@ import { feishuThreadContext } from './feishu-read.ts'
 import { refreshChatNames, runFeishu } from './feishu-loops.ts'
 import { SOURCE, feishuTriggerId } from './feishu-trigger.ts'
 import { sourceContext } from './host.ts'
-import type { Localized, SourceKind } from './kind.ts'
+import type { Localized, SourceAdapter, SourceKind } from './kind.ts'
 import type { SourceRegistry } from './registry.ts'
 
 export { SOURCE, feishuRef, feishuThreadId, feishuTime, feishuTrigger, feishuTriggerId, historyEvent, withMentionNames }
@@ -30,7 +29,7 @@ const FeishuConfigSchema = FeishuBotSchema.extend({
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>
 export const feishuKind: SourceKind<FeishuConfig> = {
   kind: SOURCE,
-  refreshLabels: (host, signal) => refreshChatNames(sourceContext(host, feishuKind), signal),
+  refreshLabels: (host, id, signal) => refreshChatNames(sourceContext(host, feishuKind, id), signal),
   title: { zh: '飞书', en: 'Feishu' },
   description: { zh: '接收下列群和私聊中发给机器人的消息，补收群历史并轮询订阅的线程。', en: 'Receives messages to the bot in these chats and direct messages, recovers chat history and polls subscribed Threads.' },
   schema: FeishuConfigSchema,
@@ -102,8 +101,8 @@ export const feishuKind: SourceKind<FeishuConfig> = {
     sync: {
       label: { zh: '立即同步', en: 'Sync now' },
       ready: part => !!part.syncChat,
-      async run(host, part, signal) {
-        const commands = sourceContext(host, feishuKind).commands.withSignal(signal)
+      async run(host, id, part, signal) {
+        const commands = sourceContext(host, feishuKind, id).commands.withSignal(signal)
         const chat = String(part.syncChat)
         const members = ['im', '+chat-members-list', '--chat-id', chat, '--member-types', 'user', '--page-all', '--page-limit', '0']
         const result = MembersSchema.parse(await commands.lark(members))
@@ -124,16 +123,15 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   },
   facts: (deployment): Record<string, Localized | string> => deployment?.feishu ? { cli: { zh: `当前机器人 ${deployment.feishu.name || deployment.feishu.botId}`, en: `Current bot ${deployment.feishu.name || deployment.feishu.botId}` } } : {},
 }
-/** 返回飞书来源的设置；飞书插件禁用时回退到 schema 默认值。 */
-export const feishuSettings = (sources: SourceRegistry): FeishuConfig => sources.instance<FeishuConfig>(SOURCE)?.config ?? FeishuConfigSchema.parse({})
+/** 返回某条飞书记录的设置；记录不存在或禁用时回退到 schema 默认值。 */
+export const feishuSettings = (sources: SourceRegistry, id: string = SOURCE): FeishuConfig =>
+  sources.instance<FeishuConfig>(id)?.config ?? FeishuConfigSchema.parse({})
 
-export const name = 'dsh-superagent-feishu'
-export const inject = ['orchestrator']
-export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.orchestrator.sources.register(feishuKind), 'feishu: source kind')
-  ctx.effect(() => {
-    const controller = new AbortController()
-    const running = runFeishu(sourceContext(ctx.orchestrator, feishuKind), controller.signal)
-    return async () => { controller.abort(); await running }
-  })
+export const feishuAdapter: SourceAdapter<FeishuConfig> = {
+  kind: feishuKind,
+  async watch(host, id, signal) {
+    const ctx = sourceContext(host, feishuKind, id)
+    try { await runFeishu(ctx, signal) }
+    catch (error) { ctx.report('feishu', { state: 'error', detail: String(error) }) }
+  },
 }

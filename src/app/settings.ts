@@ -235,7 +235,7 @@ export class Settings {
     const health = this.syncHealth(id)
     try {
       const revision = store.blockRevision('policy')
-      const part = await sources.kindOf(id)!.policy!.sync!.run(this.host.sourceHost, sources.policyPart(id)!, this.host.lifetime)
+      const part = await sources.kindOf(id)!.policy!.sync!.run(this.host.sourceHost, id, sources.policyPart(id)!, this.host.lifetime)
       if (revision !== store.blockRevision('policy')) throw new SettingsConflict('Policy changed during synchronization. Retry with the current settings.')
       const policy = store.settings().policy
       // 当同步后的列表未变化时跳过保存新修订。
@@ -261,7 +261,7 @@ export class Settings {
     const kind = sources.kindOf(id)
     if (!kind?.refreshLabels) throw new UserError('noLabels')
     const before = store.get(KV.sources.labels(id)) ?? {}
-    const after = await kind.refreshLabels(this.host.sourceHost)
+    const after = await kind.refreshLabels(this.host.sourceHost, id)
     return { added: Object.entries(after).filter(([key]) => !(key in before)).map(([, name]) => name).sort((a, b) => a.localeCompare(b)) }
   }
 }

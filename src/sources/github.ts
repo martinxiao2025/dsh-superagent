@@ -1,5 +1,4 @@
-/** GitHub 来源种类定义、通知与仓库轮询循环，以及 Cordis 插件入口。 */
-import type { Context } from '@deepseek-ai/cordis'
+/** GitHub 来源种类定义与通知、仓库轮询循环。 */
 import { key, type Thread } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
 import { GithubAccountsSchema } from '../deployment.ts'
@@ -13,7 +12,7 @@ import { observePull, pullsOf, readPull, type Pull } from './github-pull.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
 import { KV } from '../kv.ts'
 import { cursorAt, pause, POLL_HORIZON_MS, pollFailure, pollThreads as pollEach } from './poll.ts'
-import type { Localized, SourceKind } from './kind.ts'
+import type { Localized, SourceAdapter, SourceKind } from './kind.ts'
 import { forgePolicy, forgeScope } from './forge.ts'
 import { z } from 'zod'
 export { pollFailure } from './poll.ts'
@@ -97,18 +96,14 @@ export const githubKind: SourceKind<GithubConfig> = {
     cli: { zh: `当前账号 @${deployment.github.login}`, en: `Current account @${deployment.github.login}` },
   } : {},
 }
-export const name = 'dsh-superagent-github'
-export const inject = ['orchestrator']
-export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.orchestrator.sources.register(githubKind), 'github: source kind')
-  ctx.effect(() => {
-    const source = sourceContext(ctx.orchestrator, githubKind)
-    const controller = new AbortController()
+export const githubAdapter: SourceAdapter<GithubConfig> = {
+  kind: githubKind,
+  async watch(host, id, signal) {
+    const ctx = sourceContext(host, githubKind, id)
     // 未处理的 Promise 拒绝会终止 DSH 进程，因此逃出轮询循环的失败改为报告为来源健康状态。
-    const running = watch(source, controller.signal)
-      .catch((error: unknown) => { source.report('github', { state: 'error', detail: String(error) }) })
-    return async () => { controller.abort(); await running }
-  })
+    try { await watch(ctx, signal) }
+    catch (error) { ctx.report('github', { state: 'error', detail: String(error) }) }
+  },
 }
 async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   let interval = 60
@@ -117,7 +112,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   // 设置解析出账号后会重启 dsh-superagent；在此之前不轮询任何内容。
   if (!ctx.configured()) { ctx.report('github', health('paused', 'setupPending')); return }
   while (!signal.aborted) {
-    const config = ctx.config<GithubConfig>(SOURCE)
+    const config = ctx.config<GithubConfig>()
     try {
       if (config) interval = await pollRound(ctx, signal)
       else ctx.report('github', health('paused', 'sourceOff'))
@@ -127,7 +122,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       const failed = pollFailure(failures, config?.failuresBeforeError ?? 1, error)
       if (!signal.aborted && failed) ctx.report('github', failed)
     }
-    await pause(Math.max(interval, ctx.config<GithubConfig>(SOURCE)?.pollSeconds ?? 60) * 1000, signal)
+    await pause(Math.max(interval, ctx.config<GithubConfig>()?.pollSeconds ?? 60) * 1000, signal)
   }
 }
 interface Round {
@@ -137,7 +132,7 @@ interface Round {
 }
 const newRound = (signal?: AbortSignal): Round => ({ started: new Date().toISOString(), signal, pulls: new Map(), read: new Set(),
   failures: [], dropped: [], abandoned: [], tally: { skipped: 0 } })
-const stopped = (ctx: SourceContext, round: Round): boolean => !!round.signal?.aborted || !ctx.config(SOURCE)
+const stopped = (ctx: SourceContext, round: Round): boolean => !!round.signal?.aborted || !ctx.config()
 export interface Retry { since: string; pr: boolean; failedAt?: string; attempts?: number }
 const RETRY_WINDOW_MS = 24 * 3600_000
 /** GitHub 返回 HTTP 410（Gone）时为 true；HTTP 404 会重试，因为它可能表示私有仓库的访问权限被撤销。 */
@@ -163,7 +158,7 @@ const STREAMS = [
 ] as const
 /** 轮询仓库级事件流（新 Issue/PR、评论、默认分支 CI）；每个流从打开开关时开始读取，关闭时重置，并独立失败。 */
 async function pollRepository(ctx: SourceContext, round: Round): Promise<void> {
-  const config = ctx.config<GithubConfig>(SOURCE)
+  const config = ctx.config<GithubConfig>()
   if (!config) return
   for (const stream of STREAMS) {
     if (stopped(ctx, round)) return

@@ -40,6 +40,7 @@ import { Passes } from './passes.ts'
 import { Setup } from './setup.ts'
 import { feishuSettings } from '../sources/feishu.ts'
 import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
+import type { SourceAdapter } from '../sources/kind.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
 import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
@@ -82,6 +83,7 @@ export class Runtime extends Service implements SourceHost {
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
+  private readonly loops = new Set<{ controller: AbortController; running: Promise<void> }>()
   /** 当主会话工具正在执行引擎命令时非零，用于抑制自触发的领域事件通知。 */
   private quiet = 0
   constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
@@ -161,7 +163,7 @@ export class Runtime extends Service implements SourceHost {
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
         get gitlabProblem() { return setup.gitlabProblem }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
-        get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
+        get github() { return runtime.context({ kind: 'github', health: ['github'] }, runtime.sources.instances().find(item => item.kind === 'github')?.id ?? '') },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
@@ -174,7 +176,25 @@ export class Runtime extends Service implements SourceHost {
   get health(): Readonly<Record<string, Health>> { return this.board.all }
   /** dsh-superagent 停止或失去状态目录锁时触发中止，取消正在运行的读取和子进程。 */
   get lifetime(): AbortSignal { return this.stopped.signal }
-  context(kind: { kind: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
+  context(kind: { kind: string; health: readonly string[] }, id: string): SourceContext { return sourceContextOf(this.sourceDeps, kind, id) }
+  /**
+   * 注册内置来源适配器，并为每条来源记录启动一个独立循环。
+   * 记录之间存在类型隔离：同类型多条记录各自解析配置、各自报告健康状态。
+   */
+  startSources(adapters: readonly SourceAdapter[]): void {
+    for (const adapter of adapters) {
+      if (!this.sources.kindsList().some(kind => kind.kind === adapter.kind.kind)) this.sources.register(adapter.kind)
+    }
+    this.sources.syncHealth()
+    for (const instance of this.sources.instances()) {
+      const adapter = adapters.find(item => item.kind.kind === instance.kind)
+      if (!adapter) continue
+      const controller = new AbortController()
+      const loop = { controller, running: adapter.watch(this, instance.id, controller.signal) }
+      this.loops.add(loop)
+      void loop.running.finally(() => this.loops.delete(loop))
+    }
+  }
   /** 已解析的部署；在等待初始化期间（`!configured()`）抛出异常。 */
   get deployment(): Deployment { return this.setup.deployment }
   configured(): boolean { return this.setup.configured() }
@@ -234,12 +254,14 @@ export class Runtime extends Service implements SourceHost {
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
   private async shutdown(): Promise<void> {
     this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
+    const loops = [...this.loops]
+    for (const loop of loops) loop.controller.abort()
     try {
       this.assessor.stop()
       const ids = [this.masterId, ...this.store.tickets.list().map(ticket => workerSessionId(ticket.id))]
       const agents = ids.map(id => this.ctx.agents.get(id as SessionId)).filter((agent): agent is Agent => agent !== undefined)
       for (const agent of agents) agent.cancel({ kind: 'user' }, { keepInbox: true })
-      await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle())])
+      await Promise.allSettled([passes, this.effects.drain(), ...agents.map(agent => agent.whenIdle()), ...loops.map(loop => loop.running)])
       // 执行器的任务和子代理也会停止：它们的结束会启动执行器轮次，而下面释放的工具限制届时尚未生效。
       await this.executor.shutdown()
       this.executor.dispose()

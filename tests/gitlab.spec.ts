@@ -94,7 +94,7 @@ function host(config: Record<string, unknown> = {}) {
   const receive = vi.fn(async (trigger: Trigger) => { const result = engine.receive(trigger); if (result !== 'duplicate') received.push(trigger); return result })
   const parts: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive }
-  const context = sourceContextOf(parts, gitlabKind)
+  const context = sourceContextOf(parts, gitlabKind, 'gitlab')
   const read = () => JSON.parse(readFileSync(fixture, 'utf8')) as { posted: Record<string, { body: string }[]>; routes: Record<string, unknown> }
   const write = (data: unknown) => writeFileSync(fixture, JSON.stringify(data))
   const setRoutes = (routes: Record<string, unknown>) => { const data = read(); write({ ...data, routes: { ...data.routes, ...routes } }) }

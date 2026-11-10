@@ -2,6 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
 import { Runtime } from './app/runtime.ts'
+import { ADAPTERS } from './sources/adapters.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
 
 export const name = 'dsh-superagent'
@@ -21,6 +22,8 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   const runtime = new Runtime(ctx, machine, restart)
   ctx.effect(() => async () => { await runtime.stop() })
   await runtime.ready
+  // 来源是用户数据：注册内置适配器，并为每条已存储的记录启动独立循环。
+  runtime.startSources(ADAPTERS)
   ctx.logger.info(runtime.configured() ? 'dsh-superagent ready; the Superagent sidebar entry opens the management panel' : `dsh-superagent is waiting for setup: ${runtime.setupProblem?.detail ?? ''}`)
 }
 export type { Deployment, DeploymentConfig } from './deployment.ts'

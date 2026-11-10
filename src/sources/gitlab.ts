@@ -1,5 +1,4 @@
-/** GitLab 源定义、Issue/MR 与 note 轮询循环，以及 Cordis 插件入口。 */
-import type { Context } from '@deepseek-ai/cordis'
+/** GitLab 源定义与 Issue/MR、note 轮询循环。 */
 import { z } from 'zod'
 import type { Thread } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
@@ -9,7 +8,7 @@ import { KV } from '../kv.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
 import { cursorAt, pause, pollFailure, pollThreads as pollEach } from './poll.ts'
 import { forgePolicy, forgeScope } from './forge.ts'
-import type { Localized, SourceKind } from './kind.ts'
+import type { Localized, SourceAdapter, SourceKind } from './kind.ts'
 import { gitlabLink, sendGitlab } from './gitlab-channel.ts'
 import { gitlabThreadContext } from './gitlab-read.ts'
 import { gitlabThread, issueTrigger, ItemSchema, NoteSchema, noteTrigger, pullTrigger, SOURCE, type GitlabRef }
@@ -92,17 +91,13 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
     cli: { zh: `当前账号 @${deployment.gitlab.login}`, en: `Current account @${deployment.gitlab.login}` },
   } : {},
 }
-export const name = 'dsh-superagent-gitlab'
-export const inject = ['orchestrator']
-export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.orchestrator.sources.register(gitlabKind), 'gitlab: source kind')
-  ctx.effect(() => {
-    const source = sourceContext(ctx.orchestrator, gitlabKind)
-    const controller = new AbortController()
-    const running = watch(source, controller.signal)
-      .catch((error: unknown) => { source.report('gitlab', { state: 'error', detail: String(error) }) })
-    return async () => { controller.abort(); await running }
-  })
+export const gitlabAdapter: SourceAdapter<GitlabConfig> = {
+  kind: gitlabKind,
+  async watch(host, id, signal) {
+    const ctx = sourceContext(host, gitlabKind, id)
+    try { await watch(ctx, signal) }
+    catch (error) { ctx.report('gitlab', { state: 'error', detail: String(error) }) }
+  },
 }
 export async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   let interval = 60
@@ -113,7 +108,7 @@ export async function watch(ctx: SourceContext, signal: AbortSignal): Promise<vo
   // 可选来源的账号检查失败时 setup 只禁用 GitLab，这里保持暂停而不反复报错。
   if (ctx.problem) { ctx.report('gitlab', { state: 'paused', detail: ctx.problem.detail }); return }
   while (!signal.aborted) {
-    const config = ctx.config<GitlabConfig>(SOURCE)
+    const config = ctx.config<GitlabConfig>()
     try {
       if (config?.project) { await pollRound(ctx, signal); interval = config.pollSeconds }
       else ctx.report('gitlab', health('paused', 'sourceOff'))
@@ -123,7 +118,7 @@ export async function watch(ctx: SourceContext, signal: AbortSignal): Promise<vo
       const failed = pollFailure(failures, config?.failuresBeforeError ?? 1, error)
       if (!signal.aborted && failed) ctx.report('gitlab', failed)
     }
-    await pause(Math.max(interval, ctx.config<GitlabConfig>(SOURCE)?.pollSeconds ?? 60) * 1000, signal)
+    await pause(Math.max(interval, ctx.config<GitlabConfig>()?.pollSeconds ?? 60) * 1000, signal)
   }
 }
 interface Round {
@@ -134,7 +129,7 @@ interface Round {
   tally: Tally
 }
 const newRound = (signal?: AbortSignal): Round => ({ started: new Date().toISOString(), signal, read: new Set(), failures: [], tally: { skipped: 0 } })
-const stopped = (ctx: SourceContext, round: Round): boolean => !!round.signal?.aborted || !ctx.config(SOURCE)
+const stopped = (ctx: SourceContext, round: Round): boolean => !!round.signal?.aborted || !ctx.config()
 const sectionOf = (stream: Stream): string => stream === 'issues' ? 'issues' : 'merge_requests'
 const prefix = (isPr: boolean): string => isPr ? '!' : '#'
 /**
@@ -200,7 +195,7 @@ async function readNotes(ctx: SourceContext, round: Round, ref: GitlabRef, defau
 /** 一轮轮询：issues 与 merge_requests 两个流，然后补齐本轮未覆盖的已订阅 Thread。 */
 export async function pollRound(ctx: SourceContext, signal?: AbortSignal): Promise<{ issues: number; mrs: number }> {
   const round = newRound(signal)
-  const config = ctx.config<GitlabConfig>(SOURCE)
+  const config = ctx.config<GitlabConfig>()
   if (!config?.project) { ctx.report('gitlab', health('paused', 'sourceOff')); return { issues: 0, mrs: 0 } }
   const counts = { issues: 0, mrs: 0 }
   for (const stream of STREAMS) {
@@ -218,7 +213,7 @@ export async function pollRound(ctx: SourceContext, signal?: AbortSignal): Promi
   return counts
 }
 /** 已订阅 Thread 的 note 轮询；本轮流中已经读过的 Thread 跳过，避免重复调用。 */
-export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, round = newRound(signal), config = ctx.config<GitlabConfig>(SOURCE)): Promise<void> {
+export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, round = newRound(signal), config = ctx.config<GitlabConfig>()): Promise<void> {
   if (!config?.project) return
   await pollEach(ctx, SOURCE, () => stopped(ctx, round), async thread => {
     const match = /^(issue|mr):([1-9]\d*)$/.exec(thread.ref.id)

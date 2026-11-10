@@ -21,6 +21,7 @@ import { KV } from '../src/kv.ts'
 import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/policy.ts'
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
+import type { SourceAdapter } from '../src/sources/kind.ts'
 import { githubKind, pollRound } from '../src/sources/github.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
 import { UserError, key, runningAssignment, said, threadKey, waitsForPerson, type Trigger } from '../src/core/index.ts'
@@ -340,7 +341,7 @@ it('records worker reports, binds the task PR, ends the ticket on ready without 
   const mergedAt = new Date().toISOString()
   const merged = { number: 42, state: 'closed', merged: true, merged_at: mergedAt, html_url: 'https://github.com/acme/widgets/pull/42',
     user: { login: 'agent-bot' }, head: { sha: 'abc', ref: 'agent/x', repo: { full_name: 'acme/widgets' } } }
-  await observePull(runtime.context(githubKind), merged)
+  await observePull(runtime.context(githubKind, 'github'), merged)
   const ended = runtime.store.tickets.get(ticket.id)!
   expect(ended).toMatchObject({ ended: expect.objectContaining({ by: 'executor', outcome: 'merged' }) })
   // 已结束的工单保留其对 PR 的订阅，因此之后那里的人类评论会恢复它。
@@ -481,7 +482,7 @@ it('relays an allowed sender\'s mention in a new Issue as an explicit candidate 
   vi.spyOn(Commands.prototype, 'gh').mockResolvedValue(issue)
   vi.spyOn(Commands.prototype, 'pages').mockResolvedValue([])
   runtime.store.set('github-since', '2026-09-08T23:59:00.000Z')
-  await pollRound(runtime.context(githubKind))
+  await pollRound(runtime.context(githubKind, 'github'))
   await runtime.idle()
   const candidate = relays(runtime.masterId).at(-1)
   expect(candidate).toMatchObject({ kind: 'candidate', strength: 'explicit', trigger_id: key('github-issue', '12'), thread: 'github:12' })
@@ -496,7 +497,7 @@ it('ignores an allowed sender\'s new Issue that does not mention the agent, and 
     vi.spyOn(Commands.prototype, 'gh').mockResolvedValue(issue)
     vi.spyOn(Commands.prototype, 'pages').mockResolvedValue([])
     runtime.store.set('github-since', '2026-09-08T23:59:00.000Z')
-    await pollRound(runtime.context(githubKind))
+    await pollRound(runtime.context(githubKind, 'github'))
     await runtime.idle()
   await runtime.idle()
     return key('github-issue', String(number))
@@ -588,12 +589,12 @@ it('reports a Source that was switched on as starting until its next pass report
   const save = (enabled: boolean) => runtime.settings.save('source:github', { enabled, config: runtime.store.settings().sources.github!.config }, runtime.store.blockRevision('source:github'), 'panel')
   const github = async () => ((await api('GET', 'sources')).body as { id: string; health: unknown[] }[]).find(source => source.id === 'github')!.health
   await save(false)
-  runtime.context(githubKind).report('github', { state: 'paused', detail: 'Off', code: 'sourceOff' })
+  runtime.context(githubKind, 'github').report('github', { state: 'paused', detail: 'Off', code: 'sourceOff' })
   await save(true)
   expect(await github()).toEqual([{ name: 'github', state: 'starting', detail: '' }])
   // 报告其他内容的部件（例如缺失的 CLI）会保留其报告：不会有轮次来替换它。
   await save(false)
-  runtime.context(githubKind).report('github', { state: 'paused', detail: 'x', code: 'feishuCliUnset' })
+  runtime.context(githubKind, 'github').report('github', { state: 'paused', detail: 'x', code: 'feishuCliUnset' })
   await save(true)
   expect(await github()).toEqual([expect.objectContaining({ code: 'feishuCliUnset' })])
 })
@@ -1431,7 +1432,7 @@ it('tells the conversation that the PR merged when work a restart recovered ends
   // PR 在重启前已合并；恢复的工作继续，但暂不说明任何内容。
   const merged = { number: 42, state: 'closed', merged: true, merged_at: before.assignments[0]!.createdAt, html_url: 'https://github.com/acme/widgets/pull/42',
     user: { login: 'agent-bot' }, head: { sha: 'abc', ref: 'agent/x', repo: { full_name: 'acme/widgets' } } }
-  await observePull(runtime.context(githubKind), merged)
+  await observePull(runtime.context(githubKind, 'github'), merged)
   expect(runtime.store.tickets.get(ticket.id)).not.toHaveProperty('ended')
   const id = key('pr-terminal', '42', 'feishu', JSON.stringify({ chatId: CHAT, messageId: 'om_1' }), 'merged')
   expect(runtime.store.replyStatus(id)).toBeUndefined()
@@ -1492,6 +1493,22 @@ it('fails a ticket at once on a worker error that is not passing, and relays it'
   ;(runtime as unknown as { ctx: Context }).ctx.emit('agent/error', { agent: agents.get(sessionId), turn: 1, step: 1, error: new Error('Invalid tool schema') } as never)
   await vi.waitFor(() => expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)!.report).toMatchObject({ state: 'failed', summary: expect.stringContaining('Invalid tool schema') }))
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'worker_report', ticket: { ticket_id: ticket.id }, state: 'failed' })
+})
+
+it('runs one polling loop per source record and ends them all on shutdown', async () => {
+  const started: string[] = []
+  const adapter = { kind: githubKind, async watch(_host: unknown, id: string, signal: AbortSignal) {
+    started.push(id)
+    await new Promise<void>(resolve => signal.aborted ? resolve() : signal.addEventListener('abort', () => resolve()))
+  } } as SourceAdapter
+  const current = runtime.store.settings()
+  runtime.store.saveSettings({ ...current, sources: {
+    'github-a': { kind: 'github', enabled: true, config: { repository: 'acme/one' } },
+    'github-b': { kind: 'github', enabled: true, config: { repository: 'acme/two' } },
+  } })
+  runtime.startSources([adapter])
+  await vi.waitFor(() => expect([...started].sort()).toEqual(['github-a', 'github-b']))
+  await runtime.stop()
 })
 
 it('refuses the main Session a bash command that runs sleep and a long job wait, as reports arrive by themselves, and no worker', async () => {

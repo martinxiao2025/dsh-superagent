@@ -37,7 +37,7 @@ export interface SourcePolicyPart<P extends Record<string, unknown>> {
   /** `config` 下策略接收表的接收范围（与 `scope().row` 对应）；没有 `rows` 的种类使用接收表的默认值。 */
   rows?(config: Record<string, unknown>): AdmissionRowView[]
   /** 可选的外部名单同步（例如群成员）；`ready` 报告 `part` 是否指定了要刷新的目标。 */
-  sync?: { label: Localized; ready(part: P): boolean; run(host: SourceHost, part: P, signal: AbortSignal): Promise<P> }
+  sync?: { label: Localized; ready(part: P): boolean; run(host: SourceHost, id: string, part: P, signal: AbortSignal): Promise<P> }
 }
 /** 频道地址的 UI 链接；`triggerId` 指定触发器，在可用时优先使用它自己的深链。 */
 export interface ChannelLink { url: string; label: Localized; triggerId?: string }
@@ -92,7 +92,7 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   /** 校验已存储和提交的配置并填充默认值。 */
   schema: z.ZodType<C>
   fields: FieldSpec[]
-  /** 此种类在 `health[...]` 下拥有的健康条目名；其他种类或核心循环不得报告它们。 */
+  /** 此种类在健康面板上声明的条目名；第一条以来源记录 ID 命名，其余为 `<记录ID>:<条目名>`。 */
   health: string[]
   /** 此种类触发器（或记录的 Mandate 依据）的监听规则；没有 `scope` 的种类监听它产生的一切，且不观察其中任何内容。 */
   scope?(input: { meta: Record<string, unknown> }, config: C): ScopeResult
@@ -106,10 +106,17 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   repliesTo?(trigger: Trigger): string | undefined
   /** 发送者拥有自身身份的种类所用的策略部分。 */
   policy?: SourcePolicyPart<Record<string, unknown> & { allowed: { id: string; name?: string }[] }>
-  /** 重新读取行键的显示名（例如群名），把解析出的名字存到 `KV.sources.labels(kind)` 并返回。 */
-  refreshLabels?(host: SourceHost, signal?: AbortSignal): Promise<Record<string, string>>
+  /** 重新读取行键的显示名（例如群名），把解析出的名字存到 `KV.sources.labels(id)` 并返回。 */
+  refreshLabels?(host: SourceHost, id: string, signal?: AbortSignal): Promise<Record<string, string>>
   /** 此种类注册到执行环境中的变量及其值的计算方式。 */
   environment?: { variables: readonly VariableSpec[]; values(input: EnvironmentInput<C>): Record<string, string> }
 }
 
 export interface SourceInstance<C extends Record<string, unknown> = Record<string, unknown>> { id: string; kind: string; enabled: boolean; config: C }
+
+/** 内置适配器：种类描述符与按来源记录运行的轮询循环。 */
+export interface SourceAdapter<C extends Record<string, unknown> = Record<string, unknown>> {
+  readonly kind: SourceKind<C>
+  /** 为记录 `id` 运行循环，直到 `signal` 中止；循环内的失败报告为该记录的健康状态，不会向外抛出。 */
+  watch(host: SourceHost, id: string, signal: AbortSignal): Promise<void>
+}

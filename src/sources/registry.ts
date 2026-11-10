@@ -4,6 +4,7 @@ import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
 import type { ChannelLink, ChannelLinks, SourceInstance, SourceKind, TriggerContext, VariableSpec } from './kind.ts'
+import { healthNames } from './identity.ts'
 
 
 /**
@@ -16,29 +17,44 @@ export class SourceRegistry implements SourceScope {
   constructor(private readonly settings: () => Settings, private readonly board: Pick<HealthBoard, 'claim'> = new HealthBoard(),
     private readonly registered: (kind: SourceKind) => () => void = () => () => {}) {}
 
-  /** 注册一个 SourceKind，在 HealthBoard 上认领其健康条目（拒绝 `sync:` 前缀，这些由 Settings 拥有），并返回注销函数。 */
+  /** 注册一个 SourceKind，并为已有的来源记录认领其健康条目（拒绝 `sync:` 前缀，这些由 Settings 拥有）。 */
   register<C extends Record<string, unknown>>(kind: SourceKind<C>): () => void {
     if (this.kinds.has(kind.kind)) throw new Error(`Source kind already registered: ${kind.kind}`)
     const refused = (name: string) => new Error(`Source kind ${kind.kind} declares the health entry ${name}, which another part reports`)
     const synced = kind.health.find(name => name.startsWith('sync:'))
     if (synced) throw refused(synced)
-    const entries = new Map<string, HealthEntry>()
-    const release = () => { for (const [name, entry] of entries) { entry.release(); this.health.delete(name) } }
-    for (const name of kind.health) {
-      try { entries.set(name, this.board.claim(name, { state: 'starting', detail: '' })) }
-      catch { release(); throw refused(name) }
-    }
-    for (const [name, entry] of entries) this.health.set(name, entry)
     this.kinds.set(kind.kind, kind as unknown as SourceKind)
+    try { this.syncHealth() } catch (error) { this.kinds.delete(kind.kind); throw error }
     const unregistered = this.registered(kind as unknown as SourceKind)
-    return () => { this.kinds.delete(kind.kind); release(); unregistered() }
+    return () => { this.kinds.delete(kind.kind); this.syncHealth(); unregistered() }
   }
   /**
-   * 返回 `names` 对应的活跃健康条目。来源上下文通过构建时收到的条目写入，
-   * 因此在该注册结束之后发送的报告即使种类再次注册也不会生效。
+   * 返回记录 `id` 对应的活跃健康条目，键为种类声明的本地条目名。
+   * 来源上下文通过构建时收到的条目写入，因此在该注册结束之后发送的报告即使种类再次注册也不会生效。
    */
-  healthEntries(names: readonly string[]): Map<string, HealthEntry> {
-    return new Map(names.flatMap(name => { const entry = this.health.get(name); return entry ? [[name, entry] as const] : [] }))
+  healthEntries(id: string, kind: { kind: string; health: readonly string[] }): Map<string, HealthEntry> {
+    const names = healthNames(id, kind.health)
+    return new Map(kind.health.flatMap((name, index) => {
+      const entry = this.health.get(names[index]!)
+      return entry ? [[name, entry] as const] : []
+    }))
+  }
+  /** 按当前来源记录校准健康项：为已安装类型的记录认领条目，释放记录或类型已不存在的条目。 */
+  syncHealth(settings = this.settings()): void {
+    const keep = new Set<string>()
+    for (const [id, record] of Object.entries(settings.sources)) {
+      const kind = this.kinds.get(record.kind)
+      if (kind) for (const name of healthNames(id, kind.health)) keep.add(name)
+    }
+    for (const [name, entry] of this.health) {
+      if (keep.has(name)) continue
+      entry.release()
+      this.health.delete(name)
+    }
+    for (const name of keep) {
+      if (this.health.has(name)) continue
+      this.health.set(name, this.board.claim(name, { state: 'starting', detail: '' }))
+    }
   }
   /** 按适配器类型查找已安装的种类。 */
   kindByName(kind: string): SourceKind | undefined { return this.kinds.get(kind) }

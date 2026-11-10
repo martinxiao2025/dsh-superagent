@@ -358,21 +358,23 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/infra/paths.ts` | 包的根目录，即打包文件所在位置 |
 | `src/infra/text.ts` | 字数统计和聊天消息限制、`fill` 和 `sameName` |
 | `src/infra/health.ts` | `HealthBoard`，每个部分的健康条目，各由其唯一写入者认领 |
-| `src/sources/kind.ts` | `SourceKind` 协议 |
-| `src/sources/registry.ts` | `SourceRegistry` |
+| `src/sources/kind.ts` | `SourceKind` 与 `SourceAdapter` 协议 |
+| `src/sources/identity.ts` | 记录作用域的身份拼接：线程键、触发器 ID、KV 键、健康项与环境变量名 |
+| `src/sources/registry.ts` | `SourceRegistry`：按来源记录解析类型、配置、策略、线程与健康项 |
+| `src/sources/adapters.ts` | 内置适配器清单（GitHub、GitLab、飞书）；新增类型只需实现并登记一个适配器 |
 | `src/sources/host.ts` | `SourceHost`、`SourceContext`、`Health`、`health` 以及固定健康文本 |
 | `src/sources/poll.ts` | GitHub、GitLab 和飞书轮询共享的内容：`POLL_HORIZON_MS`、`polled`、`cursorAt`、`pollFailure`、失败轮询的错误健康，以及 `pollThreads`（把失败作为 `pollError` 留在其线程上） |
 | `src/sources/forge.ts` | GitHub 和 GitLab 共享的内容：`scopeOfMeta` 和 `forgeScope`（触发器的接收范围）、用于允许账号和准入行的 `forgePolicy`，以及 `mentions` |
-| `src/sources/github.ts` | GitHub kind 和插件入口，导出为 `./github-watch`：一轮通知轮询、打开工单的拉取请求及其 CI，以及已订阅线程 |
+| `src/sources/github.ts` | GitHub 适配器与种类定义：一轮通知轮询、打开工单的拉取请求及其 CI，以及已订阅线程 |
 | `src/sources/github-trigger.ts` | 把 GitHub 评论、评审、Issue 正文和 CI 变化作为触发器，以及 GitHub 地址 |
 | `src/sources/github-pull.ts` | 拉取请求规则：工单关注哪些拉取请求（`claimPull`、`observePull`）、向 Engine 报告的关闭，以及 `pullEndNotices`（工单以合并或关闭结束时发送的聊天通知） |
 | `src/sources/github-channel.ts` | GitHub 渠道：评论和评审线程回复，`sent` 或 `gone` |
 | `src/sources/github-read.ts` | CI 快照、仓库读取、`github/` 资源，以及 `githubThreadContext`：分页读取 Issue 或拉取请求的对话 |
-| `src/sources/gitlab.ts` | GitLab kind 和插件入口，导出为 `./gitlab-watch`：一轮针对 Issue 和合并请求及其评论的轮询、来源健康，以及已订阅线程 |
+| `src/sources/gitlab.ts` | GitLab 适配器与种类定义：一轮针对 Issue 和合并请求及其评论的轮询、来源健康，以及已订阅线程 |
 | `src/sources/gitlab-trigger.ts` | 把 GitLab Issue、合并请求和评论作为触发器，含人和机器人的规则以及 GitLab 地址 |
 | `src/sources/gitlab-channel.ts` | GitLab 渠道：Issue 和合并请求上的评论，带幂等标记，`sent` 或 `gone` |
 | `src/sources/gitlab-read.ts` | `gitlab/` 资源和 `gitlabThreadContext`：分页读取 Issue 或合并请求的正文和评论 |
-| `src/sources/feishu.ts` | 飞书 kind 和插件入口，导出为 `./feishu-watch` |
+| `src/sources/feishu.ts` | 飞书适配器与种类定义：策略同步、群名刷新与飞书循环的启动 |
 | `src/sources/feishu-trigger.ts` | 按同一套规则把实时事件、历史页面和话题页面中的飞书消息转为触发器 |
 | `src/sources/feishu-loops.ts` | 飞书循环：事件消费者、历史恢复、群名和已订阅话题的轮询 |
 | `src/sources/feishu-channel.ts` | 飞书渠道：话题回复，`sent` 或 `gone` |

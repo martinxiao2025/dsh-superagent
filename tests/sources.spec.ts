@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Engine, MemoryRepositories, key, type Assessor, type Executor, type Thread, type Ticket, type Trigger } from '../src/core/index.ts'
-import { backfillChat, consumerRetry, feishuKind, feishuTriggerId, feishuRef, feishuTime, feishuTrigger, historyEvent }
-  from '../src/sources/feishu.ts'
+import { backfillChat, consumerRetry, feishuAdapter, feishuKind, feishuRef, feishuTime, feishuTrigger, feishuTriggerId, historyEvent } from '../src/sources/feishu.ts'
 import { KV } from '../src/kv.ts'
-import { apply as applyFeishu, pollThreads as pollFeishuThreads } from '../src/sources/feishu.ts'
+import { pollThreads as pollFeishuThreads } from '../src/sources/feishu.ts'
 import { runFeishu } from '../src/sources/feishu-loops.ts'
 import { commentTrigger, githubAddress, githubChannel, issueTrigger, type GithubComment, type GithubIssue } from '../src/sources/github-trigger.ts'
 import { claimPull, observePull, pullEndNotices, pullOf, ticketBranch, type Pull } from '../src/sources/github-pull.ts'
 import { ciCounts, ciFact, ciSummary } from '../src/sources/github-read.ts'
-import { apply as applyGithub, githubKind, pollFailure, pollRound } from '../src/sources/github.ts'
+import { githubAdapter, githubKind, pollFailure, pollRound } from '../src/sources/github.ts'
 import { pollThreads as pollGithubThreads } from '../src/sources/github.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { cursorAt, POLL_HORIZON_MS } from '../src/sources/poll.ts'
@@ -19,6 +18,7 @@ import { testDeployment } from './fixtures/deployment.ts'
 import { programSource } from './fixtures/program.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
+import type { SourceContext } from '../src/sources/host.ts'
 import { SetupError, type SetupProblem } from '../src/setup.ts'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -43,15 +43,26 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   // 来源的函数接收上下文；插件条目与类型回调接收宿主，宿主会构建每个类型的上下文。
-  const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind) }
-  const context = sourceContextOf(parts, { kind: 'feishu', health: ['github', 'feishu', 'history'] })
+  const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }, id: string) => sourceContextOf(parts, kind, id) }
+  // 合并的上下文让各来源函数接收宿主；配置取两条记录的并集（任一记录关闭即视为未启用），
+  // `report` 按条目归属写入对应记录的健康项。
+  const context: SourceContext = { ...sourceContextOf(parts, feishuKind, 'feishu'),
+    config: () => {
+      const records = [parts.sources.instance('github'), parts.sources.instance('feishu')].filter(record => record !== undefined)
+      return records.length && records.every(record => record.enabled) ? Object.assign({}, ...records.map(record => record.config)) as never : undefined
+    },
+    report: (entry, value) => {
+      const target = entry === 'github' ? ['github', githubKind] as const : ['feishu', feishuKind] as const
+      parts.sources.healthEntries(target[0], target[1]).get(entry)?.set(value)
+    } }
   const health = overrides.sources ? healthOf.get(overrides.sources)!.all : board.all
   return { ...value, ...context, health, store, engine, commands: parts.commands, receive, executor }
 }
 const healthOf = new WeakMap<SourceRegistry, HealthBoard>()
-function emptyRegistry(): SourceRegistry {
+/** 一个尚未注册任何类型的注册表，带一条启用的记录以便观察该类型的循环。 */
+function emptyRegistry(record: { id: string; kind: string } = { id: 'feishu', kind: 'feishu' }): SourceRegistry {
   const board = new HealthBoard()
-  const sources = new SourceRegistry(() => SettingsSchema.parse({}), board)
+  const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { [record.id]: { kind: record.kind, enabled: true, config: {} } } }), board)
   healthOf.set(sources, board)
   return sources
 }
@@ -93,20 +104,20 @@ const bare = (reads: string[]) => reads.map(path => path.split('?')[0])
 describe('feishu source', () => {
   it('registers its kind without a bot, and names on its health what setup still needs', async () => {
     const run = async (overrides: Partial<SourceContextDeps>) => {
-      // 夹具的注册表已持有该类型；这个注册表初始为空，以便显示插件的注册。
       const value = host({ sources: emptyRegistry(), ...overrides })
-      const disposers: (() => unknown)[] = []
-      applyFeishu({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
-      await vi.waitFor(() => expect(value.health.history).toBeDefined())
+      const dispose = value.sources.register(feishuKind)
+      const controller = new AbortController()
+      const running = feishuAdapter.watch(value, 'feishu', controller.signal)
+      await vi.waitFor(() => expect(value.health['feishu:history']).toBeDefined())
       const registered = value.sources.kindByName('feishu')
-      // 在处置清除已注册条目之前快照健康状态。
+      // 在取消注册清除条目之前快照健康状态。
       const health = { ...value.health }
-      for (const dispose of disposers) await dispose()
+      controller.abort(); await running; dispose()
       return { ...value, registered, health }
     }
     const unset = await run({ deployment: testDeployment({ feishu: undefined }) })
     expect(unset.registered).toBe(feishuKind)
-    expect(unset.health).toMatchObject({ feishu: { state: 'paused', code: 'feishuCliUnset' }, history: { state: 'paused', code: 'feishuBotMissing' } })
+    expect(unset.health).toMatchObject({ feishu: { state: 'paused', code: 'feishuCliUnset' }, 'feishu:history': { state: 'paused', code: 'feishuBotMissing' } })
     const problem = new SetupError('feishuBotNotReady', { app: 'cli_bot', status: 'missing' }).problem
     const refused = await run({ deployment: testDeployment({ feishu: undefined }), feishuProblem: problem })
     // 失败的机器人检查会等待操作者的修复和一次检查；它不会像轮询错误那样自行重试。
@@ -316,12 +327,12 @@ describe('feishu source', () => {
     const sync = feishuKind.policy!.sync!
     expect(sync.ready({ allowed: [] })).toBe(false)
     const signal = new AbortController().signal
-    expect(await sync.run(h, { allowed: [{ id: MEMBER, name: 'Alice' }, { id: 'ou_bob', name: 'Bob' }], syncChat: 'oc_team' }, signal))
+    expect(await sync.run(h, 'feishu', { allowed: [{ id: MEMBER, name: 'Alice' }, { id: 'ou_bob', name: 'Bob' }], syncChat: 'oc_team' }, signal))
       .toEqual({ allowed: [{ id: MEMBER, name: 'Alice Li' }, { id: 'ou_carol', name: 'Carol' }], syncChat: 'oc_team' })
     expect(withSignal).toHaveBeenCalledWith(signal)
     expect(lark.mock.calls[0]![0]).toEqual(expect.arrayContaining(['+chat-members-list', '--chat-id', 'oc_team']))
     lark.mockResolvedValue({ users: [], has_more: true })
-    await expect(sync.run(h, { allowed: [], syncChat: 'oc_team' }, new AbortController().signal)).rejects.toThrow('incomplete member list')
+    await expect(sync.run(h, 'feishu', { allowed: [], syncChat: 'oc_team' }, new AbortController().signal)).rejects.toThrow('incomplete member list')
     h.store.close()
   })
 })
@@ -769,10 +780,11 @@ describe('github source', () => {
         const settings = SettingsSchema.parse({ sources: { github: { kind: 'github', ...github } } })
         const sources = new SourceRegistry(() => settings, board)
         healthOf.set(sources, board)
+        const dispose = sources.register(githubKind)
         const value = host({ sources, ...overrides })
-        const disposers: (() => unknown)[] = []
-        applyGithub({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
-        return { value, stop: async () => { for (const dispose of disposers) await dispose(); value.store.close() } }
+        const controller = new AbortController()
+        const running = githubAdapter.watch(value, 'github', controller.signal)
+        return { value, stop: async () => { controller.abort(); await running; dispose(); value.store.close() } }
       }
       const pending = await start({ configured: () => false })
       await vi.waitFor(() => expect(pending.value.health.github).toMatchObject({ state: 'paused', code: 'setupPending' }))
@@ -804,12 +816,13 @@ describe('github source', () => {
     } finally { vi.useRealTimers() }
   })
   it('reports a failure that escapes the polling loop as its health instead of an unhandled rejection', async () => {
-    // 夹具的注册表已持有该类型；这个注册表初始为空，以便插件注册它。
-    const value = host({ sources: emptyRegistry(), ready: Promise.reject(new Error('lock held')) })
-    const disposers: (() => unknown)[] = []
-    applyGithub({ orchestrator: value, effect: (effect: () => () => unknown) => { disposers.push(effect()) } } as never)
+    // 夹具的注册表尚未持有该类型，以便适配器注册它。
+    const value = host({ sources: emptyRegistry({ id: 'github', kind: 'github' }), ready: Promise.reject(new Error('lock held')) })
+    const dispose = value.sources.register(githubKind)
+    const controller = new AbortController()
+    const running = githubAdapter.watch(value, 'github', controller.signal)
     await vi.waitFor(() => expect(value.health.github).toMatchObject({ state: 'error', detail: expect.stringContaining('lock held') }))
-    for (const dispose of disposers) await dispose()
+    controller.abort(); await running; dispose()
     value.store.close()
   })
   /** GitHub 返回的 Issue，由 alice 打开。 */
@@ -976,14 +989,14 @@ describe('source context', () => {
     const feishu: SetupProblem = { place: 'feishu', code: 'feishuNoBot', values: {}, detail: 'No bot' }
     const github: SetupProblem = { place: 'github', code: 'agentCliUnset', values: {}, detail: 'No CLI' }
     const h = host({ feishuProblem: feishu, setupProblem: github })
-    expect(h.context(feishuKind).problem).toBe(feishu)
-    expect(h.context(githubKind).problem).toBe(github)
-    expect(h.context({ kind: 'probe', health: [] }).problem).toBeUndefined()
+    expect(h.context(feishuKind, 'feishu').problem).toBe(feishu)
+    expect(h.context(githubKind, 'github').problem).toBe(github)
+    expect(h.context({ kind: 'probe', health: [] }, 'probe').problem).toBeUndefined()
     h.store.close()
   })
   it('lets a kind report only its own health entries', () => {
     const h = host()
-    const github = h.context(githubKind)
+    const github = h.context(githubKind, 'github')
     github.report('github', { state: 'ready', detail: 'ok' })
     expect(h.health.github).toEqual({ state: 'ready', detail: 'ok' })
     expect(() => github.report('feishu', { state: 'error', detail: 'x' })).toThrow('no health entry feishu')
@@ -1005,9 +1018,9 @@ describe('source context', () => {
   })
   it('reads the configuration of an instance that is on, removes a record set to undefined, and merges ticket meta', () => {
     const h = host()
-    expect(h.config('feishu')).toMatchObject({ directMessages: true })
+    expect(h.config()).toMatchObject({ directMessages: true })
     h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, feishu: { kind: 'feishu', enabled: false, config: {} } } })
-    expect(h.config('feishu')).toBeUndefined()
+    expect(h.config()).toBeUndefined()
     h.state.set('github-retry', { 1: {} })
     h.state.set('github-retry', undefined)
     expect(h.store.keys('github-retry')).toEqual([])
@@ -1087,7 +1100,7 @@ ${body}`)
     const deps: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment, ready: Promise.resolve(), configured: () => true,
       receive: (trigger: Trigger) => engine.receive(trigger) }
     const turnOff = () => store.saveSettings(SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: false, config: { chats: [] } } } }))
-    return { ctx: sourceContextOf(deps, feishuKind), health, store, turnOff }
+    return { ctx: sourceContextOf(deps, feishuKind, 'feishu'), health, store, turnOff }
   }
 
   /** `event consume` 打印的消息事件行；群消息会提及机器人。 */
@@ -1141,10 +1154,10 @@ ${body}`)
       })
       const stop = new AbortController()
       const loops = runFeishu(ctx, AbortSignal.any([stop.signal, controller.signal]))
-      await vi.waitFor(() => expect(['ready', 'error']).toContain(health.history?.state), until)
+      await vi.waitFor(() => expect(['ready', 'error']).toContain(health['feishu:history']?.state), until)
       stop.abort(); await loops; lark.mockRestore()
       const cursors = Object.fromEntries(['oc_a', 'oc_b', 'oc_dm'].map(chat => [chat, store.get(KV.feishu.history(chat))]))
-      const result = { chats, cursors, history: health.history }
+      const result = { chats, cursors, history: health['feishu:history'] }
       store.close(); rmSync(join(dir, 'db.sqlite'), { force: true }); rmSync(join(dir, 'db.sqlite-wal'), { force: true })
       rmSync(join(dir, 'db.sqlite-shm'), { force: true })
       return result

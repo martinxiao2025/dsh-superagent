@@ -22,13 +22,15 @@ export function health(state: Health['state'], code: HealthCode, values: Record<
 }
 export interface SourceHost {
   readonly sources: SourceRegistry
-  /** 返回某个来源种类的上下文；它的 `report` 只写入该种类声明的健康条目。 */
-  context(kind: { kind: string; health: readonly string[] }): SourceContext
+  /** 返回某条来源记录的上下文；它的 `report` 只写入该记录的健康条目。 */
+  context(kind: { kind: string; health: readonly string[] }, id: string): SourceContext
 }
 /** 来源在线程上发布的显示标签、URL 和事实（`null` 删除某项事实）。 */
 export interface ThreadDescription { label?: string; url?: string; facts?: Record<string, ThreadFact | null> }
 /** 向来源种类暴露的应用能力：读取状态、接收触发器、管理线程/工单以及报告健康。 */
 export interface SourceContext {
+  /** 这条上下文所属的来源记录 ID；触发器、线程、健康项都按它命名。 */
+  readonly id: string
   readonly deployment: Deployment
   readonly commands: Commands
   readonly ready: Promise<void>
@@ -36,8 +38,8 @@ export interface SourceContext {
   configured(): boolean
   /** 使此来源的账号无法运行的设置问题；只有飞书机器人检查会报告。 */
   readonly problem?: SetupProblem | undefined
-  /** 在启用时返回来源的配置，在禁用或未安装时返回 undefined。 */
-  config<C extends Record<string, unknown>>(kind: string): C | undefined
+  /** 这条记录启用时返回它的配置，禁用或不存在时返回 undefined。 */
+  config<C extends Record<string, unknown>>(): C | undefined
   /** 把触发器接入引擎并安排下一次评估；调用方应在推进读取游标前等待完成。 */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
   atomic<T>(work: () => T): T
@@ -64,4 +66,5 @@ export interface SourceContext {
   /** 报告此种类声明的某个健康条目的状态；对未声明的条目名抛出。 */
   report(entry: string, health: Health): void
 }
-export const sourceContext = (host: SourceHost, kind: { kind: string; health: readonly string[] }): SourceContext => host.context(kind)
+export const sourceContext = (host: SourceHost, kind: { kind: string; health: readonly string[] }, id: string): SourceContext =>
+  host.context(kind, id)

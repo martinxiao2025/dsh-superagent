@@ -29,19 +29,20 @@ export interface SourceContextDeps {
 }
 
 /**
- * 为一个来源类型构建上下文。健康报告仅限于该类型声明的条目，
+ * 为一条来源记录构建上下文。健康报告仅限于该记录声明的条目，
  * 并绑定到活动注册；一旦取消注册即成为空操作。
  */
-export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }): SourceContext {
+export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }, id: string): SourceContext {
   const { store } = deps
-  const health = deps.sources.healthEntries(kind.health)
+  const health = deps.sources.healthEntries(id, kind)
   return {
+    id,
     get deployment() { return deps.deployment },
     commands: deps.commands,
     ready: deps.ready,
     configured: () => deps.configured(),
     get problem() { return [deps.feishuProblem, deps.gitlabProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
-    config: <C extends Record<string, unknown>>(id: string) => {
+    config: <C extends Record<string, unknown>>() => {
       const instance = deps.sources.instance<C>(id)
       return instance?.enabled ? instance.config : undefined
     },

@@ -8,6 +8,7 @@ vi.mock('../src/app/runtime.ts', () => ({ Runtime: class {
   ready = Promise.resolve()
   constructor(_ctx: unknown, readonly machine: Machine, readonly restart: () => void) { runtimes.push(this) }
   configured() { return true }
+  startSources() {}
   async stop() {}
 } }))
 /** 模拟 Cordis 加载器原地更新易变配置引用。 */

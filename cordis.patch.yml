@@ -1,19 +1,9 @@
-# dsh-superagent 插件包层：在不带配置的情况下插入各插件，以及其各会话运行的智能体预设。profile
+# dsh-superagent 插件包层：插入主插件及其各会话运行的智能体预设。profile
 # 提供 `dsh-superagent` 条目的 stateDir（参见 docs/006-deployment.md 和 examples/profile.cordis.patch.yml）；没有
-# stateDir 时插件拒绝启动。
+# stateDir 时插件拒绝启动。来源（GitHub / GitLab / 飞书）是插件内的用户数据，由管理面板增删启停，不再有独立的插件开关。
 - insert:
     - id: dsh-superagent
       name: dsh-superagent
-    - id: dsh-superagent-github
-      name: dsh-superagent/github-watch
-    # 可选的飞书来源；启用后需要配置机器人 CLI。
-    - id: dsh-superagent-feishu
-      name: dsh-superagent/feishu-watch
-      disabled: true
-    # 可选的 GitLab 来源；启用后需要配置项目和 glab CLI。
-    - id: dsh-superagent-gitlab
-      name: dsh-superagent/gitlab-watch
-      disabled: true
     # 每个执行器会话的智能体预设（src/app/sessions.ts 中的 WORKER_PRESET）；主会话有自己的预设，见下方。
     # 它是 DSH 的 `standard` 预设，只保留执行器需要的内容，并让前台命令在 5 秒后转入后台任务，
     # 因此长命令不会挡住人的消息，会话会在下一步接收它。省略了：向人提问、展示、计划模式、

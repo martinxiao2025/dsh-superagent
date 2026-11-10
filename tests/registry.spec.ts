@@ -74,18 +74,17 @@ describe('Source registry', () => {
     expect(await sources.send(message('quiet'), commands)).toBe('gone')
     expect(sources.threadContext({ ...trigger, source: 'quiet' })).toBeUndefined()
   })
-  it('refuses a kind that declares a health entry another kind or dsh-superagent itself reports, and gives up its entries at unregister', () => {
+  it('claims health entries per Source record, gives them up at unregister, and ignores reports from a context that outlived its registration', () => {
     const board = new HealthBoard()
-    // 预先占用内置健康条目；sync:* 条目保留给设置同步。
+    // 预先占用内置健康条目。
     for (const name of ['runtime', 'reply']) board.claim(name)
-    const sources = new SourceRegistry(() => SettingsSchema.parse({}), board)
+    const settings = SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} } } })
+    const sources = new SourceRegistry(() => settings, board)
     const unregister = sources.register(githubKind)
-    expect(() => sources.register({ ...probe, health: ['github'] })).toThrow('declares the health entry github')
-    for (const name of ['runtime', 'reply', 'sync:github']) expect(() => sources.register({ ...probe, health: ['probe', name] })).toThrow(name)
-    expect(sources.kindByName('probe')).toBeUndefined()
-    sources.register({ ...probe, health: ['probe'] })
-    const context = (kind: { kind: string; health: readonly string[] }) => sourceContextOf({ sources } as unknown as SourceContextDeps, kind)
-    const first = context(githubKind)
+    expect(board.all.github).toEqual({ state: 'starting', detail: '' })
+    const context = (kind: { kind: string; health: readonly string[] }, id: string) =>
+      sourceContextOf({ sources } as unknown as SourceContextDeps, kind, id)
+    const first = context(githubKind, 'github')
     first.report('github', { state: 'ready', detail: 'ok' })
     expect(board.all.github).toEqual({ state: 'ready', detail: 'ok' })
     expect(() => first.report('probe', { state: 'ready', detail: '' })).toThrow('has no health entry probe')
@@ -96,8 +95,27 @@ describe('Source registry', () => {
     sources.register(githubKind)
     first.report('github', { state: 'error', detail: 'late' })
     expect(board.all.github).toEqual({ state: 'starting', detail: '' })
-    context(githubKind).report('github', { state: 'ready', detail: 'again' })
+    context(githubKind, 'github').report('github', { state: 'ready', detail: 'again' })
     expect(board.all.github).toEqual({ state: 'ready', detail: 'again' })
+  })
+  it('keeps the health of two same-kind records apart', () => {
+    const board = new HealthBoard()
+    const settings = SettingsSchema.parse({ sources: { 'github-a': { kind: 'github', enabled: true, config: {} },
+      'github-b': { kind: 'github', enabled: true, config: {} } } })
+    const sources = new SourceRegistry(() => settings, board)
+    sources.register(githubKind)
+    expect(board.all['github-a']).toEqual({ state: 'starting', detail: '' })
+    expect(board.all['github-b']).toEqual({ state: 'starting', detail: '' })
+    sourceContextOf({ sources } as unknown as SourceContextDeps, githubKind, 'github-a').report('github', { state: 'ready', detail: 'A' })
+    expect(board.all['github-a']).toEqual({ state: 'ready', detail: 'A' })
+    expect(board.all['github-b']).toEqual({ state: 'starting', detail: '' })
+  })
+  it('refuses a kind whose record health entry another part already reports', () => {
+    const board = new HealthBoard()
+    board.claim('runtime')
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { runtime: { kind: 'probe', enabled: true, config: {} } } }), board)
+    expect(() => sources.register({ ...probe, health: ['runtime'] })).toThrow()
+    expect(sources.kindByName('probe')).toBeUndefined()
   })
   it('names the Trigger whose message a Trigger\'s message answers, where its kind can', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: {} },
