@@ -210,8 +210,6 @@ export class DshExecutor implements Executor {
   private readonly slots: WorkerSlots
   /** 迄今已尝试的瞬时失败次数：工作单元回合以 `assignment.id` 为键，启动以 `launch:<assignment.id>` 为键。 */
   private readonly transient = new Map<string, number>()
-  /** 正在启动的项目目录；同一项目目录同时只允许一个工单启动，避免并发共享检出时互相覆盖。 */
-  private readonly startingProjects = new Set<string>()
   /** 当前正在等待瞬时失败退避计时器以恢复其工作单元回合的任务分配 ID。 */
   private readonly resuming = new Set<string>()
   /**
@@ -275,11 +273,7 @@ export class DshExecutor implements Executor {
     const ticket = this.host.store.tickets.get(ticketId)
     const assignment = ticket && latestAssignment(ticket)
     if (!ticket || !liveTicket(ticket) || assignment?.id !== assignmentId || assignment.state !== 'pending') return
-    // 工单共享按项目命名的执行目录，同一目录再起一个工单会覆盖正在使用的工作区，因此排队等待。
-    const project = ticket.execution?.directory
-    if (project && this.projectBusy(ticket)) throw new Later(`Another ticket is already working in ${project}`)
     this.slots.reserve(ticketId, 'launch')
-    if (project) this.startingProjects.add(project)
     try { await this.launch(ticket, assignment); this.transient.delete(`launch:${assignmentId}`) }
     catch (error) {
       // 关闭或暂停会把启动重新排队以便恢复，瞬时的网络/提供方错误会退避重试。
@@ -289,10 +283,7 @@ export class DshExecutor implements Executor {
       if (this.host.closing() || error instanceof Later) throw error
       if (!(error instanceof PrepareFailed) && this.retries(`launch:${assignmentId}`, error)) throw error
       this.launchFailed(ticketId, assignmentId, error)
-    } finally {
-      this.slots.free(ticketId)
-      if (project) this.startingProjects.delete(project)
-    }
+    } finally { this.slots.free(ticketId) }
   }
   /**
    * 逐个把排队的输入投递给正在运行的任务分配，并在每次投递前重新读取工单状态，
@@ -417,17 +408,6 @@ export class DshExecutor implements Executor {
   private running(ticket: Ticket): boolean {
     if (!runningAssignment(ticket)) return false
     return this.host.context.agents.get(workerSessionId(ticket.id) as SessionId)?.status === 'running' || this.settling.has(ticket.id)
-  }
-  /**
-   * 同一项目目录是否已被别的工单占用：正在启动，或其工作单元仍在运行。
-   * 项目目录由同一来源记录的项目共享，多个工单并发在同一检出里会互相覆盖文件与分支。
-   */
-  private projectBusy(ticket: Ticket): boolean {
-    const directory = ticket.execution?.directory
-    if (!directory) return false
-    if (this.startingProjects.has(directory)) return true
-    return this.host.store.tickets.open().some(other => other.id !== ticket.id
-      && other.execution?.directory === directory && this.running(other))
   }
   /** 启动失败后把工单标记为失败；工单会等待新的人工输入或显式重试到达。 */
   private launchFailed(ticketId: string, assignmentId: string, error: unknown): void {
