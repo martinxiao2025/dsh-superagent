@@ -1,10 +1,16 @@
 /** 本地任务清单读取：`.csv` / `.tsv` 直接解析，`.xlsx` 用 Node 内置 zlib 解包读取，不引入第三方库。 */
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
-import { inflateRawSync } from 'node:zlib'
+import { inflateRawSync, deflateRawSync } from 'node:zlib'
 
 /** 读取一行之后的最小错误类型，调用方据此把记录标为异常而不中断其他来源。 */
 export class TaskFileError extends Error {}
+
+/** 回写目标：任务编号与原始标题，用于定位唯一一行。 */
+export interface XlsxTarget { taskId: string; taskTitle: string }
+
+/** 回写所需的列映射；只用到定位行与状态列。 */
+export interface XlsxColumns { id: string; title: string; status: string }
 
 /**
  * 读取清单并返回以表头为键的行；第一张表或 `sheet` 指定的表。
@@ -58,7 +64,22 @@ export function parseDelimited(text: string, delimiter: string): string[][] {
 }
 
 /** ZIP 中央目录中的一项；只需要读取未加密的 deflate 或 stored 条目。 */
-interface ZipEntry { name: string; method: number; compressedSize: number; offset: number }
+interface ZipEntry {
+  name: string
+  method: number
+  flags: number
+  time: number
+  date: number
+  crc: number
+  compressedSize: number
+  uncompressedSize: number
+  offset: number
+  nameBytes: Buffer
+  extra: Buffer
+  comment: Buffer
+  internal: number
+  external: number
+}
 
 /** 从 xlsx（ZIP）中取出指定文档的文本；`sheet` 为空时取第一张表。 */
 function sheetRows(buffer: Buffer, sheet: string): string[][] {
@@ -85,29 +106,145 @@ function zipEntries(buffer: Buffer): ZipEntry[] {
   const entries: ZipEntry[] = []
   for (let index = 0; index < count; index++) {
     if (buffer.readUInt32LE(at) !== 0x02014b50) break
-    const method = buffer.readUInt16LE(at + 10)
-    const compressedSize = buffer.readUInt32LE(at + 20)
+    const flags = buffer.readUInt16LE(at + 8)
+    if (flags & 0x0001) throw new TaskFileError('不支持加密的 xlsx 条目')
     const nameLength = buffer.readUInt16LE(at + 28)
-    const extra = buffer.readUInt16LE(at + 30)
-    const comment = buffer.readUInt16LE(at + 32)
-    const offset = buffer.readUInt32LE(at + 42)
+    const extraLength = buffer.readUInt16LE(at + 30)
+    const commentLength = buffer.readUInt16LE(at + 32)
     const name = buffer.toString('utf8', at + 46, at + 46 + nameLength)
-    entries.push({ name, method, compressedSize, offset })
-    at += 46 + nameLength + extra + comment
+    entries.push({
+      name,
+      method: buffer.readUInt16LE(at + 10),
+      flags,
+      time: buffer.readUInt16LE(at + 12),
+      date: buffer.readUInt16LE(at + 14),
+      crc: buffer.readUInt32LE(at + 16),
+      compressedSize: buffer.readUInt32LE(at + 20),
+      uncompressedSize: buffer.readUInt32LE(at + 24),
+      offset: buffer.readUInt32LE(at + 42),
+      nameBytes: buffer.subarray(at + 46, at + 46 + nameLength),
+      extra: buffer.subarray(at + 46 + nameLength, at + 46 + nameLength + extraLength),
+      comment: buffer.subarray(at + 46 + nameLength + extraLength, at + 46 + nameLength + extraLength + commentLength),
+      internal: buffer.readUInt16LE(at + 36),
+      external: buffer.readUInt32LE(at + 38),
+    })
+    at += 46 + nameLength + extraLength + commentLength
   }
   return entries
 }
 
-/** 读取一个 ZIP 条目并解压。 */
-function zipRead(buffer: Buffer, entry: ZipEntry): Buffer {
+/** 一个条目在原始文件中的压缩数据。 */
+function zipPayload(buffer: Buffer, entry: ZipEntry): Buffer {
+  const start = zipDataStart(buffer, entry)
+  return buffer.subarray(start, start + entry.compressedSize)
+}
+
+/** 条目压缩数据在原始文件中的起始位置。 */
+function zipDataStart(buffer: Buffer, entry: ZipEntry): number {
   if (buffer.readUInt32LE(entry.offset) !== 0x04034b50) throw new TaskFileError(`损坏的 xlsx 条目：${entry.name}`)
   const nameLength = buffer.readUInt16LE(entry.offset + 26)
   const extra = buffer.readUInt16LE(entry.offset + 28)
-  const start = entry.offset + 30 + nameLength + extra
-  const data = buffer.subarray(start, start + entry.compressedSize)
+  return entry.offset + 30 + nameLength + extra
+}
+
+/** 读取一个 ZIP 条目并解压。 */
+function zipRead(buffer: Buffer, entry: ZipEntry): Buffer {
+  const data = zipPayload(buffer, entry)
   if (entry.method === 0) return data
   if (entry.method === 8) return inflateRawSync(data)
   throw new TaskFileError(`不支持的 xlsx 压缩方式：${entry.method}`)
+}
+
+/**
+ * 重写 ZIP：只重新压缩 `replacements` 中的条目，其余条目直接复制原始压缩数据，保证样式表等字节不变。
+ * 所有条目都写入真实大小并清除数据描述符标志，中央目录与文件尾部重新生成。
+ */
+function zipWrite(buffer: Buffer, entries: readonly ZipEntry[], replacements: ReadonlyMap<string, Buffer>): Buffer {
+  if (entries.length > 0xffff) throw new TaskFileError('xlsx 条目过多，当前不支持 ZIP64')
+  const prepared = entries.map(entry => {
+    const replaced = replacements.get(entry.name)
+    return replaced === undefined
+      ? { entry, payload: zipPayload(buffer, entry), crc: entry.crc, size: entry.uncompressedSize }
+      : { entry, payload: compress(replaced, entry.method), crc: crc32(replaced), size: replaced.length }
+  })
+  const locals: Buffer[] = []
+  const centrals: Buffer[] = []
+  const offsets: number[] = []
+  let offset = 0
+  for (const { entry, payload, crc, size } of prepared) {
+    if (offset > 0xffffffff || payload.length > 0xffffffff || size > 0xffffffff) {
+      throw new TaskFileError('xlsx 文件过大，当前不支持 ZIP64')
+    }
+    offsets.push(offset)
+    // 清除 bit 3（数据描述符）：重建后的本地头直接带真实大小，不再跟随描述符。
+    const flags = entry.flags & ~0x0008
+    const local = Buffer.alloc(30 + entry.nameBytes.length + entry.extra.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(flags, 6)
+    local.writeUInt16LE(entry.method, 8)
+    local.writeUInt16LE(entry.time, 10)
+    local.writeUInt16LE(entry.date, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(payload.length, 18)
+    local.writeUInt32LE(size, 22)
+    local.writeUInt16LE(entry.nameBytes.length, 26)
+    local.writeUInt16LE(entry.extra.length, 28)
+    entry.nameBytes.copy(local, 30)
+    entry.extra.copy(local, 30 + entry.nameBytes.length)
+    locals.push(local, payload)
+    offset += local.length + payload.length
+  }
+  let directorySize = 0
+  for (const [index, { entry, payload, crc, size }] of prepared.entries()) {
+    const central = Buffer.alloc(46 + entry.nameBytes.length + entry.extra.length + entry.comment.length)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(entry.flags & ~0x0008, 8)
+    central.writeUInt16LE(entry.method, 10)
+    central.writeUInt16LE(entry.time, 12)
+    central.writeUInt16LE(entry.date, 14)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(payload.length, 20)
+    central.writeUInt32LE(size, 24)
+    central.writeUInt16LE(entry.nameBytes.length, 28)
+    central.writeUInt16LE(entry.extra.length, 30)
+    central.writeUInt16LE(entry.comment.length, 32)
+    central.writeUInt16LE(0, 34)
+    central.writeUInt16LE(entry.internal, 36)
+    central.writeUInt32LE(entry.external, 38)
+    central.writeUInt32LE(offsets[index]!, 42)
+    entry.nameBytes.copy(central, 46)
+    entry.extra.copy(central, 46 + entry.nameBytes.length)
+    entry.comment.copy(central, 46 + entry.nameBytes.length + entry.extra.length)
+    centrals.push(central)
+    directorySize += central.length
+  }
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(entries.length, 8)
+  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt32LE(directorySize, 12)
+  end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, ...centrals, end])
+}
+
+/** 按原条目方式压缩：stored 原样返回，deflate 用 Node 内置 zlib。 */
+function compress(content: Buffer, method: number): Buffer {
+  if (method === 0) return content
+  if (method === 8) return deflateRawSync(content)
+  throw new TaskFileError(`不支持的 xlsx 压缩方式：${method}`)
+}
+
+/** ZIP 使用的 CRC32。 */
+function crc32(buffer: Buffer): number {
+  let value = 0xffffffff
+  for (const byte of buffer) {
+    value ^= byte
+    for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0)
+  }
+  return (value ^ 0xffffffff) >>> 0
 }
 
 /** 解析共享字符串表。 */
@@ -140,16 +277,97 @@ function xmlRows(xml: string, shared: readonly string[]): string[][] {
     for (const cell of match[1]!.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
       const attrs = attributes(cell[1]!)
       const index = columnIndex(attrs.r ?? '')
-      const type = attrs.t
-      const body = cell[2]!
-      const value = type === 'inlineStr' ? textsOf(body) : type === 's'
-        ? shared[Number(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? -1)] ?? ''
-        : decodeXml(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? '')
       while (cells.length < index) cells.push('')
-      cells[index] = value
+      cells[index] = cellValue(attrs, cell[2]!, shared)
     }
     return cells
   })
+}
+
+/** 读取一个单元格的文本；共享字符串、内联文本与普通值分别处理。 */
+function cellValue(attrs: Record<string, string>, body: string, shared: readonly string[]): string {
+  if (attrs.t === 'inlineStr') return textsOf(body)
+  if (attrs.t === 's') return shared[Number(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? -1)] ?? ''
+  return decodeXml(/<v>([\s\S]*?)<\/v>/.exec(body)?.[1] ?? '')
+}
+
+/** 工作表中的原始单元格：列序号、属性文本与原始 XML，便于只重建被修改的单元格。 */
+interface RawCell { index: number; attrs: string; body: string; raw: string }
+
+/** 扫描一行中的原始单元格，保序保留原始 XML。 */
+function rawCells(row: string): RawCell[] {
+  return [...row.matchAll(/<c\b([^>]*?)(\/>|>([\s\S]*?)<\/c>)/g)].map(match => ({
+    index: columnIndex(attributes(match[1]!).r ?? ''),
+    attrs: match[1]!,
+    body: match[3] ?? '',
+    raw: match[0],
+  }))
+}
+
+/**
+ * 把状态写入 xlsx 中匹配行的状态单元格，保留该单元格的样式属性与其他 ZIP 条目。
+ * 状态写成内联字符串；目标单元格不存在时按列序插入新单元格。
+ * @throws TaskFileError 当缺少工作表、状态列或找不到任务行时。
+ */
+export function writeXlsxStatus(buffer: Buffer, options: { sheet: string; columns: XlsxColumns; target: XlsxTarget; status: string }): Buffer {
+  const entries = zipEntries(buffer)
+  const text = (name: string): string => {
+    const found = entries.find(item => item.name === name)
+    return found ? zipRead(buffer, found).toString('utf8') : ''
+  }
+  const shared = sharedStrings(text('xl/sharedStrings.xml'))
+  const path = sheetPath(text('xl/workbook.xml'), text('xl/_rels/workbook.xml.rels'), options.sheet)
+  const sheet = entries.find(item => item.name === path)
+  if (!sheet) throw new TaskFileError(`找不到工作表：${options.sheet || '(第一张表)'}`)
+  const xml = zipRead(buffer, sheet).toString('utf8')
+  const updated = updateSheet(xml, shared, options)
+  if (updated === xml) return buffer
+  return zipWrite(buffer, entries, new Map([[path, Buffer.from(updated, 'utf8')]]))
+}
+
+/** 在工作表 XML 中定位任务行并替换状态单元格，返回新的工作表 XML。 */
+function updateSheet(xml: string, shared: readonly string[], options: { columns: XlsxColumns; target: XlsxTarget; status: string }): string {
+  const rows = [...xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)]
+  if (!rows.length) throw new TaskFileError('工作表没有表头')
+  const header = rawCells(rows[0]![2]!).map(cell => ({ index: cell.index, value: cellValue(attributes(cell.attrs), cell.body, shared) }))
+  const { id, title, status } = options.columns
+  const column = (name: string): number => header.find(cell => cell.value.trim() === name)?.index ?? -1
+  const idIndex = column(id)
+  const titleIndex = column(title)
+  const statusIndex = column(status)
+  if (statusIndex < 0) throw new TaskFileError(`任务清单缺少状态列：${status}`)
+  const match = rows.slice(1).find(row => {
+    const values = new Map(rawCells(row[2]!).map(cell => [cell.index, cellValue(attributes(cell.attrs), cell.body, shared)]))
+    const value = (column: number): string => column < 0 ? '' : values.get(column) ?? ''
+    return (idIndex >= 0 && value(idIndex) === options.target.taskId) || (titleIndex >= 0 && value(titleIndex) === options.target.taskTitle)
+  })
+  if (!match) throw new TaskFileError(`任务清单中找不到任务：${options.target.taskId}`)
+  const rowNumber = Number(match[1]!.match(/\br="(\d+)"/)?.[1] ?? rows.indexOf(match) + 1)
+  const cells = rawCells(match[2]!)
+  const existing = cells.find(cell => cell.index === statusIndex)
+  const content = `<is><t${/^\s|\s$/.test(options.status) ? ' xml:space="preserve"' : ''}>${encodeXml(options.status)}</t></is>`
+  const attrs = (existing?.attrs ?? ` r="${columnName(statusIndex)}${rowNumber}"`).replace(/\s+t="[^"]*"/g, '')
+  const replacement = { index: statusIndex, raw: `<c${attrs} t="inlineStr">${content}</c>` }
+  const merged = existing ? cells.map(cell => cell.index === statusIndex ? replacement : cell) : [...cells, replacement]
+  merged.sort((left, right) => left.index - right.index)
+  return `${xml.slice(0, match.index)}<row${match[1]}>${merged.map(cell => cell.raw).join('')}</row>${xml.slice(match.index! + match[0].length)}`
+}
+
+/** 列序号转换为列字母（0 对应 A）。 */
+function columnName(index: number): string {
+  let value = index + 1
+  let name = ''
+  while (value > 0) {
+    const remainder = (value - 1) % 26
+    name = String.fromCharCode(65 + remainder) + name
+    value = Math.floor((value - 1) / 26)
+  }
+  return name
+}
+
+/** 转义写回 xlsx 文本中的 XML 特殊字符。 */
+function encodeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 /** 解析 XML 属性为对象。 */

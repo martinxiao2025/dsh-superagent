@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { deflateRawSync } from 'node:zlib'
+import { deflateRawSync, inflateRawSync } from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import { PipelineConfigSchema } from '../src/pipeline/config.ts'
 import { remoteOf } from '../src/pipeline/code.ts'
@@ -102,6 +102,53 @@ describe('writeback', () => {
   it('serializes fields that need quoting', () => {
     expect(serializeTable([['a', 'b,c', 'd"e'], ['f', 'g\nh', '']], ',')).toBe('a,"b,c","d""e"\nf,"g\nh",\n')
   })
+
+  it('writes a styled .xlsx status cell and keeps every other entry byte for byte', async () => {
+    const { file, styles } = styledXlsx()
+    const path = join(temporary(), 'tasks.xlsx')
+    writeFileSync(path, file)
+    const config = PipelineConfigSchema.parse({ taskFile: path, taskKind: 'excel', taskSheet: '任务' })
+    await writeTaskStatus(config, { taskId: '1', taskTitle: '修复登录' }, '已完成')
+    const before = unzip(file)
+    const after = unzip(readFileSync(path))
+    expect(await readTaskRows(path, '任务')).toEqual([{ id: '1', title: '修复登录', description: '说明', status: '已完成' }])
+    expect(after.get('xl/styles.xml')).toEqual(styles)
+    for (const name of [...before.keys()].filter(item => item !== 'xl/worksheets/sheet1.xml')) {
+      expect(after.get(name)).toEqual(before.get(name))
+    }
+    expect(after.get('xl/worksheets/sheet1.xml')!.toString('utf8'))
+      .toContain('<c r="D2" s="5" t="inlineStr"><is><t>已完成</t></is></c>')
+    const once = readFileSync(path)
+    await writeTaskStatus(config, { taskId: '1', taskTitle: '修复登录' }, '已完成')
+    expect(readFileSync(path)).toEqual(once)
+  })
+
+  it('inserts a status cell when the matched row has none', async () => {
+    const path = join(temporary(), 'tasks.xlsx')
+    writeFileSync(path, archive([
+      ['xl/workbook.xml', Buffer.from('<workbook><sheets><sheet name="任务" sheetId="1" r:id="rId1"/></sheets></workbook>')],
+      ['xl/_rels/workbook.xml.rels', Buffer.from('<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')],
+      ['xl/worksheets/sheet1.xml', Buffer.from('<worksheet><sheetData>'
+        + '<row r="1"><c r="A1" t="inlineStr"><is><t>id</t></is></c><c r="B1" t="inlineStr"><is><t>title</t></is></c>'
+        + '<c r="D1" t="inlineStr"><is><t>status</t></is></c></row>'
+        + '<row r="2"><c r="A2" t="inlineStr"><is><t>1</t></is></c><c r="B2" t="inlineStr"><is><t>登录</t></is></c></row>'
+        + '</sheetData></worksheet>')],
+    ]))
+    const config = PipelineConfigSchema.parse({ taskFile: path, taskKind: 'excel', taskSheet: '任务' })
+    await writeTaskStatus(config, { taskId: '1', taskTitle: '登录' }, '已完成')
+    expect(await readTaskRows(path, '任务')).toEqual([{ id: '1', title: '登录', status: '已完成' }])
+    expect(unzip(readFileSync(path)).get('xl/worksheets/sheet1.xml')!.toString('utf8'))
+      .toContain('<c r="D2" t="inlineStr"><is><t>已完成</t></is></c>')
+  })
+
+  it('fails clearly when the .xlsx row or status column is missing', async () => {
+    const path = join(temporary(), 'tasks.xlsx')
+    writeFileSync(path, styledXlsx().file)
+    const config = PipelineConfigSchema.parse({ taskFile: path, taskKind: 'excel', taskSheet: '任务' })
+    await expect(writeTaskStatus(config, { taskId: '9', taskTitle: '不存在' }, '已完成')).rejects.toThrow('找不到任务')
+    const other = PipelineConfigSchema.parse({ taskFile: path, taskKind: 'excel', taskSheet: '任务', columnStatus: 'state' })
+    await expect(writeTaskStatus(other, { taskId: '1', taskTitle: '修复登录' }, '已完成')).rejects.toThrow('缺少状态列')
+  })
 })
 
 describe('pipeline runner', () => {
@@ -196,7 +243,7 @@ describe('pipeline runner', () => {
 
 /** 用 Node 内置 zlib 构造最小 xlsx（stored + deflate 两种条目）。 */
 function xlsx(): Buffer {
-  const entries: [string, Buffer][] = [
+  return archive([
     ['[Content_Types].xml', Buffer.from('<?xml version="1.0"?><Types/>')],
     ['xl/workbook.xml', Buffer.from('<workbook><sheets><sheet name="任务" sheetId="1" r:id="rId1"/></sheets></workbook>')],
     ['xl/_rels/workbook.xml.rels', Buffer.from('<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')],
@@ -210,7 +257,58 @@ function xlsx(): Buffer {
       + '<row r="3"><c r="A3" t="inlineStr"><is><t>2</t></is></c><c r="B3" t="inlineStr"><is><t>导出</t></is></c>'
       + '<c r="C3" t="inlineStr"><is><t>内联文本</t></is></c><c r="D3" t="inlineStr"><is><t>进行中</t></is></c></row>'
       + '</sheetData></worksheet>')],
-  ]
+  ])
+}
+
+/** 带样式的 xlsx：状态单元格使用共享字符串与样式索引，并包含样式表等需要原样保留的条目。 */
+function styledXlsx(): { file: Buffer; styles: Buffer } {
+  const styles = Buffer.from('<styleSheet><fonts count="1"><font><sz val="11"/></font></fonts>'
+    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+    + '<cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0"/><xf numFmtId="0" fontId="0" fillId="1"/>'
+    + '<xf numFmtId="0" fontId="0" fillId="1"/><xf numFmtId="0" fontId="0" fillId="1"/>'
+    + '<xf numFmtId="0" fontId="0" fillId="1"/><xf numFmtId="0" fontId="0" fillId="1"><alignment wrapText="1"/></xf>'
+    + '</cellXfs></styleSheet>')
+  const file = archive([
+    ['[Content_Types].xml', Buffer.from('<?xml version="1.0"?><Types/>')],
+    ['xl/workbook.xml', Buffer.from('<workbook><sheets><sheet name="任务" sheetId="1" r:id="rId1"/></sheets></workbook>')],
+    ['xl/_rels/workbook.xml.rels', Buffer.from('<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')],
+    ['xl/styles.xml', styles],
+    ['xl/sharedStrings.xml', Buffer.from('<sst><si><t>修复登录</t></si><si><t>待处理</t></si></sst>')],
+    ['xl/worksheets/sheet1.xml', Buffer.from(
+      '<worksheet><sheetData>'
+      + '<row r="1"><c r="A1" t="inlineStr"><is><t>id</t></is></c><c r="B1" t="inlineStr"><is><t>title</t></is></c>'
+      + '<c r="C1" t="inlineStr"><is><t>description</t></is></c><c r="D1" t="inlineStr"><is><t>status</t></is></c></row>'
+      + '<row r="2"><c r="A2" t="inlineStr"><is><t>1</t></is></c><c r="B2" t="s"><v>0</v></c>'
+      + '<c r="C2" t="inlineStr"><is><t>说明</t></is></c><c r="D2" s="5" t="s"><v>1</v></c></row>'
+      + '</sheetData></worksheet>')],
+  ])
+  return { file, styles }
+}
+
+/** 按中央目录把 ZIP 拆成条目，用于断言未修改条目逐字节不变。 */
+function unzip(buffer: Buffer): Map<string, Buffer> {
+  const eocd = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+  const count = buffer.readUInt16LE(eocd + 10)
+  let at = buffer.readUInt32LE(eocd + 16)
+  const entries = new Map<string, Buffer>()
+  for (let index = 0; index < count; index++) {
+    const method = buffer.readUInt16LE(at + 10)
+    const size = buffer.readUInt32LE(at + 20)
+    const nameLength = buffer.readUInt16LE(at + 28)
+    const extra = buffer.readUInt16LE(at + 30)
+    const comment = buffer.readUInt16LE(at + 32)
+    const offset = buffer.readUInt32LE(at + 42)
+    const name = buffer.toString('utf8', at + 46, at + 46 + nameLength)
+    const start = offset + 30 + buffer.readUInt16LE(offset + 26) + buffer.readUInt16LE(offset + 28)
+    const data = buffer.subarray(start, start + size)
+    entries.set(name, method === 8 ? inflateRawSync(data) : data)
+    at += 46 + nameLength + extra + comment
+  }
+  return entries
+}
+
+/** 用 Node 内置 zlib 打包 ZIP（stored 或 deflate 由长度决定）。 */
+function archive(entries: readonly (readonly [string, Buffer])[]): Buffer {
   const locals: Buffer[] = []
   const centrals: Buffer[] = []
   let offset = 0

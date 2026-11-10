@@ -1,10 +1,10 @@
 /**
  * 任务结果回写：只更新任务源中匹配行的状态列。
- * 目前支持 `.csv` / `.tsv`；`.xlsx` 与飞书文档需要保留样式或块结构，明确报为未支持而不是猜测写入。
+ * 支持 `.csv` / `.tsv` 与 `.xlsx`；`.xlsx` 保留原单元格样式与其他 ZIP 条目，飞书文档明确报为未支持。
  */
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { extname } from 'node:path'
-import { parseDelimited } from './excel.ts'
+import { parseDelimited, writeXlsxStatus } from './excel.ts'
 import type { PipelineConfig } from './config.ts'
 
 /** 回写目标：任务编号与原始标题，用于在清单中定位唯一一行。 */
@@ -17,7 +17,16 @@ export interface WriteTarget { taskId: string; taskTitle: string }
 export async function writeTaskStatus(config: PipelineConfig, target: WriteTarget, status: string): Promise<void> {
   if (config.taskKind === 'feishu') throw new Error('飞书回写需要文档块接口，当前未验证，未写入')
   const extension = extname(config.taskFile).toLowerCase()
-  if (extension === '.xlsx') throw new Error('暂不支持回写 .xlsx；请使用 .csv/.tsv 清单或手动回填')
+  if (extension === '.xlsx') {
+    const updated = writeXlsxStatus(await readFile(config.taskFile), {
+      sheet: config.taskSheet,
+      columns: { id: config.columnId, title: config.columnTitle, status: config.columnStatus },
+      target,
+      status,
+    })
+    await replaceFile(config.taskFile, updated)
+    return
+  }
   if (extension !== '.csv' && extension !== '.tsv') throw new Error(`不支持的任务清单格式：${extension || '(无扩展名)'}`)
   const delimiter = extension === '.tsv' ? '\t' : ','
   const table = parseDelimited((await readFile(config.taskFile, 'utf8')).replace(/^\uFEFF/, ''), delimiter)
@@ -35,6 +44,13 @@ export async function writeTaskStatus(config: PipelineConfig, target: WriteTarge
   const temporary = `${config.taskFile}.${process.pid}.tmp`
   await writeFile(temporary, serialize([header, ...body], delimiter), 'utf8')
   await rename(temporary, config.taskFile)
+}
+
+/** 先写临时文件再原子替换，避免回写中断留下半个文件。 */
+async function replaceFile(file: string, content: Buffer): Promise<void> {
+  const temporary = `${file}.${process.pid}.tmp`
+  await writeFile(temporary, content)
+  await rename(temporary, file)
 }
 
 /** 把表格序列化为 CSV/TSV，按需加引号并转义。 */
