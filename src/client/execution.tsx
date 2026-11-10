@@ -95,9 +95,11 @@ export function ExecutionSettings() {
   const { blocks, environment, sources } = useSettings().settings
   // 在草稿中保留用户原始文本（例如被阻止命令之间的分隔符），仅在保存时解析。
   const executor = blocks.executor.value
-  const saved = { ...executor, maxWorkers: String(executor.maxWorkers), blockedCommands: executor.blockedCommands.join(' ') }
+  const saved = { ...executor, maxWorkers: String(executor.maxWorkers), projectWorkers: String(executor.projectWorkers),
+    blockedCommands: executor.blockedCommands.join(' ') }
   const draft = useBlockDraft('executor', saved, blocks.executor.revision,
-    value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean) }))
+    value => ({ ...value, maxWorkers: numberOf(value.maxWorkers), projectWorkers: numberOf(value.projectWorkers),
+      blockedCommands: value.blockedCommands.split(/[\s,]+/).filter(Boolean) }))
   const value = draft.value
   const edit = (next: Partial<typeof value>) => draft.edit({ ...value, ...next })
   const prepare = useRef<HTMLTextAreaElement>(null)
@@ -117,6 +119,10 @@ export function ExecutionSettings() {
           <Field label={t('maxWorkers')} hint={t('maxWorkersHint')}>
             <Input type="number" min={LIMITS.maxWorkers.min} max={LIMITS.maxWorkers.max} required value={value.maxWorkers}
               onChange={event => edit({ maxWorkers: event.target.value })} />
+          </Field>
+          <Field label={t('projectWorkers')} hint={t('projectWorkersHint')}>
+            <Input type="number" min={LIMITS.projectWorkers.min} max={LIMITS.projectWorkers.max} required value={value.projectWorkers}
+              onChange={event => edit({ projectWorkers: event.target.value })} />
           </Field>
         </div>
         <div className="dt-form dt-block">

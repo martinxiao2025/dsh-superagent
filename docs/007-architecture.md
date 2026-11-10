@@ -198,9 +198,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 `DshExecutor`（`src/executor/dsh.ts`）为每个工单提供一个会话和一个目录。`start` 和 `deliver` 排队 `launch` 和 `delivery` 副作用。`stop` 通过 `Store.afterCommit` 取消回合，因此回滚的结束不会停止执行器。
 
-`prepare(ticket, outcome)` 提供 Engine 的 `prepareTicket` 钩子：短名、目录和 `ticketExecution` 派工文本。`workerSessionId(ticket.id)` 派生会话 id。
+`prepare(ticket, outcome)` 提供 Engine 的 `prepareTicket` 钩子：短名、项目名、项目下的工单子目录和 `ticketExecution` 派工文本。`workerSessionId(ticket.id)` 派生会话 id。
 
-`WorkerSlots` 在启动或唤醒空闲执行器的投递之前预留容量。人的消息可以使用 `maxWorkers` 之外的一个槽位，唤醒优先于启动。`activeCount` 提供面板负载。
+`WorkerSlots` 在启动或唤醒空闲执行器的投递之前预留容量。人的消息可以使用 `maxWorkers` 之外的一个槽位，唤醒优先于启动。单项目另有槽位上限（`executor.projectWorkers`，`0` 表示自动取全局上限的一半），达到上限的启动排队等待，人工跟进不受此限制。`activeCount` 提供面板负载。
 
 模型提供方和网络的瞬时失败会重试三次。启动使用副作用退避；失败的回合会在 15、30 和 60 秒后收到继续消息。`inputMessage` 根据当前工单状态渲染每个输入，`mandateInstructions` 为推断工作添加匹配规则的限制。
 

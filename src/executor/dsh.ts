@@ -171,6 +171,7 @@ export function inputMessage(input: TicketInput, trigger?: object): string | und
  * 在回合结束后其 shell 作业或子智能体仍运行时，以及在启动或唤醒该工作单元时占用一个槽位。
  * DshExecutor 在等待启动或唤醒工作之前同步预留槽位，以确保两次启动不会抢走最后一个槽位，
  * 并在上限之外为人工跟进（`by === 'person'`）额外允许一个槽位，使它们永远不必排在新启动之后。
+ * 单个项目另有槽位上限，避免一个项目吃满全部槽位；人工跟进同样不受项目上限限制。
  */
 export class WorkerSlots {
   /** 当前持有启动槽位的工单，映射到该启动是启动、唤醒，还是因人的消息而唤醒。 */
@@ -178,8 +179,21 @@ export class WorkerSlots {
   /**
    * @param running - 返回其工作单元持有槽位的工单 ID（参见 `DshExecutor.running`）。
    * @param max - 返回配置的并发工作单元槽位上限。
+   * @param projectOf - 返回工单所属项目；未提供时不做按项目限制。
+   * @param projectLimit - 返回单个项目的槽位上限；0 表示自动取 `max` 的一半（向上取整，至少 1）。
    */
-  constructor(private readonly running: () => string[], private readonly max: () => number) {}
+  constructor(private readonly running: () => string[], private readonly max: () => number,
+    private readonly projectOf?: (ticketId: string) => string | undefined,
+    private readonly projectLimit: () => number = () => 0) {}
+  /** 单个项目的有效上限：配置值按全局上限封顶；自动值取全局上限的一半，使其他项目仍能拿到槽位。 */
+  private cap(): number {
+    const limit = this.projectLimit()
+    return limit > 0 ? Math.min(limit, this.max()) : Math.max(1, Math.ceil(this.max() / 2))
+  }
+  /** `project` 当前占用的槽位（运行中与启动预留），排除正在为其预留的 `except` 本身。 */
+  private projectUsed(project: string, except: string): number {
+    return [...new Set([...this.running(), ...this.starting.keys()])].filter(id => id !== except && this.projectOf?.(id) === project).length
+  }
   /** 当前在运行的工作单元和启动预留中已使用的槽位数量。 */
   used(): number { return new Set([...this.running(), ...this.starting.keys()]).size }
   /** 可并发运行的启动数量：未被运行中的工作单元或唤醒预留占用的槽位。 */
@@ -189,17 +203,27 @@ export class WorkerSlots {
   }
   /**
    * 为 `ticketId` 预留启动槽位；若 `ticketId` 已持有启动槽位则幂等。
-   * 因人的消息而唤醒（`by === 'person'`）可使用 `max()` 之外的一个额外槽位。
+   * 因人的消息而唤醒（`by === 'person'`）可使用 `max()` 之外的一个额外槽位，也不受项目上限限制。
    * 在工作单元回合开始运行或启动/唤醒尝试结束时调用 `free(ticketId)`。
-   * @throws 当没有空闲槽位时抛出 Later。
+   * @throws 当没有空闲槽位，或该工单所属项目已用满自己的槽位时抛出 Later。
    */
   reserve(ticketId: string, by: 'launch' | 'wake' | 'person'): void {
     if (this.starting.has(ticketId)) return
     if (this.used() >= this.max() + (by === 'person' ? 1 : 0)) throw new Later('No worker slot is free')
+    const project = this.projectOf?.(ticketId)
+    if (by !== 'person' && project && this.projectUsed(project, ticketId) >= this.cap()) throw new Later(`The project ${project} already uses its worker slots`)
     this.starting.set(ticketId, by)
   }
   /** 在工作单元会话开始运行或启动/唤醒尝试结束后，释放 `ticketId` 的启动槽位。 */
   free(ticketId: string): void { this.starting.delete(ticketId) }
+}
+
+/** 工单所属项目：优先执行时记录的项目名；旧工单退回执行目录的最后一段。 */
+export function projectOfTicket(ticket: Ticket | undefined): string | undefined {
+  if (!ticket) return undefined
+  if (ticket.execution?.project) return ticket.execution.project
+  const directory = ticket.execution?.directory
+  return directory ? directory.split(/[\\/]+/).filter(Boolean).pop() : undefined
 }
 
 /**
@@ -231,7 +255,8 @@ export class DshExecutor implements Executor {
   /** 注册 `launch` 和 `delivery` 效果处理器；处理暂停时两者都被搁置（并发上限为 0）。 */
   constructor(private readonly host: ExecutorHost) {
     this.slots = new WorkerSlots(() => host.store.tickets.open().filter(ticket => this.running(ticket)).map(ticket => ticket.id),
-      () => host.store.settings().executor.maxWorkers)
+      () => host.store.settings().executor.maxWorkers, ticketId => projectOfTicket(host.store.tickets.get(ticketId)),
+      () => host.store.settings().executor.projectWorkers)
     // 每次启动都预留一个工作单元槽位，使启动在槽位空闲时并发运行。
     host.effects.handle('launch', payload => this.launchQueued(payload), { limit: () => host.paused() ? 0 : this.slots.launches(),
       retry: [5000, 300_000] })

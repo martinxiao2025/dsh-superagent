@@ -88,10 +88,12 @@ export const EvalConfigSchema = z.object({
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
-/** 执行器设置：工作单元模型、并发数、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令。 */
+/** 执行器设置：工作单元模型、并发数、单项目并发上限、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令。 */
 export const ExecutorConfigSchema = z.object({
   model: RoleModelSchema.nullable().default(null),
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
+  // 0 表示自动：单个项目最多占全局并行数的一半（向上取整，至少 1），避免一个项目吃满全部槽位。
+  projectWorkers: z.number().int().min(LIMITS.projectWorkers.min).max(LIMITS.projectWorkers.max).default(0),
   directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),

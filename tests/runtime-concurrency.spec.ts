@@ -181,6 +181,24 @@ it('counts a launch under way against maxWorkers, so a bot\'s Input for an idle 
   expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toHaveLength(1)
 })
 
+it('holds a launch that would exceed its project\'s slots while the global limit still has room, and starts it once the limit is raised', async () => {
+  const settings = h.runtime.store.settings()
+  h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 3, projectWorkers: 1 } })
+  const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
+  const two = await h.acceptedTicket(feishu('5', '@bot 修二'))
+  expect(h.agents.get(one.sessionId)!.status).toBe('running')
+  // 同一项目的第二张工单在项目配额用完时排队，尽管全局 3 个槽位还有空。
+  expect(h.runtime.store.tickets.get(two.ticket.id)!.assignments).toEqual([expect.objectContaining({ state: 'pending' })])
+  expect(h.agents.has(two.sessionId)).toBe(false)
+  expect(h.runtime.effects.pending('launch')).toBe(true)
+  // 调大单项目上限后，排队中的启动在下一次重试时开始，无需重启。
+  h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 3, projectWorkers: 2 } })
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6000 })
+  try { await h.runtime.pump(); await h.runtime.idle() } finally { vi.useRealTimers() }
+  expect(h.agents.get(two.sessionId)!.status).toBe('running')
+  expect(h.runtime.store.tickets.get(two.ticket.id)!.assignments).toEqual([expect.objectContaining({ state: 'running' })])
+})
+
 it('records on the ticket that its worker Session could not be created again', async () => {
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
   h.agents.get(one.sessionId)!.status = 'idle'
@@ -931,6 +949,30 @@ describe('the Executor\'s parts', () => {
     expect(() => slots.reserve('t7', 'launch')).toThrow(Later)
     slots.reserve('t6', 'person')
     expect(slots.used()).toBe(4)
+  })
+  it('limits each project to its own slots, by default half the global limit, and keeps room for other projects', () => {
+    const running = ['a1', 'a2']
+    const project: Record<string, string> = { a1: 'alpha', a2: 'alpha', a3: 'alpha', b1: 'beta' }
+    const slots = new WorkerSlots(() => running, () => 4, id => project[id])
+    // 自动上限为全局 4 的一半：alpha 已占 2 个，它的下一张工单等待，beta 仍可启动。
+    expect(() => slots.reserve('a3', 'launch')).toThrow(Later)
+    slots.reserve('b1', 'launch')
+    expect(slots.used()).toBe(3)
+    // 人工跟进不受项目上限限制。
+    slots.reserve('a3', 'person')
+    expect(slots.used()).toBe(4)
+  })
+  it('takes an explicit per-project limit, capped by the global limit', () => {
+    const running = ['a1']
+    const project: Record<string, string> = { a1: 'alpha', a2: 'alpha', a3: 'alpha', b1: 'beta' }
+    const slots = new WorkerSlots(() => running, () => 3, id => project[id], () => 2)
+    slots.reserve('a2', 'launch')
+    expect(() => slots.reserve('a3', 'wake')).toThrow(Later)
+    expect(() => slots.reserve('b1', 'launch')).not.toThrow()
+    // 配置值大于全局上限时按全局上限封顶。
+    const capped = new WorkerSlots(() => running, () => 2, id => project[id], () => 9)
+    capped.reserve('a2', 'launch')
+    expect(() => capped.reserve('b1', 'launch')).toThrow(Later)
   })
   it('words an assignment, and the limits an inferred mandate sets, from the ticket alone', () => {
     const settings = SettingsSchema.parse({ policy: { rules: [{ id: 'copy', name: 'Copy fixes', enabled: true,

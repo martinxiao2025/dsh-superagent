@@ -8,7 +8,7 @@ type SourceSettings = SettingsVersion['settings']['sources'][string]
 /** 由 Web 面板以 `change.<code>` 本地化的变更代码。 */
 export type SettingsChangeCode = 'ruleAdded' | 'ruleRenamed' | 'ruleInstruction' | 'ruleEnabled' | 'ruleDisabled' | 'ruleRemoved'
   | 'sourceEnabled' | 'sourceDisabled' | 'sourceField' | 'sourceRowsAdded' | 'sourceRowsRemoved' | 'sourceRowsChanged' | 'sourceAdmission'
-  | 'mode' | 'timeout' | 'evalModel' | 'executorModel' | 'maxWorkers' | 'paused' | 'resumed' | 'executionDirectory' | 'prepareCommand'
+  | 'mode' | 'timeout' | 'evalModel' | 'executorModel' | 'maxWorkers' | 'projectWorkers' | 'paused' | 'resumed' | 'executionDirectory' | 'prepareCommand'
   | 'blockedCommands'
 /** 面板使用 `change.<code>` 和来源列表中的字段标签渲染的单条设置差异。 */
 export interface SettingsChange {
@@ -67,6 +67,7 @@ function settingsChanges(before: SettingsVersion['settings'], after: SettingsVer
   if (!same(before.eval.model, after.eval.model)) changes.push({ code: 'evalModel' })
   if (!same(before.executor.model, after.executor.model)) changes.push({ code: 'executorModel' })
   if (before.executor.maxWorkers !== after.executor.maxWorkers) changes.push({ code: 'maxWorkers', from: before.executor.maxWorkers, to: after.executor.maxWorkers })
+  if (before.executor.projectWorkers !== after.executor.projectWorkers) changes.push({ code: 'projectWorkers', from: before.executor.projectWorkers, to: after.executor.projectWorkers })
   if (before.paused !== after.paused) changes.push({ code: after.paused ? 'paused' : 'resumed' })
   if (before.executor.directory !== after.executor.directory) changes.push({ code: 'executionDirectory', from: before.executor.directory, to: after.executor.directory })
   if (before.executor.prepare !== after.executor.prepare) changes.push({ code: 'prepareCommand' })
