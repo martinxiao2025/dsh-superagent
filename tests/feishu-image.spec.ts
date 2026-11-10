@@ -15,7 +15,7 @@ let agent: Agent
 let saveImage: ReturnType<typeof vi.fn>
 let resolveModelInfo: ReturnType<typeof vi.fn>
 let lark: MockInstance<Commands['lark']>
-const commands = new Commands(() => testDeployment(), {}, new AbortController().signal)
+const commands = new Commands(() => testDeployment(), {}, new AbortController().signal).scope('feishu')
 const source: FeishuRef = { triggerId: 'source', chatId: 'oc_chat', messageId: 'om_source' }
 const text = '![Image](img_source) Plan mode'
 const ref = { attachmentId: 'image-id', mediaType: 'image/png', bytes: 4, width: 1, height: 1 }

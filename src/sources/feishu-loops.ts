@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { threadKey, type Thread, type Trigger } from '../core/index.ts'
 import { feishuChatLink } from './feishu-channel.ts'
-import type { FeishuBot } from '../deployment.ts'
+import type { ResolvedFeishuSource } from '../deployment.ts'
 import { validItems, spawnCommand, type Tally } from '../infra/commands.ts'
 import { readFeishu, type FeishuRef } from './feishu-read.ts'
 import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, SOURCE, topicEvent }
@@ -18,10 +18,9 @@ import type { FeishuConfig } from './feishu.ts'
 export const runFeishu = (ctx: SourceContext, signal: AbortSignal): Promise<unknown> =>
   Promise.allSettled([watch, backfillLoop, chatNamesLoop].map(loop => loop(ctx, signal)))
 const enabled = (ctx: SourceContext): FeishuConfig | undefined => ctx.config<FeishuConfig>()
-const bot = (ctx: SourceContext): FeishuBot => {
-  const resolved = ctx.deployment.feishu
-  if (!resolved) throw new Error('The Feishu Source has no working bot CLI')
-  return resolved
+const bot = (ctx: SourceContext): ResolvedFeishuSource => {
+  if (ctx.source?.kind !== 'feishu') throw new Error('The Feishu Source has no working bot CLI')
+  return ctx.source
 }
 async function receive(ctx: SourceContext, trigger: Trigger): Promise<void> {
   await ctx.receive(trigger)
@@ -31,9 +30,9 @@ async function receive(ctx: SourceContext, trigger: Trigger): Promise<void> {
   const chat = trigger.meta.direct === true ? { value: { zh: '私聊', en: 'Direct message' } } : { value: name }
   for (const ref of trigger.threads) ctx.threads.describe(threadKey(ref), { url: chatLink(ctx, chatId), facts: { chat } })
 }
-const chatLink = (ctx: SourceContext, chatId: string): string => feishuChatLink(ctx.deployment.feishu?.brand ?? 'feishu', chatId)
+const chatLink = (ctx: SourceContext, chatId: string): string => feishuChatLink(ctx.source?.kind === 'feishu' ? ctx.source.brand : 'feishu', chatId)
 function available(ctx: SourceContext): boolean {
-  if (ctx.configured() && ctx.deployment.feishu) return true
+  if (ctx.configured() && ctx.source?.kind === 'feishu') return true
   const waiting = health('paused', ctx.configured() ? 'feishuCliUnset' : 'setupPending')
   ctx.report('feishu', ctx.problem ? { state: 'paused', detail: ctx.problem.detail } : waiting)
   return false

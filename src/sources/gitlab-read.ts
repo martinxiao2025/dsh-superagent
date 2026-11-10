@@ -21,7 +21,7 @@ const noteMessage = (note: GitlabNote, item?: GitlabItem): ContextMessage => {
 }
 /** 读取资源的 GitLab API 前缀；读取器也可能在 setup 完成前被调用，因此给出清晰错误。 */
 const apiProject = (commands: Commands): string => {
-  const project = commands.deployment.gitlab
+  const project = commands.gitlab
   if (!project) throw new Error('The GitLab Source has no working CLI')
   return `projects/${encodeURIComponent(project.project)}`
 }

@@ -1,4 +1,4 @@
-/** 插件配置，以及针对仓库访问和智能体 CLI 身份启动校验。 */
+/** 插件配置，以及按来源记录解析仓库访问和智能体 CLI 身份。 */
 import { LIMITS } from './limits.ts'
 import { accessSync, constants, statSync } from 'node:fs'
 import { delimiter, extname, isAbsolute, join } from 'node:path'
@@ -32,8 +32,8 @@ export interface Machine {
   admissionContextTimeoutMs: Volatile<number>
 }
 const MOVED: Record<string, string> = {
-  repository: 'on the GitHub Source', branchPrefix: 'in the prepare command of the Execution settings', github: 'on the GitHub Source',
-  feishu: 'on the Feishu Source', author: 'prompt text', repositoryPath: 'in the prepare command of the Execution settings',
+  repository: 'on each GitHub Source record', branchPrefix: 'in the prepare command of the Execution settings', github: 'on each GitHub Source record',
+  feishu: 'on each Feishu Source record', author: 'prompt text', repositoryPath: 'in the prepare command of the Execution settings',
   worktreeRoot: 'the ticket directory of the Execution settings', blockedCommands: 'in the Execution settings',
 }
 
@@ -45,29 +45,99 @@ export function machineOf(config: DeploymentConfig): Machine {
   return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
 }
 
-export const GithubAccountsSchema = z.object({
+/**
+ * 来源实例地址：留空表示官方站点（github.com / gitlab.com / 飞书开放平台）。
+ * 自建 GitLab 或 GitHub Enterprise 填站点根地址，例如 `https://git.example.com`；路径和查询串会被拒绝，
+ * 因为该字段同时用于 `GH_HOST` / `GITLAB_HOST` 和网页链接的基地址。
+ */
+const instanceUrl = () => z.string().trim().default('').refine(value => {
+  if (!value) return true
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.pathname === '/' && !url.search && !url.hash
+  } catch { return false }
+}, 'the site root, such as https://git.example.com')
+/** GitHub 来源记录的配置：仓库、CLI 与实例地址。 */
+export const GithubSourceSchema = z.object({
+  instanceUrl: instanceUrl(),
   repository: z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default(''),
   cli: z.string().trim().default(''),
 })
-export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
-/** GitLab 项目可以位于多级命名空间；`project` 为空表示未启用该可选来源。 */
-export const GitlabProjectSchema = z.object({
+/** 飞书来源记录的配置：机器人 CLI 与实例地址。 */
+export const FeishuSourceSchema = z.object({ instanceUrl: instanceUrl(), cli: z.string().trim().default('') })
+/** GitLab 项目可以位于多级命名空间；`project` 为空表示记录尚未配置项目。 */
+export const GitlabSourceSchema = z.object({
+  instanceUrl: instanceUrl(),
   project: z.string().trim().regex(/^([A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+)?$/, 'group/project').default(''),
   cli: z.string().trim().default('glab'),
 })
-/** 影响部署配置、且修改后需要重启的来源配置键。 */
+/**
+ * 影响部署解析、且修改后需要重启的来源配置键（按适配器类型）。
+ * 记录 ID、类型和启用状态由 `setupChanged` 单独比较，因此新增、删除或启停记录也会触发重启。
+ */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape), gitlab: Object.keys(GitlabProjectSchema.shape),
+  github: ['instanceUrl', 'repository', 'cli'], feishu: ['instanceUrl', 'cli'], gitlab: ['instanceUrl', 'project', 'cli'],
 }
 
-export interface Deployment extends Machine {
-  repository: string
-  github: { cli: string; login: string; noreply: string }
-  feishu?: FeishuBot
-  gitlab?: GitlabProject
+/** 已解析的 GitHub 来源记录：一个记录一个智能体账号和一个仓库。 */
+export interface ResolvedGithubSource {
+  readonly id: string
+  readonly kind: 'github'
+  /** 站点根地址；空表示 github.com。 */
+  readonly instanceUrl: string
+  readonly cli: string
+  readonly repository: string
+  readonly login: string
+  readonly noreply: string
 }
-export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
-export interface GitlabProject { cli: string; project: string; projectId: number; login: string; id: number }
+/** 已解析的 GitLab 来源记录。 */
+export interface ResolvedGitlabSource {
+  readonly id: string
+  readonly kind: 'gitlab'
+  readonly instanceUrl: string
+  readonly cli: string
+  readonly project: string
+  readonly projectId: number
+  readonly login: string
+  /** GitLab 的数字用户 ID。 */
+  readonly userId: number
+}
+/** 已解析的飞书来源记录：一个记录一个机器人。 */
+export interface ResolvedFeishuSource {
+  readonly id: string
+  readonly kind: 'feishu'
+  readonly instanceUrl: string
+  readonly cli: string
+  readonly appId: string
+  readonly brand: 'feishu' | 'lark'
+  readonly botId: string
+  readonly name: string
+}
+export type ResolvedSource = ResolvedGithubSource | ResolvedGitlabSource | ResolvedFeishuSource
+
+/** 机器设置加上按记录 ID 索引的已解析来源；同一类型可以有多条记录。 */
+export interface Deployment extends Machine {
+  readonly sources: Readonly<Record<string, ResolvedSource>>
+}
+
+export const isGithubSource = (source: ResolvedSource | undefined): source is ResolvedGithubSource => source?.kind === 'github'
+export const isGitlabSource = (source: ResolvedSource | undefined): source is ResolvedGitlabSource => source?.kind === 'gitlab'
+export const isFeishuSource = (source: ResolvedSource | undefined): source is ResolvedFeishuSource => source?.kind === 'feishu'
+/** 某条来源记录已解析的来源；记录不存在或尚未解析时为 undefined。 */
+export const sourceOf = (deployment: Deployment | undefined, id: string): ResolvedSource | undefined => deployment?.sources[id]
+/** 某一类型的第一条已解析来源记录；工作单元垫片和通用工具只使用这一条。 */
+export function firstSource<K extends ResolvedSource['kind']>(deployment: Deployment | undefined, kind: K): Extract<ResolvedSource, { kind: K }> | undefined {
+  if (!deployment) return undefined
+  for (const source of Object.values(deployment.sources)) if (source.kind === kind) return source as Extract<ResolvedSource, { kind: K }>
+  return undefined
+}
+/** 实例地址的站点主机名；留空时使用 `fallback`。 */
+export const hostOf = (instanceUrl: string, fallback: string): string => instanceUrl ? new URL(instanceUrl).host : fallback
+/** 实例地址的网页基地址；留空时使用 `fallback`。 */
+export const webBaseOf = (instanceUrl: string, fallback: string): string => instanceUrl || fallback
+/** 探测 CLI 时只在自建实例上设置 `GH_HOST` / `GITLAB_HOST`。 */
+const hostVariable = (name: string, instanceUrl: string): Record<string, string> | undefined =>
+  instanceUrl ? { [name]: hostOf(instanceUrl, '') } : undefined
 
 /** Windows 会像 `cmd` 和 `where` 那样为裸命令名附加的扩展名；POSIX 不附加任何扩展名。 */
 const EXTENSIONS: readonly string[] = process.platform === 'win32'
@@ -113,26 +183,30 @@ function firstParsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   }
   return undefined
 }
-/** 校验智能体的 GitHub CLI 身份及其对配置仓库的推送权限。 */
-export async function resolveDeployment(machine: Machine, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment> {
+/**
+ * 校验一条 GitHub 来源记录的智能体 CLI 身份及其对配置仓库的推送权限。
+ * 自建 GitHub Enterprise 通过 `GH_HOST` 让 `gh` 访问该实例；失败以记录 ID 为 `place` 抛出 `SetupError`。
+ */
+export async function resolveGithubSource(machine: Machine, id: string, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<ResolvedGithubSource> {
   const { stateDir } = machine
-  const accounts = GithubAccountsSchema.parse(github ?? {})
+  const accounts = GithubSourceSchema.parse(github ?? {})
   const remote = accounts.repository
-  if (!remote) throw new SetupError('repositoryUnset')
-  if (!accounts.cli) throw new SetupError('agentCliUnset')
+  if (!remote) throw new SetupError('repositoryUnset', {}, id)
+  if (!accounts.cli) throw new SetupError('agentCliUnset', {}, id)
   let cli: string
-  try { cli = executable(accounts.cli, path, workerBin(stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }) }
-  const text = await probe([cli, 'api', 'user']).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }) })
+  try { cli = executable(accounts.cli, path, workerBin(stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }, id) }
+  const env = hostVariable('GH_HOST', accounts.instanceUrl)
+  const text = await probe([cli, 'api', 'user'], env).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }, id) })
   const agent = parsed(GithubUser, text)
-  if (!agent) throw new SetupError('agentCliNoAccount')
+  if (!agent) throw new SetupError('agentCliNoAccount', {}, id)
   // 使用 GitHub 返回的规范仓库名，使改名后的仓库也能匹配收到的通知。
-  const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}']).catch((error: unknown) => {
-    throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
+  const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}'], env).catch((error: unknown) => {
+    throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) }, id)
   }))
-  if (!access) throw new SetupError('repositoryUnreported', { repository: remote })
+  if (!access) throw new SetupError('repositoryUnreported', { repository: remote }, id)
   const repository = access.name
-  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
-  return { ...machine, repository, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository }, id)
+  return { id, kind: 'github', instanceUrl: accounts.instanceUrl, cli, repository, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` }
 }
 
 const GitlabUser = z.object({ id: z.number().int().positive(), username: z.string().regex(/^[A-Za-z0-9_.-]+$/) })
@@ -144,54 +218,55 @@ const GitlabProject = z.object({
   namespace: z.object({ path: z.string() }).nullish(),
 })
 /**
- * 验证可选的 GitLab 账号：CLI 能读到用户，项目可读，并且项目或群组权限达到 Developer（30）以上。
- * 未填写 project 时返回 undefined，表示该可选来源关闭；其他失败抛出 SetupError，由 setup 只禁用 GitLab 源。
+ * 验证一条 GitLab 来源记录：CLI 能读到用户，项目可读，并且项目或群组权限达到 Developer（30）以上。
+ * 自建 GitLab 通过 `GITLAB_HOST` 让 `glab` 访问该实例；失败以记录 ID 为 `place` 抛出 `SetupError`。
  */
-export async function resolveGitlab(machine: Machine, config: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<GitlabProject | undefined> {
-  const accounts = GitlabProjectSchema.parse(config ?? {})
+export async function resolveGitlabSource(machine: Machine, id: string, config: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<ResolvedGitlabSource> {
+  const accounts = GitlabSourceSchema.parse(config ?? {})
   const requested = accounts.project
-  if (!requested) return undefined
-  if (!accounts.cli) throw new SetupError('gitlabCliUnset')
+  if (!requested) throw new SetupError('gitlabProjectUnset', {}, id)
+  if (!accounts.cli) throw new SetupError('gitlabCliUnset', {}, id)
   let cli: string
-  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('gitlabCliMissing', { output: reason(error) }) }
-  const user = parsed(GitlabUser, await probe([cli, 'api', 'user']).catch((error: unknown) => {
-    throw new SetupError('gitlabCliSignedOut', { output: reason(error) })
+  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('gitlabCliMissing', { output: reason(error) }, id) }
+  const env = hostVariable('GITLAB_HOST', accounts.instanceUrl)
+  const user = parsed(GitlabUser, await probe([cli, 'api', 'user'], env).catch((error: unknown) => {
+    throw new SetupError('gitlabCliSignedOut', { output: reason(error) }, id)
   }))
-  if (!user) throw new SetupError('gitlabNoAccount')
+  if (!user) throw new SetupError('gitlabNoAccount', {}, id)
   // GitLab 的 REST 路径用 URL 编码的完整命名空间，因此多级 group/subgroup/project 也能读取。
-  const access = parsed(GitlabProject, await probe([cli, 'api', `projects/${encodeURIComponent(requested)}`]).catch((error: unknown) => {
-    throw new SetupError('gitlabProjectUnreadable', { account: user.username, project: requested, output: reason(error) })
+  const access = parsed(GitlabProject, await probe([cli, 'api', `projects/${encodeURIComponent(requested)}`], env).catch((error: unknown) => {
+    throw new SetupError('gitlabProjectUnreadable', { account: user.username, project: requested, output: reason(error) }, id)
   }))
-  if (!access) throw new SetupError('gitlabProjectUnreported', { project: requested })
+  if (!access) throw new SetupError('gitlabProjectUnreported', { project: requested }, id)
   const project = access.path_with_namespace
   const level = Math.max(access.permissions?.project_access?.access_level ?? 0, access.permissions?.group_access?.access_level ?? 0)
-  if (level < 30) throw new SetupError('gitlabReadOnly', { account: user.username, project })
-  return { cli, project, projectId: access.id, login: user.username, id: user.id }
+  if (level < 30) throw new SetupError('gitlabReadOnly', { account: user.username, project }, id)
+  return { id, kind: 'gitlab', instanceUrl: accounts.instanceUrl, cli, project, projectId: access.id, login: user.username, userId: user.id }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })
 const BotInfo = z.object({ bot: z.object({ open_id: z.string().regex(/^ou_[A-Za-z0-9]+$/), app_name: z.string().default('') }) })
 /**
- * 校验配置的飞书 CLI 已以机器人身份认证，并受限在严格模式 `bot` 下。
+ * 校验一条飞书来源记录的 CLI 已以机器人身份认证，并受限在严格模式 `bot` 下。
  * 工作单元会以 `lark-cli` 调用该 CLI，若 CLI 同时允许用户身份，工作单元就可能以该用户身份行动。
  */
-export async function resolveFeishuBot(machine: Machine, feishu: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<FeishuBot | undefined> {
-  const { cli: name } = FeishuBotSchema.parse(feishu ?? {})
-  if (!name) return undefined
-  const fail = (error: unknown): never => { throw error instanceof SetupError ? error : new SetupError('feishuCliFailed', { output: reason(error) }) }
+export async function resolveFeishuSource(machine: Machine, id: string, feishu: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<ResolvedFeishuSource> {
+  const { cli: name, instanceUrl: host } = FeishuSourceSchema.parse(feishu ?? {})
+  if (!name) throw new SetupError('feishuCliUnset', {}, id)
+  const fail = (error: unknown): never => { throw error instanceof SetupError ? error : new SetupError('feishuCliFailed', { output: reason(error) }, id) }
   let cli = ''
   try { cli = executable(name, path, workerBin(machine.stateDir)) } catch (error) { fail(error) }
   const run = (...args: string[]): Promise<string> => probe([cli, ...args],
     { LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' }).catch(fail)
   const text = await run('auth', 'status')
   const status = parsed(AuthStatus, text.slice(text.indexOf('{')))
-  if (!status) return fail(new SetupError('feishuNoApp'))
-  if (status.identities.bot.status !== 'ready') fail(new SetupError('feishuBotNotReady', { app: status.appId, status: status.identities.bot.status }))
+  if (!status) return fail(new SetupError('feishuNoApp', {}, id))
+  if (status.identities.bot.status !== 'ready') fail(new SetupError('feishuBotNotReady', { app: status.appId, status: status.identities.bot.status }, id))
   const mode = /strict-mode:\s*(\w+)/.exec(await run('config', 'strict-mode'))?.[1]
-  if (mode !== 'bot') fail(new SetupError('feishuUserIdentity', { mode: mode ?? 'unknown' }))
+  if (mode !== 'bot') fail(new SetupError('feishuUserIdentity', { mode: mode ?? 'unknown' }, id))
   // `--format json` 只解包 `data`，而此端点把负载放在 `bot` 下。CLI 可能在 NDJSON 前打印
   // 横幅，因此取第一行属于机器人负载的内容，而不是真正的第一行。
   const info = firstParsed(BotInfo, await run('api', 'GET', '/open-apis/bot/v3/info', '--as', 'bot', '--format', 'ndjson'))
-  if (!info) return fail(new SetupError('feishuNoBot'))
-  return { cli, appId: status.appId, brand: status.brand, botId: info.bot.open_id, name: info.bot.app_name }
+  if (!info) return fail(new SetupError('feishuNoBot', {}, id))
+  return { id, kind: 'feishu', instanceUrl: host, cli, appId: status.appId, brand: status.brand, botId: info.bot.open_id, name: info.bot.app_name }
 }

@@ -17,7 +17,7 @@ import { Engine, key, reasonText, type EngineForSettings, type ReceiveResult, ty
 import { allowedSender, settingsPolicy } from '../policy.ts'
 import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
-import type { Deployment, Machine } from '../deployment.ts'
+import { firstSource, type Deployment, type Machine } from '../deployment.ts'
 import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
 import type { SetupProblem } from '../setup.ts'
 import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
@@ -101,7 +101,7 @@ export class Runtime extends Service implements SourceHost {
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
-      const feishu = () => setup.configured() && !!setup.deployment.feishu
+      const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')
       const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
       store.set(KV.runtime.masterId, masterId)
@@ -150,7 +150,7 @@ export class Runtime extends Service implements SourceHost {
           const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
           if (ended && setup.configured()) {
             const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
-            for (const message of pullEndNotices(ended, request, setup.deployment.repository)) outbox.send(message)
+            for (const message of pullEndNotices(ended, request, setup.deployment.sources)) outbox.send(message)
           }
         } })
       // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
@@ -160,8 +160,7 @@ export class Runtime extends Service implements SourceHost {
         health: this.runtimeHealth, lifetime: this.lifetime, configured: () => setup.configured(), closing: () => this.closing() })
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
-        get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
-        get gitlabProblem() { return setup.gitlabProblem }, receive: trigger => passes.receive(trigger) }
+        get sourceProblems() { return setup.sourceProblems }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }, runtime.sources.instances().find(item => item.kind === 'github')?.id ?? '') },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
@@ -199,15 +198,28 @@ export class Runtime extends Service implements SourceHost {
   get deployment(): Deployment { return this.setup.deployment }
   configured(): boolean { return this.setup.configured() }
   get setupProblem(): SetupProblem | undefined { return this.setup.problem }
-  /** 为什么即使飞书来源配置了 CLI，飞书机器人仍不可用。 */
-  get feishuProblem(): SetupProblem | undefined { return this.setup.feishuProblem }
-  /** 为什么即使 GitLab 来源配置了项目，GitLab 项目仍不可用。 */
-  get gitlabProblem(): SetupProblem | undefined { return this.setup.gitlabProblem }
+  /** 按来源记录 ID 索引的部署校验问题；单条记录失败只暂停该记录。 */
+  get sourceProblems(): Readonly<Record<string, SetupProblem>> { return this.setup.sourceProblems }
+  /** 视图层按类型汇总的第一条记录问题；面板按记录展示问题由 `sourceProblems` 提供。 */
+  private problemOfKind(kind: string): SetupProblem | undefined {
+    const settings = this.store.settings()
+    for (const [id, problem] of Object.entries(this.setup.sourceProblems)) if (settings.sources[id]?.kind === kind) return problem
+    return undefined
+  }
+  get feishuProblem(): SetupProblem | undefined { return this.problemOfKind('feishu') }
+  get gitlabProblem(): SetupProblem | undefined { return this.problemOfKind('gitlab') }
+  /** 按记录 ID 排序的第一条记录问题；概览用它说明某个来源为何没有启动。 */
+  get sourceProblem(): SetupProblem | undefined {
+    const [first] = Object.keys(this.setup.sourceProblems).sort()
+    return first === undefined ? undefined : this.setup.sourceProblems[first]
+  }
   links(): LinkTarget {
-    const resolved = this.setup.configured() ? this.setup.deployment : undefined
-    const links = resolved ? { repository: resolved.repository, ...(resolved.feishu ? { feishu: resolved.feishu } : {}),
-      ...(resolved.gitlab ? { gitlab: resolved.gitlab } : {}) } : {}
-    return channel => this.sources.link(channel, links)
+    const sources = this.setup.configured() ? this.setup.deployment.sources : {}
+    return channel => {
+      const source = sources[channel.source]
+      return this.sources.link(channel, source?.kind === 'github' ? { repository: source.repository } : source?.kind === 'feishu' ? { feishu: source }
+        : source?.kind === 'gitlab' ? { gitlab: source } : {})
+    }
   }
   ticketEnvironment(ticket: Ticket): Variable[] {
     const trigger = sourceTrigger(this, ticket)
@@ -245,8 +257,8 @@ export class Runtime extends Service implements SourceHost {
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
       get deployment() { return setup.deployment },
-      get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem },
-      get gitlabProblem() { return setup.gitlabProblem },
+      get setupProblem() { return setup.problem }, get sourceProblems() { return setup.sourceProblems }, get sourceProblem() { return runtime.sourceProblem },
+      get feishuProblem() { return runtime.feishuProblem }, get gitlabProblem() { return runtime.gitlabProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
       checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
   }

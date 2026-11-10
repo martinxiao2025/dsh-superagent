@@ -9,7 +9,7 @@ import type { Store } from './store.ts'
 export interface OutboxHost {
   readonly store: Pick<Store, 'atomic' | 'receipts'>
   readonly effects: Pick<Effects, 'enqueue' | 'cancel' | 'handle' | 'idle'>
-  readonly sources: Pick<SourceRegistry, 'instance' | 'channelAllowed' | 'send'>
+  readonly sources: Pick<SourceRegistry, 'instance' | 'kindOf' | 'channelAllowed' | 'send'>
   readonly commands: Commands
   paused(): boolean
 }
@@ -26,7 +26,7 @@ export class Outbox implements OutboxPort {
   /** 原子地记录消息回执并为其投递副作用入队；重复的消息 ID 会被忽略。 */
   send(message: OutboundMessage): void {
     // 在此校验 IM 回复长度；回执在决定时已校验过。
-    if (message.kind === 'reply' && message.channel.source === 'feishu') checkedImText(message.text)
+    if (message.kind === 'reply' && this.host.sources.kindOf(message.channel.source)?.kind === 'feishu') checkedImText(message.text)
     const { store, effects } = this.host
     store.atomic(() => { if (store.receipts.add(message)) effects.enqueue('reply', message.id, {}) })
   }

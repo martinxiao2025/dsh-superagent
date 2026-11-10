@@ -21,7 +21,7 @@ import { feishuKind } from '../../src/sources/feishu.ts'
 import { githubKind } from '../../src/sources/github.ts'
 import type { Health } from '../../src/sources/host.ts'
 import type { SourceKind } from '../../src/sources/kind.ts'
-import { testDeployment } from './deployment.ts'
+import { testDeployment, testFeishu, testGithub, testGitlab } from './deployment.ts'
 
 export const MEMBER = 'ou_alice'
 const ALLOWED: Record<string, { id: string; name?: string }[]> = { feishu: [{ id: MEMBER, name: 'Alice' }], github: [{ id: 'alice' }] }
@@ -113,8 +113,12 @@ export let server: PanelServer
 
 function resolved() {
   const accounts = server.setup.accounts
-  return accounts ? testDeployment({ repository: accounts.repository, github: { cli: '/bin/false', login: accounts.agent, noreply: '' },
-    ...accounts.feishu ? { feishu: { cli: '/bin/false', ...accounts.feishu } } : { feishu: undefined } }) : undefined
+  if (!accounts) return undefined
+  return testDeployment({
+    github: testGithub({ repository: accounts.repository, cli: '/bin/false', login: accounts.agent, noreply: '' }),
+    feishu: accounts.feishu ? testFeishu({ cli: '/bin/false', ...accounts.feishu }) : undefined,
+    ...accounts.gitlab ? { gitlab: testGitlab({ cli: '/bin/false', project: accounts.gitlab.project, login: accounts.gitlab.login }) } : {},
+  })
 }
 /** 默认来源健康状态：设置期间暂停；除非被覆盖或被设置暂停，飞书默认为 `socket closed`。 */
 function healthOf(name: string): Health {
@@ -137,7 +141,7 @@ function sourceSettings(): SourceView[] {
     return { id: kind.kind, kind: kind.kind, title: kind.title, description: kind.description, installed: true,
       value: { enabled: server.settings.sources[kind.kind]?.enabled ?? true, config },
         revision: server.revisions[`source:${kind.kind}`] ?? 0,
-      restarts: SETUP_FIELDS[kind.kind] ?? [], fields: kind.fields, facts: kind.facts?.(resolved()) ?? {},
+      restarts: SETUP_FIELDS[kind.kind] ?? [], fields: kind.fields, facts: kind.facts?.(resolved()?.sources[kind.kind]) ?? {},
       labels: kind.kind === 'feishu' ? { oc_team: '团队群', oc_other: '另一个群', ...server.joined } : {}, ...problem ? { problem } : {},
       ...policy ? { policy } : {} }
   })

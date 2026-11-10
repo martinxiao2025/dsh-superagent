@@ -15,6 +15,7 @@ import { shellArgv, shimFile } from '../src/infra/environment.ts'
 import { masterPrompt } from '../src/app/context.ts'
 import { reference, testMachine } from './fixtures/deployment.ts'
 import type { Machine } from '../src/deployment.ts'
+import { firstSource } from '../src/deployment.ts'
 import { SCHEMA_VERSION, Store } from '../src/app/store.ts'
 import { TextCache } from '../src/app/cache.ts'
 import { KV } from '../src/kv.ts'
@@ -39,7 +40,7 @@ import { executorLoad, ticketDetail, ticketList } from '../src/app/views/tickets
 
 let runtime: Runtime
 const viewsOf = (value: Runtime) => ({ store: value.store, sources: value.sources, links: value.links() })
-const overviewOf = (value: Runtime) => overview(viewsOf(value), value.health, policyVersion(value.store.settings()), executorLoad(value.store, value.executor.activeCount()), value.setupProblem ?? value.feishuProblem)
+const overviewOf = (value: Runtime) => overview(viewsOf(value), value.health, policyVersion(value.store.settings()), executorLoad(value.store, value.executor.activeCount()), value.setupProblem ?? value.sourceProblem)
 let directory: string
 let controller: { create: ReturnType<typeof vi.fn>; selectModel: ReturnType<typeof vi.fn>; resolveAgent: ReturnType<typeof vi.fn>; rename: ReturnType<typeof vi.fn>; prompt: ReturnType<typeof vi.fn>; inspect: ReturnType<typeof vi.fn> }
 type RegisteredTool = { name: string; output: { render: (args: unknown, result: unknown) => unknown }; execute: (args: unknown, execution: { signal: AbortSignal }) => Promise<unknown> }
@@ -812,41 +813,52 @@ it('leaves waiting and blocked assignments alone after a restart and keeps block
   expect(runtime.store.tickets.get(other.ticket.id)!.assignments.map(item => item.state)).toEqual(['ended', 'pending'])
 })
 
-it('waits for setup without the agent\'s GitHub CLI: the panel works, and nothing is polled, assessed or dispatched', async () => {
-  const { ticket, sessionId } = await acceptedTicket()
+it('starts with a broken GitHub record: the panel works, that record pauses, and other Sources keep running', async () => {
+  const { sessionId } = await acceptedTicket()
   await runTool(sessionId, 'orchestrator_report', { state: 'failed', summary: 'crashed' })
   expect(() => runtime.checkSetup()).toThrow('Setup is complete')
   controller.create.mockClear(); deliveries.mockClear()
   const next = await restart({}, { github: { cli: '' } })
   await next.ready
-  expect(next.configured()).toBe(false)
-  expect(next.setupProblem).toEqual({ place: 'github', code: 'agentCliUnset', values: {}, detail: 'The agent GitHub CLI is not set.' })
-  expect(next.health.runtime).toMatchObject({ state: 'paused', code: 'setupPending' })
-  expect(() => next.deployment).toThrow('dsh-superagent is waiting for setup: The agent GitHub CLI is not set.')
-  expect((await api('GET', 'state')).body).toMatchObject({ setup: { problem: { place: 'github' }, accounts: null, machine: { stateDir: directory } } })
-  expect(overviewOf(next).problems[0]).toEqual({ kind: 'setup', ...next.setupProblem })
+  next.sources.register(feishuKind); next.sources.register(githubKind)
+  const problem = { place: 'github', code: 'agentCliUnset', values: {}, detail: 'The agent GitHub CLI is not set.' }
+  // 机器级部署检查通过：只排除出问题的记录，其余来源照常运行。
+  expect(next.configured()).toBe(true)
+  expect(next.setupProblem).toBeUndefined()
+  expect(next.sourceProblems).toEqual({ github: problem })
+  expect(next.deployment.sources).not.toHaveProperty('github')
+  expect(next.deployment.sources.feishu).toBeDefined()
+  expect(next.health.runtime).toMatchObject({ state: 'ready' })
+  expect((await api('GET', 'state')).body).toMatchObject({ setup: { problem: null, accounts: { repository: '', agent: '' }, machine: { stateDir: directory } } })
+  // 概览和来源接口都说明是哪条记录失败了，而不是把它静默禁用。
+  expect(overviewOf(next).problems[0]).toEqual({ kind: 'setup', ...problem })
+  const sources = (await api('GET', 'sources')).body as { id: string; state: string; problem?: unknown }[]
+  expect(sources.find(source => source.id === 'github')).toMatchObject({ state: 'error', problem })
+  // 其他来源照常工作：飞书触发器仍被评估并交给主会话。
   await receive(feishu('30', '@bot 修一下'), next)
-  // 重试会等待设置，而不是启动一个无法运行的 worker，且不会有报告到达编排器。
-  await next.engine.retryTicket(ticket.id)
-  expect(next.store.tickets.get(ticket.id)!.assignments.map(item => item.state)).toEqual(['ended', 'pending'])
-  expect(controller.create).not.toHaveBeenCalled()
-  expect(deliveries).not.toHaveBeenCalled()
-  // 不产生任何改变的保存不会记录任何内容；任何其他保存都会再次运行设置，因为它可能是修复，
-  // 而在 dsh-superagent 外部修复后的检查也会如此。
+  expect(relays(next.masterId).some(item => item.trigger_id === feishu('30', '@bot 修一下').id)).toBe(true)
+  // 机器级检查已通过，记录级问题不会让无关的策略保存重启运行时。
+  // 不产生任何改变的保存同样不记录新修订。
   const revision = next.store.get<number>('settings-revision')
   expect(await next.settings.save('policy', next.store.settings().policy, next.store.blockRevision('policy'), 'panel')).toMatchObject({ saved: true, restarting: false })
   expect(next.store.get<number>('settings-revision')).toBe(revision)
-  expect(await next.settings.save('policy', { ...next.store.settings().policy, rules: [] }, next.store.blockRevision('policy'), 'panel')).toMatchObject({ saved: true, restarting: true })
-  await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(1))
+  expect(await next.settings.save('policy', { ...next.store.settings().policy, rules: [] }, next.store.blockRevision('policy'), 'panel')).toMatchObject({ saved: true, restarting: false })
+  expect(restarts).not.toHaveBeenCalled()
+  // 在 dsh-superagent 外部修复后，下一次设置检查会重启运行时并重新解析记录。
   next.checkSetup()
-  await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(2))
+  await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(1))
 })
 
 it('reports each setup problem where the operator fixes it, and checks the agent CLI the way worker shells run it', async () => {
   const needs = async (place: string, code: string, values: Record<string, string>, accounts: Accounts = {}) => {
     const next = await restart({}, accounts)
     await next.ready
-    expect(next.setupProblem).toMatchObject({ place, code, values })
+    // 机器级问题记在 setupProblem 上并停止全部来源；记录级问题只暂停那条记录。
+    if (place === 'deployment') expect(next.setupProblem).toMatchObject({ place, code, values })
+    else {
+      expect(next.configured()).toBe(true)
+      expect(next.sourceProblems[place]).toMatchObject({ place, code, values })
+    }
   }
   answers[`${AGENT()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":false}\n'
   await needs('github', 'repositoryReadOnly', { account: 'agent-bot', repository: 'acme/widgets' })
@@ -865,7 +877,7 @@ it('reports each setup problem where the operator fixes it, and checks the agent
   const next = await restart()
   await next.ready
   expect(next.configured()).toBe(true)
-  expect(next.deployment.feishu).toBeUndefined()
+  expect(firstSource(next.deployment, 'feishu')).toBeUndefined()
   expect(next.feishuProblem).toMatchObject({ place: 'feishu', code: 'feishuUserIdentity', values: { mode: 'off' } })
 })
 
@@ -982,7 +994,7 @@ it('writes worker shims and the agent environment from the configuration only, a
   await next.ready
   expect(readdirSync(bin).sort()).toEqual([shimFile('gh'), shimFile('lark-cli'), shimFile('personal-gh')])
   expect(readFileSync(join(bin, shimFile('personal-gh')), 'utf8')).toContain('personal-gh is blocked in this installation; use gh, which acts as agent-bot.')
-  expect(readFileSync(join(bin, shimFile('lark-cli')), 'utf8')).toContain('lark-cli is unavailable: this installation has no Feishu bot.')
+  expect(readFileSync(join(bin, shimFile('lark-cli')), 'utf8')).toContain('lark-cli is unavailable: this installation has no Feishu Source.')
   expect(readFileSync(join(bin, shimFile('gh')), 'utf8')).toContain(runs(AGENT()))
   // git 会在引号值中转义反斜杠；反转义它们，以便与捆绑包写入的辅助程序比较。
   expect(readFileSync(workerGitConfig(directory), 'utf8').replaceAll('\\\\', '\\')).toContain(`[credential "https://github.com"]\n\thelper = "${credentialHelper(AGENT())}"`)

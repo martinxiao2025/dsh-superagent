@@ -268,9 +268,12 @@ it('saves a settings block by name, a Source\'s block with the Source\'s id', as
   const github = { config: h.runtime.store.settings().sources.github!.config, revision: h.runtime.store.blockRevision('source:github') }
   const off = { enabled: false, config: github.config }
   await expect(save({ block: 'source', value: off, revision: github.revision })).rejects.toThrow('source names the Source')
+  // 启停记录会改变部署检查的材料，与 CLI、仓库一样只能由管理页修改。
   await expect(save({ block: 'source:github', value: off, revision: github.revision })).rejects.toThrow()
-  expect(await save({ block: 'source', source: 'github', value: off, revision: github.revision })).toMatchObject({ saved: true })
-  expect(h.runtime.store.settings().sources.github?.enabled).toBe(false)
+  await expect(save({ block: 'source', source: 'github', value: off, revision: github.revision })).rejects.toThrow('management panel')
+  const tuned = { enabled: true, config: { ...github.config, observeIssues: true } }
+  expect(await save({ block: 'source', source: 'github', value: tuned, revision: github.revision })).toMatchObject({ saved: true })
+  expect(h.runtime.store.settings().sources.github?.config.observeIssues).toBe(true)
   expect(await save({ block: 'pause', value: { paused: true }, revision: 0 })).toEqual({ paused: true })
 })
 

@@ -27,7 +27,7 @@ function ProblemLine({ problem, onChanged }: { problem: Problem; onChanged: () =
     // 飞书机器人检查失败只会暂停飞书来源；其他初始化问题会停掉整个服务。
     case 'setup': return row(t(problem.place === 'feishu' ? 'problemSetupFeishu' : 'problemSetup'), <p className="dt-error"><SetupMessage
       problem={problem} /></p>,
-      setupPage(problem.place), t(`problemSetupFix.${problem.place}`), <CheckSetupButton />)
+      setupPage(problem.place), t(`problemSetupFix.${problem.place === 'deployment' ? 'deployment' : 'source'}`), <CheckSetupButton />)
     case 'no-source': return row(t('problemNoSource'), undefined, settingsRoute('source'), undefined, go(t('actionOpenSources'),
       settingsRoute('source')))
     case 'no-allowed': return row(t('problemNoAllowed'), undefined, settingsRoute('eval'), undefined, go(t('actionAddAllowed'),

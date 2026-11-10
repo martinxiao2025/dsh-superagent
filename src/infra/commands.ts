@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
-import type { Deployment } from '../deployment.ts'
+import type { Deployment, ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
 
 const exec = promisify(execFile)
 const TIMEOUT_MS = 90_000
@@ -75,17 +75,45 @@ function membership(error: unknown): unknown {
 }
 /**
  * 使用部署账号凭据、超时和中止信号执行 gh、lark-cli 和 git 子进程。
- * 把 GitHub API 调用限制在配置的仓库内，并将 CLI 失败转换为 CliError 实例，供 Sources、MasterAssessor、Outbox 和 Settings 使用。
+ * 每条来源记录通过 `scope(记录ID)` 得到自己的命令：仓库、项目与 CLI 都取自该记录解析出的来源。
+ * 把 GitHub API 调用限制在记录配置的仓库内，并将 CLI 失败转换为 CliError 实例，供 Sources、MasterAssessor、Outbox 和 Settings 使用。
  */
 export class Commands {
+  /** 每条记录的绑定只创建一次，使同一来源的调用方共享同一个命令对象。 */
+  private readonly scopes = new Map<string, Commands>()
   /**
    * @param resolved - 返回已解析的部署配置；配置尚未完成时抛出异常。
    * @param environment - 覆盖每条命令所用 `process.env` 的变量（例如隔离的 git 设置）。
+   * @param record - 绑定的来源记录 ID；未绑定时只有 `run` 和 `git` 可用。
    */
-  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal) {}
+  constructor(private readonly resolved: () => Deployment, private readonly environment: Record<string, string | undefined>, private readonly signal: AbortSignal,
+    private readonly record?: string) {}
   get deployment(): Deployment { return this.resolved() }
-  get repository(): string { return this.deployment.repository }
-  withSignal(signal?: AbortSignal): Commands { return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal])) : this }
+  /**
+   * 绑定到来源记录 `record` 的命令；未知或未解析的记录在取用仓库/项目/CLI 时报错。
+   * 已经绑定到同一记录时返回自身，其余记录复用同一个绑定，使重复调用不会丢掉替身对象上的状态。
+   */
+  scope(record: string): Commands {
+    if (this.record === record) return this
+    const existing = this.scopes.get(record)
+    if (existing) return existing
+    const scoped = new Commands(this.resolved, this.environment, this.signal, record)
+    this.scopes.set(record, scoped)
+    return scoped
+  }
+  /** 这条命令绑定的记录解析出的来源；未绑定或记录尚未解析时为 undefined。 */
+  get source(): ResolvedSource | undefined { return this.record === undefined ? undefined : this.deployment.sources[this.record] }
+  get github(): ResolvedGithubSource {
+    const source = this.source
+    if (source?.kind !== 'github') throw new Error(this.record === undefined ? 'No GitHub Source is selected' : `Source ${this.record} is not a GitHub Source`)
+    return source
+  }
+  get gitlab(): ResolvedGitlabSource | undefined { const source = this.source; return source?.kind === 'gitlab' ? source : undefined }
+  get feishu(): ResolvedFeishuSource | undefined { const source = this.source; return source?.kind === 'feishu' ? source : undefined }
+  get repository(): string { return this.github.repository }
+  withSignal(signal?: AbortSignal): Commands {
+    return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal]), this.record) : this
+  }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
       const { file, args: argv, windowsVerbatimArguments } = spawnCommand(program, args)
@@ -95,7 +123,7 @@ export class Commands {
     } catch (error) { throw commandError(error, program) }
   }
   /** 运行智能体的 GitHub CLI 并解析其 JSON 输出；调用方应优先使用 `api`，它会限制在配置的仓库内并校验输出。 */
-  async gh<T>(args: string[]): Promise<T> { return JSON.parse(await this.run(this.deployment.github.cli, args)) as T }
+  async gh<T>(args: string[]): Promise<T> { return JSON.parse(await this.run(this.github.cli, args)) as T }
   /**
    * 在配置的仓库内的某个路径上调用 GitHub API：提供 schema 时校验 JSON 输出，
    * 省略时返回原始 CLI 输出（例如原始文件或 `--include` 响应头）。
@@ -104,7 +132,7 @@ export class Commands {
   async api<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T>
   async api(path: string, ...flags: string[]): Promise<string>
   async api<T>(schema: z.ZodType<T> | string, ...rest: string[]): Promise<T | string> {
-    if (typeof schema === 'string') return this.run(this.deployment.github.cli, ['api', this.path(schema), ...rest])
+    if (typeof schema === 'string') return this.run(this.github.cli, ['api', this.path(schema), ...rest])
     const [path = '', ...flags] = rest
     return schema.parse(await this.gh(['api', this.path(path), ...flags]))
   }
@@ -120,7 +148,7 @@ export class Commands {
   }
   /** 运行智能体的 GitLab CLI 并解析其 JSON 输出；优先使用 `gitlabApi`，它会限制项目并校验输出。 */
   async glab<T>(args: string[]): Promise<T> {
-    const gitlab = this.deployment.gitlab
+    const gitlab = this.gitlab
     if (!gitlab) throw new Error('The GitLab Source has no working CLI')
     return JSON.parse(await this.run(gitlab.cli, args)) as T
   }
@@ -132,7 +160,7 @@ export class Commands {
   async gitlabApi<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T>
   async gitlabApi(path: string, ...flags: string[]): Promise<string>
   async gitlabApi<T>(schema: z.ZodType<T> | string, ...rest: string[]): Promise<T | string> {
-    const gitlab = this.deployment.gitlab
+    const gitlab = this.gitlab
     if (!gitlab) throw new Error('The GitLab Source has no working CLI')
     if (typeof schema === 'string') return this.run(gitlab.cli, ['api', this.gitlabPath(schema, gitlab), ...rest])
     const [path = '', ...flags] = rest
@@ -162,7 +190,7 @@ export class Commands {
    * @throws 失败时抛出带飞书错误码的 CliError（机器人不在会话中时重写 232011）。
    */
   async lark<T>(args: string[], cwd?: string): Promise<T> {
-    const bot = this.deployment.feishu
+    const bot = this.feishu
     if (!bot) throw new Error('The Feishu Source has no working bot CLI')
     const output = await this.run(bot.cli, [...args, '--as', 'bot', '--format', 'json'], cwd)
       .catch((error: unknown) => { throw membership(error) })

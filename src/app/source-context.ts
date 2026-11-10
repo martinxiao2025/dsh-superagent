@@ -18,12 +18,8 @@ export interface SourceContextDeps {
   readonly deployment: Deployment
   readonly ready: Promise<void>
   configured(): boolean
-  /** 其 `place` 与来源类型匹配的初始化问题会通过 `context.problem` 交给该来源。 */
-  readonly setupProblem?: SetupProblem | undefined
-  /** 为什么即使飞书来源指定了 CLI，初始化仍未找到飞书机器人。 */
-  readonly feishuProblem?: SetupProblem | undefined
-  /** 为什么即使 GitLab 来源指定了项目，初始化仍无法验证 GitLab 项目。 */
-  readonly gitlabProblem?: SetupProblem | undefined
+  /** 按记录 ID 索引的初始化问题；`context.problem` 取本记录的那一项。 */
+  readonly sourceProblems?: Readonly<Record<string, SetupProblem>> | undefined
   /** 将触发器交给引擎，并安排对其进行评估的轮次。 */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
 }
@@ -38,10 +34,11 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
   return {
     id,
     get deployment() { return deps.deployment },
-    commands: deps.commands,
+    get source() { return deps.deployment.sources[id] },
+    commands: deps.commands.scope(id),
     ready: deps.ready,
     configured: () => deps.configured(),
-    get problem() { return [deps.feishuProblem, deps.gitlabProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
+    get problem() { return deps.sourceProblems?.[id] },
     config: <C extends Record<string, unknown>>() => {
       const instance = deps.sources.instance<C>(id)
       return instance?.enabled ? instance.config : undefined

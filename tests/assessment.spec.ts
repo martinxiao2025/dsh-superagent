@@ -19,6 +19,7 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
   const gate = { issue: undefined as Promise<void> | undefined }
   const commands = {
     repository: 'acme/widgets', deployment: testDeployment(),
+    scope() { return commands },
     withSignal() { return commands },
     gh: vi.fn(async (args: string[]) => {
       await gate.issue

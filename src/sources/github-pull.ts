@@ -1,10 +1,15 @@
 /** PR 绑定、生命周期观察和终态 IM 通知辅助函数。 */
 import { z } from 'zod'
 import { key, liveTicket, type Follow, type OutboundMessage, type ThreadFact, type Ticket } from '../core/index.ts'
-import type { Deployment } from '../deployment.ts'
+import type { ResolvedGithubSource, ResolvedSource } from '../deployment.ts'
 import { sameName } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import { githubPage, SOURCE, UserSchema } from './github-trigger.ts'
+/** 这条上下文的 GitHub 来源；记录尚未通过部署检查时抛出。 */
+const account = (ctx: SourceContext): ResolvedGithubSource => {
+  if (ctx.source?.kind !== 'github') throw new Error('The GitHub Source has no working CLI')
+  return ctx.source
+}
 
 const PullSchema = z.looseObject({
   title: z.string().optional(), state: z.string(), html_url: z.string(), user: UserSchema,
@@ -21,8 +26,8 @@ export const pullsOf = (ticket: Pick<Ticket, 'follows'>, open = false): number[]
 export const pullOf = (ticket: Pick<Ticket, 'follows'>): number | undefined => pullsOf(ticket, true).at(-1) ?? pullsOf(ticket).at(-1)
 /** PR 由智能体账号从配置仓库中的分支（而非 fork）打开时为 true。 */
 export const agentPull = (pr: { user: { login: string }; head?: { repo?: { full_name: string } | null } | null },
-  deployment: Pick<Deployment, 'github' | 'repository'>): boolean =>
-  sameName(pr.user.login, deployment.github.login) && sameName(pr.head?.repo?.full_name ?? '', deployment.repository)
+  account: Pick<ResolvedGithubSource, 'login' | 'repository'>): boolean =>
+  sameName(pr.user.login, account.login) && sameName(pr.head?.repo?.full_name ?? '', account.repository)
 /** 分支属于该工单时为 true：其最后一段路径是工单的短名，例如 `agent/<name>`。 */
 export const ticketBranch = (ticket: Pick<Ticket, 'execution'>, ref: string): boolean =>
   !!ticket.execution?.name && ref.split('/').at(-1) === ticket.execution.name
@@ -36,11 +41,12 @@ const AUTO_MERGE_ON: ThreadFact = { label: { zh: '自动合并', en: 'Auto-merge
 export function claimPull(ctx: SourceContext, ticketId: string, pr: Pull): string | undefined {
   const ticket = ctx.tickets.get(ticketId)
   if (!ticket || !liveTicket(ticket)) return 'Ticket ended because its PR was closed'
-  const source = ctx.triggers.get(ticket.origin.triggerId)
-  const started = source?.source === SOURCE && source.meta.isPr === true && source.meta.number === pr.number
-  const opened = agentPull(pr, ctx.deployment) && ticketBranch(ticket, pr.head.ref)
+  const origin = ctx.triggers.get(ticket.origin.triggerId)
+  const started = origin?.source === SOURCE && origin.meta.isPr === true && origin.meta.number === pr.number
+  const source = account(ctx)
+  const opened = agentPull(pr, source) && ticketBranch(ticket, pr.head.ref)
   if (!started && !opened) {
-    const { login } = ctx.deployment.github
+    const { login } = source
     return `PR does not belong to this ticket: use the source PR or a PR by ${login} from a branch whose last path segment is DSH_SUPERAGENT_NAME; omit pr_number when no PR exists`
   }
   const owner = ctx.tickets.open().find(item => pullsOf(item, true).includes(pr.number))
@@ -59,7 +65,7 @@ export async function observePull(ctx: SourceContext, pr: Pull): Promise<boolean
   const ended = pr.state === 'closed' || !!pr.merged
   if (ended) closePull(ctx, pr)
   else {
-    const candidates = agentPull(pr, ctx.deployment) ? ctx.tickets.open().filter(ticket => ticketBranch(ticket, pr.head.ref)) : []
+    const candidates = agentPull(pr, account(ctx)) ? ctx.tickets.open().filter(ticket => ticketBranch(ticket, pr.head.ref)) : []
     const ticket = candidates.length === 1 ? candidates[0]! : undefined
     // 工单跟随到关闭、之后又重新打开的 PR 会被再次跟随。
     const reopened = ticket?.follows?.some(item => item.thread === `${SOURCE}:${pr.number}` && item.closed)
@@ -87,14 +93,18 @@ function closePull(ctx: SourceContext, pr: Pull): void {
  * 工单随其 PR 结束时的 IM 会话幂等出站通知（选择它打开的最后关闭的 PR，否则选择它跟随的最后一个）。
  * 通知语言跟随工单的来源请求：包含汉字且不含假名时为中文，否则为英文。
  */
-export function pullEndNotices(ticket: Ticket, request: string, repository: string): OutboundMessage[] {
+export function pullEndNotices(ticket: Ticket, request: string, sources: Readonly<Record<string, ResolvedSource>>): OutboundMessage[] {
   const outcome = ticket.ended?.outcome
   const follows = (ticket.follows ?? []).filter(item => item.closed && pullNumber(item.thread) !== undefined)
   const latest = (items: Follow[]) => items.sort((a, b) => b.closed!.at.localeCompare(a.closed!.at))[0]
   const follow = latest(follows.filter(item => item.own)) ?? latest(follows)
   if ((outcome !== 'merged' && outcome !== 'closed') || !follow) return []
+  // 线程键的前缀就是来源记录 ID（`threadKey` 的格式）。
+  const resolved = sources[follow.thread.split(':')[0] ?? '']
+  // 来源记录已被删除时没有仓库可拼链接，跳过通知而不是发出坏链接。
+  if (resolved?.kind !== 'github') return []
   const number = pullNumber(follow.thread)!
-  const url = githubPage(repository, number, true)
+  const url = githubPage(resolved.repository, number, true)
   const chinese = /\p{Script=Han}/u.test(request) && !/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(request)
   const text = chinese
     ? outcome === 'merged' ? `[PR #${number}](${url}) 已合并。` : `[PR #${number}](${url}) 已关闭，未合并。`

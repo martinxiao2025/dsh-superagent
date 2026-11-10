@@ -12,7 +12,7 @@ const gone = (error: unknown): boolean => error instanceof CliError && error.cod
 /** 在 Issue 或 MR 下回帖，正文末尾带 HTML 标记；重试前先列出最近 notes，按标记去重。 */
 export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const { commands } = host
-  const { gitlab } = commands.deployment
+  const gitlab = commands.gitlab
   if (!gitlab) throw new Error('The GitLab Source has no working CLI')
   const iid = Number(message.channel.address.number)
   const section = message.channel.address.kind === 'mr' ? 'merge_requests' : 'issues'

@@ -2,7 +2,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { z } from 'zod'
 import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
-import type { Deployment } from '../deployment.ts'
+import type { ResolvedFeishuSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
 
@@ -22,7 +22,7 @@ export type FieldSpec =
   | FieldBase & { type: 'rows'; columns: ({ key: string; label: Localized; type: 'text'; pattern?: string; optional?: boolean; choose?: Localized; refresh?: Localized } | { key: string; label: Localized; type: 'select'; options: { value: string; label: Localized }[] })[] }
 
 export interface VariableSpec { key: string; description: Localized }
-export interface EnvironmentInput<C> { deployment: Deployment; config: C; trigger?: Trigger }
+export interface EnvironmentInput<C> { source: ResolvedSource | undefined; config: C; trigger?: Trigger }
 export interface AdmissionRowView { id: string; label: Localized | string; note: Localized; cells: { listedUnaddressed: boolean; unlistedAddressed: boolean; unlistedUnaddressed: boolean } }
 /** 来源种类的策略扩展，定义允许的发送者、接收表行以及可选的外部名单同步。 */
 export interface SourcePolicyPart<P extends Record<string, unknown>> {
@@ -41,7 +41,7 @@ export interface SourcePolicyPart<P extends Record<string, unknown>> {
 }
 /** 频道地址的 UI 链接；`triggerId` 指定触发器，在可用时优先使用它自己的深链。 */
 export interface ChannelLink { url: string; label: Localized; triggerId?: string }
-export type ChannelLinks = Partial<Pick<Deployment, 'repository' | 'feishu' | 'gitlab'>>
+export type ChannelLinks = { repository?: string; feishu?: ResolvedFeishuSource; gitlab?: ResolvedGitlabSource }
 /** 来源种类的线程所用的出站消息适配器。 */
 export interface SourceChannel<C> {
   /** 回复是否仍可发往 `address`；没有它时，任何地址都可以收到回复。 */
@@ -83,12 +83,12 @@ export interface TriggerContext {
 }
 /** 注册到 SourceRegistry 的可插拔来源种类描述符。 */
 export interface SourceKind<C extends Record<string, unknown> = Record<string, unknown>> {
-  /** 稳定 ID；未存储时存在一个同 ID 的默认实例。 */
+  /** 稳定 ID；来源记录按这个值选择适配器。 */
   kind: string
   title: Localized
   description: Localized
-  /** 由 `deployment` 派生的只读状态事实（等待设置时为 undefined），按字段键索引。 */
-  facts?(deployment: Deployment | undefined): Record<string, Localized | string>
+  /** 由记录解析出的来源派生的只读状态事实（记录尚未解析时为 undefined），按字段键索引。 */
+  facts?(source: ResolvedSource | undefined): Record<string, Localized | string>
   /** 校验已存储和提交的配置并填充默认值。 */
   schema: z.ZodType<C>
   fields: FieldSpec[]

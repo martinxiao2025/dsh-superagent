@@ -1,7 +1,7 @@
 /** 连接来源插件与应用的宿主和上下文接口；Web 面板也会导入，因此不得导入仅限 Node 的模块。 */
 import type { ChannelRef, ReceiveResult, OutboundMessage, Thread, ThreadFact, ThreadRef, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
-import type { Deployment } from '../deployment.ts'
+import type { Deployment, ResolvedSource } from '../deployment.ts'
 import type { SourceRegistry } from './registry.ts'
 import type { SetupProblem } from '../setup.ts'
 import type { Family, Key } from '../kv.ts'
@@ -32,11 +32,13 @@ export interface SourceContext {
   /** 这条上下文所属的来源记录 ID；触发器、线程、健康项都按它命名。 */
   readonly id: string
   readonly deployment: Deployment
+  /** 这条记录解析出的来源；记录尚未通过部署检查时为 undefined。 */
+  readonly source: ResolvedSource | undefined
   readonly commands: Commands
   readonly ready: Promise<void>
   /** 设置解析出仓库和账号后为 true；来源只在此时轮询。 */
   configured(): boolean
-  /** 使此来源的账号无法运行的设置问题；只有飞书机器人检查会报告。 */
+  /** 这条记录的部署校验问题；没有问题时为 undefined。 */
   readonly problem?: SetupProblem | undefined
   /** 这条记录启用时返回它的配置，禁用或不存在时返回 undefined。 */
   config<C extends Record<string, unknown>>(): C | undefined

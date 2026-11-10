@@ -84,7 +84,7 @@ function host(config: Record<string, unknown> = {}) {
   const board = new HealthBoard()
   const sources = new SourceRegistry(() => store.settings(), board)
   sources.register(gitlabKind)
-  const deployment = testDeployment({ gitlab: { cli, project: PROJECT, projectId: 42, login: LOGIN, id: 7 } })
+  const deployment = testDeployment({ gitlab: { cli, project: PROJECT, projectId: 42, login: LOGIN, id: 'gitlab', kind: 'gitlab', instanceUrl: '', userId: 7 } })
   const assessor: Assessor = { request: vi.fn(async () => {}) }
   const executor: Executor = { start: vi.fn(async () => {}), deliver: vi.fn(async () => {}), stop: vi.fn(async () => {}) }
   const engine = new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(store.settings(), sources), assessor, executor,
@@ -99,7 +99,7 @@ function host(config: Record<string, unknown> = {}) {
   const write = (data: unknown) => writeFileSync(fixture, JSON.stringify(data))
   const setRoutes = (routes: Record<string, unknown>) => { const data = read(); write({ ...data, routes: { ...data.routes, ...routes } }) }
   const callsRead = () => readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as string[])
-  return { ...context, store, commands, received, health: () => board.all, fixture, read, setRoutes, calls: callsRead }
+  return { ...context, store, received, health: () => board.all, fixture, read, setRoutes, calls: callsRead }
 }
 
 describe('gitlab triggers', () => {

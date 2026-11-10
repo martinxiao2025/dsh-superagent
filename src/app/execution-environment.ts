@@ -29,7 +29,7 @@ export function environmentOf(input: { deployment: Deployment; sources: SourceRe
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
   for (const { id, environment, config } of sources.environments(settings)) {
-    const values = environment.values({ deployment, config, ...trigger?.source === id ? { trigger } : {} })
+    const values = environment.values({ source: deployment.sources[id], config, ...trigger?.source === id ? { trigger } : {} })
     for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: id })
   }
   return result

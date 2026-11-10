@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Config, executable, machineOf, resolveDeployment, resolveFeishuBot, resolveGitlab, type Machine, type Probe } from '../src/deployment.ts'
+import { Config, executable, machineOf, resolveFeishuSource, resolveGithubSource, resolveGitlabSource, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
 import { programSource, runProgram } from './fixtures/program.ts'
 
@@ -32,7 +32,7 @@ return 1`)
 const minimal = (overrides: Record<string, unknown> = {}) => ({ stateDir: join(dir, 'state'), ...overrides })
 const machine = (overrides: Partial<Machine> = {}): Machine => ({ ...machineOf(Config(minimal())), ...overrides })
 /** 像执行器的 shell 那样运行命令，但在本地：替身程序优先于 PATH，之后是系统的 git。 */
-const probe: Probe = async argv => (await runProgram(argv[0]!, argv.slice(1), { env: { ...process.env, PATH: path, HOME: dir } })).stdout
+const probe: Probe = async (argv, env = {}) => (await runProgram(argv[0]!, argv.slice(1), { env: { ...process.env, PATH: path, HOME: dir, ...env } })).stdout
 const setupError = (place: string, code: string, values: Record<string, unknown> = {}) => expect.objectContaining({ place, code, values: expect.objectContaining(values) })
 
 beforeEach(async () => {
@@ -65,43 +65,55 @@ describe('configuration schema', () => {
   })
   it('names keys the configuration does not define, and where the values of older keys live now', () => {
     const raw = minimal({ repository: 'acme/widgets', repositoryPath: '/srv/widgets', blockedCommands: [], author: { name: 'Alice' }, extra: 1 })
-    expect(() => machineOf(Config(raw))).toThrow('keys it does not use: repository (now on the GitHub Source), repositoryPath (now in the prepare command of the Execution settings), blockedCommands (now in the Execution settings), author (now prompt text), extra;')
+    expect(() => machineOf(Config(raw))).toThrow('keys it does not use: repository (now on each GitHub Source record), repositoryPath (now in the prepare command of the Execution settings), blockedCommands (now in the Execution settings), author (now prompt text), extra;')
   })
 })
 
 describe('setup', () => {
-  it('reads the repository from the GitHub Source and the accounts from their CLIs, skipping the worker shims', async () => {
-    const deployment = await resolveDeployment(machine(), { repository: 'acme/widgets', cli: 'gh' }, probe, path)
-    expect(deployment).toMatchObject({ repository: 'acme/widgets', github: { cli: ghCli, login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' } })
-    expect(deployment.github).toEqual({ cli: ghCli, login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' })
-    expect(deployment).not.toHaveProperty('feishu')
+  it('reads each GitHub record\'s repository and account from its CLI, skipping the worker shims', async () => {
+    const deployment = await resolveGithubSource(machine(), 'github-main', { repository: 'acme/widgets', cli: 'gh' }, probe, path)
+    expect(deployment).toEqual({ id: 'github-main', kind: 'github', instanceUrl: '', cli: ghCli, repository: 'acme/widgets', login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' })
     // 重命名后的仓库仍可通过旧名解析；通知携带 GitHub 当前的全名（full_name）。
-    expect((await resolveDeployment(machine(), { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
+    expect((await resolveGithubSource(machine(), 'github-main', { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
+  })
+  it('points a self-hosted GitHub Enterprise record at its instance with GH_HOST', async () => {
+    const enterprise = program('gh-enterprise', `const args = argv.join(' ')
+if (args === 'api user') {
+  if (process.env.GH_HOST !== 'git.example.com') { console.error('GH_HOST is ' + process.env.GH_HOST); return 1 }
+  console.log('{"login":"Agent-Bot","id":7}'); return 0
+}
+if (args.startsWith('api repos/acme/widgets')) { console.log('{"name":"acme/widgets","push":true}'); return 0 }
+return 1`)
+    const source = await resolveGithubSource(machine(), 'enterprise', { repository: 'acme/widgets', cli: 'gh-enterprise', instanceUrl: 'https://git.example.com' }, probe, path)
+    expect(source).toMatchObject({ id: 'enterprise', instanceUrl: 'https://git.example.com', repository: 'acme/widgets' })
+    expect(source.cli).toBe(enterprise)
+    // 实例地址只接受站点根地址；带路径的输入在保存时就会报错，而不是静默访问错误的 API。
+    await expect(resolveGithubSource(machine(), 'enterprise', { repository: 'acme/widgets', cli: 'gh-enterprise', instanceUrl: 'https://git.example.com/group' }, probe, path)).rejects.toThrow()
   })
   it('names what setup needs and where it is set', async () => {
     const needs = (place: string, code: string, values: Record<string, unknown>, github: unknown) =>
-      expect(resolveDeployment(machine(), github, probe, path)).rejects.toEqual(setupError(place, code, values))
+      expect(resolveGithubSource(machine(), place, github, probe, path)).rejects.toEqual(setupError(place, code, values))
     const repository = 'acme/widgets'
-    await needs('github', 'repositoryUnset', {}, { cli: 'gh' })
-    await needs('github', 'agentCliUnset', {}, { repository })
-    await needs('github', 'agentCliMissing', { output: `${join(dir, 'missing')} is not an executable file` }, { repository, cli: join(dir, 'missing') })
-    await needs('github', 'agentCliMissing', { output: 'bin/gh must be a command name or an absolute path' }, { repository, cli: 'bin/gh' })
-    await needs('github', 'agentCliSignedOut', {}, { repository, cli: program('gh-broken', 'return 1') })
-    await needs('github', 'repositoryReadOnly', { account: 'Agent-Bot', repository: 'acme/widgets' }, { repository, cli: gh('gh-reader', 'Agent-Bot', false) })
+    await needs('github-main', 'repositoryUnset', {}, { cli: 'gh' })
+    await needs('github-main', 'agentCliUnset', {}, { repository })
+    await needs('github-main', 'agentCliMissing', { output: `${join(dir, 'missing')} is not an executable file` }, { repository, cli: join(dir, 'missing') })
+    await needs('github-main', 'agentCliMissing', { output: 'bin/gh must be a command name or an absolute path' }, { repository, cli: 'bin/gh' })
+    await needs('github-main', 'agentCliSignedOut', {}, { repository, cli: program('gh-broken', 'return 1') })
+    await needs('github-main', 'repositoryReadOnly', { account: 'Agent-Bot', repository: 'acme/widgets' }, { repository, cli: gh('gh-reader', 'Agent-Bot', false) })
     // 已登录，但该账号无法读取仓库，或 CLI 未指明任何账号。
     const unreadable = program('gh-outsider', `const args = argv.join(' ')
 if (args === 'api user') { console.log('{"login":"Agent-Bot","id":7}'); return 0 }
 console.error('HTTP 404')
 return 1`)
     const output = expect.stringContaining('HTTP 404') as unknown
-    await needs('github', 'repositoryUnreadable', { account: 'Agent-Bot', repository: 'acme/widgets', output }, { repository, cli: unreadable })
-    await needs('github', 'agentCliNoAccount', {}, { repository, cli: program('gh-anonymous', `console.log('{}')`) })
+    await needs('github-main', 'repositoryUnreadable', { account: 'Agent-Bot', repository: 'acme/widgets', output }, { repository, cli: unreadable })
+    await needs('github-main', 'agentCliNoAccount', {}, { repository, cli: program('gh-anonymous', `console.log('{}')`) })
     expect(() => executable('nothing-here', join(dir, 'bin'))).toThrow('nothing-here is not an executable file on PATH')
   })
-  it('reads the Feishu bot from a bot-only lark-cli, or finds none when the Feishu Source names no CLI', async () => {
-    expect(await resolveFeishuBot(machine(), {}, probe, path)).toBeUndefined()
-    expect(await resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).toEqual({ cli: larkCli, appId: 'cli_bot', brand: 'lark', botId: 'ou_bot', name: 'Widgets Bot' })
-    const refuses = async (code: string, values: Record<string, unknown> = {}) => expect(resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).rejects.toEqual(setupError('feishu', code, values))
+  it('reads a Feishu record\'s bot from its bot-only lark-cli, and reports a record that names no CLI', async () => {
+    await expect(resolveFeishuSource(machine(), 'feishu-main', {}, probe, path)).rejects.toEqual(setupError('feishu-main', 'feishuCliUnset', {}))
+    expect(await resolveFeishuSource(machine(), 'feishu-main', { cli: 'lark-cli' }, probe, path)).toEqual({ id: 'feishu-main', kind: 'feishu', instanceUrl: '', cli: larkCli, appId: 'cli_bot', brand: 'lark', botId: 'ou_bot', name: 'Widgets Bot' })
+    const refuses = async (code: string, values: Record<string, unknown> = {}) => expect(resolveFeishuSource(machine(), 'feishu-main', { cli: 'lark-cli' }, probe, path)).rejects.toEqual(setupError('feishu-main', code, values))
     lark({ identities: { bot: { status: 'ready' } } })
     await refuses('feishuNoApp')
     lark({ appId: 'cli_bot', identities: { bot: { status: 'missing' } } })
@@ -129,7 +141,7 @@ if (args === 'api GET /open-apis/bot/v3/info --as bot --format ndjson') {
   return 0
 }
 return 1`)
-    expect(await resolveFeishuBot(machine(), { cli: 'lark-cli' }, probe, path)).toEqual({ cli: larkCli, appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' })
+    expect(await resolveFeishuSource(machine(), 'feishu-main', { cli: 'lark-cli' }, probe, path)).toEqual({ id: 'feishu-main', kind: 'feishu', instanceUrl: '', cli: larkCli, appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot', name: 'Widgets Bot' })
   })
 })
 
@@ -144,17 +156,17 @@ describe('gitlab setup', () => {
 if (args === 'api user') { console.log(${JSON.stringify(userJson)}); return 0 }
 if (args === 'api projects/group%2Fsub%2Fwidgets') { console.log(${JSON.stringify(projectJson)}); return 0 }
 return 1`)
-  it('reads the GitLab project and its Developer access from glab, or finds none without a project', async () => {
-    expect(await resolveGitlab(machine(), {}, probe, path)).toBeUndefined()
+  it('reads the GitLab project and its Developer access from glab, and reports a record without a project', async () => {
+    await expect(resolveGitlabSource(machine(), 'gitlab-main', {}, probe, path)).rejects.toEqual(setupError('gitlab-main', 'gitlabProjectUnset', {}))
     const cli = glab('glab')
-    expect(await resolveGitlab(machine(), { project, cli: 'glab' }, probe, path)).toEqual({ cli, project, projectId: 42, login: 'Agent-Bot', id: 7 })
+    expect(await resolveGitlabSource(machine(), 'gitlab-main', { project, cli: 'glab' }, probe, path)).toEqual({ id: 'gitlab-main', kind: 'gitlab', instanceUrl: '', cli, project, projectId: 42, login: 'Agent-Bot', userId: 7 })
     // 群组访问权限与项目访问权限等价，且使用重命名后的规范路径。
-    expect(await resolveGitlab(machine(), { project, cli: glab('glab-group', user, payload(null, 30, 'group/renamed')) }, probe, path))
+    expect(await resolveGitlabSource(machine(), 'gitlab-main', { project, cli: glab('glab-group', user, payload(null, 30, 'group/renamed')) }, probe, path))
       .toMatchObject({ project: 'group/renamed' })
   })
   it('names what GitLab setup needs and where it is set', async () => {
     const needs = (code: string, values: Record<string, unknown>, cli: string, userJson?: string, projectJson?: string) =>
-      expect(resolveGitlab(machine(), { project, cli }, probe, path)).rejects.toEqual(setupError('gitlab', code, values))
+      expect(resolveGitlabSource(machine(), 'gitlab-main', { project, cli }, probe, path)).rejects.toEqual(setupError('gitlab-main', code, values))
     await needs('gitlabCliUnset', {}, '')
     await needs('gitlabCliMissing', { output: `${join(dir, 'missing')} is not an executable file` }, join(dir, 'missing'))
     await needs('gitlabCliSignedOut', {}, program('glab-broken', 'return 1'))

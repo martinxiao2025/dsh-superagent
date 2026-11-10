@@ -51,7 +51,8 @@ describe('Source registry', () => {
         return { messages: [{ id: 'm1', from: 'u', at: '1', text: '' }],
           body: { page: cursor ?? 'first' } }
       } } })
-    const commands = {} as Commands
+    // 注册表按消息渠道把命令绑定到记录；这个替身忽略绑定，只验证渠道收到消息。
+    const commands = { scope: () => commands } as unknown as Commands
     const message = (source: string): OutboundMessage => ({ id: 'r1', channel: { source, thread: 'probe:1', address: { room: 'r' } },
       text: 'hi', kind: 'reply' })
     expect(await sources.send(message('probe'), commands)).toBe('sent')
@@ -83,7 +84,7 @@ describe('Source registry', () => {
     const unregister = sources.register(githubKind)
     expect(board.all.github).toEqual({ state: 'starting', detail: '' })
     const context = (kind: { kind: string; health: readonly string[] }, id: string) =>
-      sourceContextOf({ sources } as unknown as SourceContextDeps, kind, id)
+      sourceContextOf({ sources, commands: { scope: () => ({}) } } as unknown as SourceContextDeps, kind, id)
     const first = context(githubKind, 'github')
     first.report('github', { state: 'ready', detail: 'ok' })
     expect(board.all.github).toEqual({ state: 'ready', detail: 'ok' })
@@ -106,7 +107,7 @@ describe('Source registry', () => {
     sources.register(githubKind)
     expect(board.all['github-a']).toEqual({ state: 'starting', detail: '' })
     expect(board.all['github-b']).toEqual({ state: 'starting', detail: '' })
-    sourceContextOf({ sources } as unknown as SourceContextDeps, githubKind, 'github-a').report('github', { state: 'ready', detail: 'A' })
+    sourceContextOf({ sources, commands: { scope: () => ({}) } } as unknown as SourceContextDeps, githubKind, 'github-a').report('github', { state: 'ready', detail: 'A' })
     expect(board.all['github-a']).toEqual({ state: 'ready', detail: 'A' })
     expect(board.all['github-b']).toEqual({ state: 'starting', detail: '' })
   })
@@ -175,7 +176,7 @@ describe('Source registry', () => {
     const channel = trigger.channel!
     expect(channel.address).toEqual({ chatId: 'oc_dm', messageId: 'om_dm', direct: 'true' })
     expect(sources.channelAllowed(channel)).toBe(true)
-    const commands = new Commands(() => testDeployment(), {}, new AbortController().signal)
+    const commands = new Commands(() => testDeployment(), {}, new AbortController().signal).scope('feishu')
     const run = vi.spyOn(commands, 'run').mockResolvedValue('{"ok":true,"data":{}}')
     const reply: OutboundMessage = { id: 'reply-1', channel, text: 'Done', kind: 'reply' }
     expect(await sources.send(reply, commands)).toBe('sent')

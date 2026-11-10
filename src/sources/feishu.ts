@@ -1,6 +1,6 @@
 /** 飞书来源种类定义、策略同步与消息循环。 */
 import { z } from 'zod'
-import { FeishuBotSchema } from '../deployment.ts'
+import { FeishuSourceSchema } from '../deployment.ts'
 import { feishuLink, sendFeishu } from './feishu-channel.ts'
 import { feishuThreadContext } from './feishu-read.ts'
 import { refreshChatNames, runFeishu } from './feishu-loops.ts'
@@ -17,7 +17,7 @@ const MembersSchema = z.looseObject({
   users: z.array(z.looseObject({ member_id: z.string(), name: z.string() })),
   has_more: z.boolean(), truncations: z.array(z.unknown()).optional(),
 })
-const FeishuConfigSchema = FeishuBotSchema.extend({
+const FeishuConfigSchema = FeishuSourceSchema.extend({
   readPageSize: z.number().int().min(1).max(50).default(20),
   linkTimeoutMs: z.number().int().min(1).max(90000).default(5000),
   chats: z.array(z.object({ chatId: z.string().regex(/^oc_[a-zA-Z0-9]+$/), name: z.string().trim().max(60).optional(), listen: z.enum(['mentions', 'all']) }).strict())
@@ -34,6 +34,8 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   description: { zh: '接收下列群和私聊中发给机器人的消息，补收群历史并轮询订阅的线程。', en: 'Receives messages to the bot in these chats and direct messages, recovers chat history and polls subscribed Threads.' },
   schema: FeishuConfigSchema,
   fields: [
+    { key: 'instanceUrl', type: 'text', label: { zh: '实例地址', en: 'Instance URL' },
+      hint: { zh: '留空使用飞书开放平台；Lark 国际版可填站点根地址，例如 https://open.larksuite.com。', en: 'Leave empty for the Feishu Open Platform; for Lark international, enter the site root such as https://open.larksuite.com.' } },
     { key: 'cli', type: 'text', label: { zh: '机器人的 lark-cli', en: 'Bot lark-cli' },
       hint: { zh: '命令名或绝对路径，指向只允许机器人身份（strict mode bot）的 lark-cli 配置；执行器以 lark-cli 调用它。保存时读取应用和机器人，然后重启 dsh-superagent。', en: 'A command name or absolute path of a lark-cli configuration that allows only the bot identity (strict mode bot); the Executor calls it as lark-cli. Saving reads the app and the bot, then restarts dsh-superagent.' } },
     { key: 'chats', type: 'rows', label: { zh: '接收的群', en: 'Chats' },
@@ -119,9 +121,9 @@ export const feishuKind: SourceKind<FeishuConfig> = {
       { key: 'DSH_SUPERAGENT_FEISHU_BOT', description: { zh: '飞书机器人；lark-cli 以它行事', en: 'The Feishu bot; lark-cli acts as it' } },
       { key: 'DSH_SUPERAGENT_FEISHU_CHAT', description: { zh: '接下工单的飞书群 chat_id；工单不是从飞书来的时为空', en: 'chat_id of the Feishu chat that started the ticket; empty when the ticket did not start on Feishu' } },
     ],
-    values: ({ deployment, trigger }) => ({ DSH_SUPERAGENT_FEISHU_BOT: deployment.feishu ? deployment.feishu.name || deployment.feishu.botId : '', DSH_SUPERAGENT_FEISHU_CHAT: trigger?.source === SOURCE ? String(trigger.meta.chatId ?? '') : '' }),
+    values: ({ source, trigger }) => ({ DSH_SUPERAGENT_FEISHU_BOT: source?.kind === 'feishu' ? source.name || source.botId : '', DSH_SUPERAGENT_FEISHU_CHAT: trigger?.source === SOURCE ? String(trigger.meta.chatId ?? '') : '' }),
   },
-  facts: (deployment): Record<string, Localized | string> => deployment?.feishu ? { cli: { zh: `当前机器人 ${deployment.feishu.name || deployment.feishu.botId}`, en: `Current bot ${deployment.feishu.name || deployment.feishu.botId}` } } : {},
+  facts: (source): Record<string, Localized | string> => source?.kind === 'feishu' ? { cli: { zh: `当前机器人 ${source.name || source.botId}`, en: `Current bot ${source.name || source.botId}` } } : {},
 }
 /** 返回某条飞书记录的设置；记录不存在或禁用时回退到 schema 默认值。 */
 export const feishuSettings = (sources: SourceRegistry, id: string = SOURCE): FeishuConfig =>

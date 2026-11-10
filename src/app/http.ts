@@ -12,7 +12,7 @@ import { policyVersion } from '../policy.ts'
 import { SettingsConflict, type Settings } from './settings.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
-import type { Deployment, Machine } from '../deployment.ts'
+import { firstSource, type Deployment, type Machine } from '../deployment.ts'
 import type { DshExecutor } from '../executor/dsh.ts'
 import type { Health } from '../sources/host.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -46,6 +46,10 @@ export interface HttpHost {
   /** 已解析的部署；在等待初始化期间读取（`!configured()`）会抛出异常。 */
   readonly deployment: Deployment
   readonly setupProblem?: SetupProblem | undefined
+  /** 按来源记录 ID 索引的部署校验问题。 */
+  readonly sourceProblems?: Readonly<Record<string, SetupProblem>> | undefined
+  /** 按记录 ID 排序的第一条记录问题；概览据此说明某个来源为何没有启动。 */
+  readonly sourceProblem?: SetupProblem | undefined
   readonly feishuProblem?: SetupProblem | undefined
   readonly gitlabProblem?: SetupProblem | undefined
   configured(): boolean
@@ -97,11 +101,15 @@ function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admis
 }
 function setupView(runtime: HttpHost) {
   const resolved = runtime.configured() ? runtime.deployment : undefined
+  // 账号摘要展示每种类型的第一条记录；面板的来源列表逐记录给出完整状态。
+  const github = firstSource(resolved, 'github')
+  const feishu = firstSource(resolved, 'feishu')
+  const gitlab = firstSource(resolved, 'gitlab')
   return {
     machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, feishuProblem: runtime.feishuProblem ?? null,
     gitlabProblem: runtime.gitlabProblem ?? null,
-    accounts: resolved ? { repository: resolved.repository, agent: resolved.github.login, feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null,
-      gitlab: resolved.gitlab ? { project: resolved.gitlab.project, login: resolved.gitlab.login } : null } : null,
+    accounts: resolved ? { repository: github?.repository ?? '', agent: github?.login ?? '', feishu: feishu ? { appId: feishu.appId, brand: feishu.brand, botId: feishu.botId, name: feishu.name } : null,
+      gitlab: gitlab ? { project: gitlab.project, login: gitlab.login } : null } : null,
   }
 }
 /** 构建管理面板和 `scripts/dsh-superagent status` 使用的 `/orchestrator/api/state` 响应（`docs/006-deployment.md`）。 */
@@ -113,7 +121,7 @@ export function stateView(runtime: HttpHost) {
 }
 const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources: runtime.sources, links: runtime.links() })
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
-  problem: runtime.setupProblem, feishuProblem: runtime.feishuProblem, gitlabProblem: runtime.gitlabProblem })
+  problem: runtime.setupProblem, sourceProblems: runtime.sourceProblems })
 export type StateView = ReturnType<typeof stateView>
 /** 构建工单详情视图；在等待初始化期间 `environment` 为空，因为它需要已解析的部署。 */
 function ticketPage(runtime: HttpHost, id: string) {
@@ -158,7 +166,7 @@ function routes(runtime: HttpHost): Routes {
   return {
     'GET state': () => stateView(runtime),
     'GET overview': () => overview(views(runtime), runtime.health, policyVersion(store.settings()),
-      executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.feishuProblem ?? runtime.gitlabProblem),
+      executorLoad(store, runtime.executor.activeCount()), runtime.setupProblem ?? runtime.sourceProblem),
     'GET search': ({ query }) => search(views(runtime), query.q ?? '', runtime.sourceLinks),
     'GET sources': () => sourcesStatus(views(runtime), runtime.health, setupState(runtime)),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),

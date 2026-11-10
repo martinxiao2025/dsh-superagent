@@ -13,7 +13,7 @@ import type { SubprocessRuntime, SubprocessSpawnSpec } from '@deepseek-ai/dsh-su
 import { Config, executable, workerProbe } from '../src/deployment.ts'
 import { ExecutorConfigSchema } from '../src/policy.ts'
 import { shellArgv, workerBin, workerGitConfig, writeEnvironment } from '../src/infra/environment.ts'
-import { testDeployment } from './fixtures/deployment.ts'
+import { testDeployment, testGithub } from './fixtures/deployment.ts'
 
 const exec = promisify(execFile)
 const windows = process.platform === 'win32'
@@ -48,7 +48,7 @@ describe.skipIf(!windows)('Windows compatibility', () => {
   it('writes worker shims batch files that cmd.exe runs and that drop their own directory from PATH', async () => {
     const cli = join(dir, 'gh-agent.cmd')
     writeFileSync(cli, '@echo off\r\necho agent-bot\r\necho %PATH%\r\n')
-    await writeEnvironment(testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli }, feishu: undefined }), ['personal-gh'])
+    await writeEnvironment(testDeployment({ stateDir: dir, github: testGithub({ cli }), feishu: undefined }), ['personal-gh'])
     const bin = workerBin(dir)
     expect(readdirSync(bin).sort()).toEqual(['gh.cmd', 'lark-cli.cmd', 'personal-gh.cmd'])
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('[credential "https://github.com"]')

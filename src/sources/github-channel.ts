@@ -17,7 +17,8 @@ const missing = (error: unknown): boolean => error instanceof CliError && (error
 /** 发布评论或评审线程回复，并嵌入 HTML 标记，使重试不会产生重复评论。 */
 export async function sendGithub(host: Pick<SourceContext, 'commands'>, message: OutboundMessage): Promise<'sent' | 'gone'> {
   const { commands } = host
-  const { repository, github } = commands.deployment
+  const github = commands.github
+  const { repository } = github
   const number = Number(message.channel.address.number)
   if (!number) throw new Error('Missing GitHub reply target')
   try {

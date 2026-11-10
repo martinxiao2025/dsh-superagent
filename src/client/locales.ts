@@ -142,6 +142,7 @@ const TEXT = {
   'problemSetupFix.github': ['在设置 › 来源的 GitHub 卡片修正后保存，会重新检查；在 dsh-superagent 之外修复的（例如登录 CLI），点“重新检查”。', 'Fix it on the GitHub card of the Source settings and save to check again; after a fix outside dsh-superagent, such as signing a CLI in, choose Check again.'],
   'problemSetupFix.feishu': ['在设置 › 来源的飞书卡片修正后保存，会重新检查；在 dsh-superagent 之外修复的（例如配置机器人），点“重新检查”。', 'Fix it on the Feishu card of the Source settings and save to check again; after a fix outside dsh-superagent, such as configuring the bot, choose Check again.'],
   'problemSetupFix.gitlab': ['在设置 › 来源的 GitLab 卡片修正后保存，会重新检查；在 dsh-superagent 之外修复的（例如登录 glab），点“重新检查”。', 'Fix it on the GitLab card of the Source settings and save to check again; after a fix outside dsh-superagent, such as signing glab in, choose Check again.'],
+  'problemSetupFix.source': ['在设置 › 来源的对应记录卡片修正后保存，会重新检查；在 dsh-superagent 之外修复的（例如登录 CLI），点“重新检查”。', 'Fix the record on the Source settings card and save to check again; after a fix outside dsh-superagent, such as signing a CLI in, choose Check again.'],
   'problemSetupFix.deployment': ['在部署设置里修正后保存，会重新检查；在 dsh-superagent 之外修复的（例如升级 git），点“重新检查”。', 'Fix it in the Deployment settings and save to check again; after a fix outside dsh-superagent, such as upgrading git, choose Check again.'],
   problemSetupFeishu: ['飞书机器人检查未通过，飞书来源暂停', 'Feishu bot check failed; the Feishu Source is paused'],
   // 来源
@@ -738,6 +739,8 @@ const TEXT = {
   'setup.repositoryUnreadable': ['@{account} 读不到 {repository}。', SETUP_PROBLEMS.repositoryUnreadable[1]],
   'setup.repositoryUnreported': ['智能体的 GitHub CLI 没有返回 {repository}。', SETUP_PROBLEMS.repositoryUnreported[1]],
   'setup.repositoryReadOnly': ['@{account} 没有 {repository} 的推送权限。', SETUP_PROBLEMS.repositoryReadOnly[1]],
+  'setup.feishuCliUnset': ['这条飞书来源记录没有填写机器人的 lark-cli。', 'The Feishu Source record names no bot lark-cli.'],
+  'setup.gitlabProjectUnset': ['这条 GitLab 来源记录没有填写项目。', 'The GitLab Source record names no project.'],
   'setup.feishuCliFailed': ['机器人的 lark-cli 不可用。', SETUP_PROBLEMS.feishuCliFailed[1]],
   'setup.feishuNoApp': ['机器人的 lark-cli 的 auth status 没有报告应用。', SETUP_PROBLEMS.feishuNoApp[1]],
   'setup.feishuBotNotReady': ['应用 {app} 的机器人身份状态是 {status}；用 lark-cli 配置应用密钥。', SETUP_PROBLEMS.feishuBotNotReady[1]],

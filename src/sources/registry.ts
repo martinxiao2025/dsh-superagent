@@ -133,7 +133,7 @@ export class SourceRegistry implements SourceScope {
     if (!record) return 'gone'
     const kind = this.kinds.get(record.kind)
     if (!kind) return 'waiting'
-    return kind.channel ? kind.channel.send({ commands }, message) : 'gone'
+    return kind.channel ? kind.channel.send({ commands: commands.scope(message.channel.source) }, message) : 'gone'
   }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
     const kind = this.kindOf(channel.source)
@@ -154,11 +154,11 @@ export class SourceRegistry implements SourceScope {
     const { config } = this.resolve(trigger.source, kind, record)
     return {
       messageId: context.messageId(trigger),
-      read: (commands, part, cursor) => context.read(commands, trigger, part, cursor, config),
+      read: (commands, part, cursor) => context.read(commands.scope(trigger.source), trigger, part, cursor, config),
       images: text => context.images?.(text) ?? [],
       image: async (agent, commands, message, key, stateDir, signal) => {
         if (!context.image) throw new Error(`The ${kind.kind} Source has no images`)
-        return context.image(agent, commands, trigger, message, key, stateDir, signal)
+        return context.image(agent, commands.scope(trigger.source), trigger, message, key, stateDir, signal)
       },
     }
   }

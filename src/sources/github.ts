@@ -1,7 +1,7 @@
 /** GitHub 来源种类定义与通知、仓库轮询循环。 */
 import { key, type Thread } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
-import { GithubAccountsSchema } from '../deployment.ts'
+import { GithubSourceSchema, isGithubSource, type ResolvedGithubSource } from '../deployment.ts'
 import { CliError, validItems, type Tally } from '../infra/commands.ts'
 import { ciCounts, ciFact, ciFailures, ciSummary, githubThreadContext, pullChecks } from './github-read.ts'
 import { branchCiTrigger, ciTrigger, commentTrigger, CommentSchema, githubAddress, issueTrigger, IssueSchema, pullTrigger, SOURCE }
@@ -16,6 +16,11 @@ import type { Localized, SourceAdapter, SourceKind } from './kind.ts'
 import { forgePolicy, forgeScope } from './forge.ts'
 import { z } from 'zod'
 export { pollFailure } from './poll.ts'
+/** 这条上下文的 GitHub 来源；记录尚未通过部署检查时抛出，提醒调用方先检查 `configured()`。 */
+const account = (ctx: SourceContext): ResolvedGithubSource => {
+  if (!isGithubSource(ctx.source)) throw new Error('The GitHub Source has no working CLI')
+  return ctx.source
+}
 
 export { commentTrigger, type GithubComment } from './github-trigger.ts'
 /** 智能体账号的通知；`subject.url` 是其 Issue 或 PR 的 API 地址。 */
@@ -23,7 +28,7 @@ const NotificationSchema = z.looseObject({
   repository: z.looseObject({ full_name: z.string() }), subject: z.looseObject({ url: z.string().nullish() }),
 })
 
-const GithubConfigSchema = GithubAccountsSchema.extend({ pollSeconds: z.number().int().min(60).max(3600).default(60),
+const GithubConfigSchema = GithubSourceSchema.extend({ pollSeconds: z.number().int().min(60).max(3600).default(60),
   failuresBeforeError: z.number().int().min(1).max(20).default(3),
   observeIssues: z.boolean().default(false), observePulls: z.boolean().default(false), observeComments: z.boolean().default(false),
   observeCi: z.boolean().default(false) }).strict()
@@ -35,6 +40,8 @@ export const githubKind: SourceKind<GithubConfig> = {
   description: { zh: '智能体的 GitHub 账号；接收仓库里发给它的通知、已订阅 Issue 与 PR 的讨论、CI 状态变化和 PR 合并关闭。', en: 'The agent\'s GitHub accounts; receives notifications to it in the repository, discussion on subscribed Issues and PRs, CI changes, and PR merge or close.' },
   schema: GithubConfigSchema,
   fields: [
+    { key: 'instanceUrl', type: 'text', label: { zh: '实例地址', en: 'Instance URL' },
+      hint: { zh: '留空使用 github.com；自建 GitHub Enterprise 填站点根地址，例如 https://github.example.com。', en: 'Leave empty for github.com; for a self-hosted GitHub Enterprise, enter the site root such as https://github.example.com.' } },
     { key: 'repository', type: 'text', pattern: '[A-Za-z0-9_.\\-]+/[A-Za-z0-9_.\\-]+', label: { zh: '监听的仓库', en: 'Repository' },
       hint: { zh: '写作 owner/name。这个来源接收这个仓库的通知和讨论；保存时检查智能体账号能否推送到它，然后重启 dsh-superagent。', en: 'Written owner/name. This Source receives the repository\'s notifications and discussion; saving checks that the agent account can push to it, then restarts dsh-superagent.' } },
     { key: 'cli', type: 'text', label: { zh: '智能体的 GitHub CLI', en: 'Agent GitHub CLI' },
@@ -86,14 +93,15 @@ export const githubKind: SourceKind<GithubConfig> = {
       { key: 'DSH_SUPERAGENT_GITHUB_NUMBER', description: { zh: '接下工单的 Issue 或 PR 编号；工单不是从 GitHub 来的时为空', en: 'Number of the Issue or PR that started the ticket; empty when the ticket did not start on GitHub' } },
       { key: 'DSH_SUPERAGENT_GITHUB_PR_HEAD', description: { zh: '接下工单的 PR 的 head 引用 refs/pull/<编号>/head；不是 PR 时为空', en: 'Head ref refs/pull/<number>/head of the PR that started the ticket; empty when it was not a PR' } },
     ],
-    values: ({ deployment, trigger }) => {
+    values: ({ source, trigger }) => {
       const number = trigger?.threads[0]?.source === SOURCE ? Number(trigger.meta.number) || 0 : 0
-      return { DSH_SUPERAGENT_GITHUB_REPOSITORY: deployment.repository, DSH_SUPERAGENT_GITHUB_ACCOUNT: deployment.github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: deployment.github.noreply, DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
+      return { DSH_SUPERAGENT_GITHUB_REPOSITORY: source?.kind === 'github' ? source.repository : '', DSH_SUPERAGENT_GITHUB_ACCOUNT: source?.kind === 'github' ? source.login : '',
+        DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: source?.kind === 'github' ? source.noreply : '', DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
         DSH_SUPERAGENT_GITHUB_PR_HEAD: number && trigger?.meta.isPr === true ? `refs/pull/${number}/head` : '' }
     },
   },
-  facts: (deployment): Record<string, Localized | string> => deployment ? {
-    cli: { zh: `当前账号 @${deployment.github.login}`, en: `Current account @${deployment.github.login}` },
+  facts: (source): Record<string, Localized | string> => source?.kind === 'github' ? {
+    cli: { zh: `当前账号 @${source.login}`, en: `Current account @${source.login}` },
   } : {},
 }
 export const githubAdapter: SourceAdapter<GithubConfig> = {
@@ -199,7 +207,7 @@ async function readStream(ctx: SourceContext, round: Round, id: string, path: st
   }
   const { headers, body } = included(raw)
   const items = validItems(ListedSchema, z.array(z.unknown()).parse(JSON.parse(body)), round.tally)
-  const { login } = ctx.deployment.github
+  const { login } = account(ctx)
   const fresh = (at: string | null | undefined, kind: string) =>
     kind in started && Date.parse(at ?? '') >= Math.max(Date.parse(started[kind]!), horizon)
   for (const item of items) {
@@ -245,7 +253,7 @@ async function pollBranchCi(ctx: SourceContext, round: Round): Promise<void> {
   if (known && JSON.stringify(now) !== JSON.stringify(known)) {
     revision += 1
     const summary = ciSummary(snapshot, branch, `github/commits/${head.sha}/checks`)
-    const url = `https://github.com/${ctx.deployment.repository}/commit/${head.sha}`
+    const url = `https://github.com/${account(ctx).repository}/commit/${head.sha}`
     await ctx.receive(branchCiTrigger(branch, head.sha, revision, summary, url))
     ctx.threads.describe(`github:ci:${branch}`, { label: `CI on ${branch}`, facts: { ci: ciFact(counts) } })
   }
@@ -281,7 +289,7 @@ async function pollNotifications(ctx: SourceContext, round: Round): Promise<{ co
   const commands = ctx.commands.withSignal(round.signal)
   const since = state.get(KV.github.since) ?? round.started
   if (state.get(KV.github.since) === undefined) state.set(KV.github.since, since)
-  const { repository } = ctx.deployment
+  const { repository } = account(ctx)
   const path = `notifications?all=true&per_page=50&since=${encodeURIComponent(since)}`
   const raw = await commands.api(path, '--include')
   const split = raw.search(/\r?\n\r?\n/)
@@ -332,7 +340,7 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
     if (!isPr) {
       // 游标以来由他人而非智能体打开的 Issue 会带上正文，使正文中的 @ 能进入准入判断。
       // 之后通过编辑正文添加的 @ 不会被读取：只有作者才能作为正文的行为者。
-      const { login } = ctx.deployment.github
+      const { login } = account(ctx)
       const opened = Date.parse(issue.created_at) >= Date.parse(since) && !sameName(issue.user.login, login)
       if (opened) await ctx.receive(issueTrigger(issue, login))
       await intakeComments(ctx, { number, isPr: false, url: issue.html_url }, since, round)
@@ -342,7 +350,7 @@ async function readNotified(ctx: SourceContext, round: Round, number: number, it
   if (isPr) {
     const pr = await pull(ctx, round, number)
     // 为游标以来打开的 PR 发出 PR 描述触发器；其 ID 与仓库 PR 流产生的一致。
-    const { login } = ctx.deployment.github
+    const { login } = account(ctx)
     if (pr.created_at && Date.parse(pr.created_at) >= Date.parse(since) && !sameName(pr.user.login, login)) {
       const opened = { number, title: pr.title ?? '', body: pr.body, user: pr.user, created_at: pr.created_at, html_url: pr.html_url }
       await ctx.receive(pullTrigger(opened, login))
@@ -364,7 +372,7 @@ function pull(ctx: SourceContext, round: Round, number: number): Promise<Pull> {
 }
 async function intakeComments(ctx: SourceContext, ref: PullRef, since: string, round: Round): Promise<void> {
   const commands = ctx.commands.withSignal(round.signal)
-  const { login } = ctx.deployment.github
+  const { login } = account(ctx)
   const kinds = ref.isPr ? ['conversation', 'inline', 'review'] as const : ['conversation'] as const
   for (const kind of kinds) {
     const suffix = `&since=${encodeURIComponent(since)}`

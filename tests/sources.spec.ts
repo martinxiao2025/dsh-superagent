@@ -14,11 +14,10 @@ import { cursorAt, POLL_HORIZON_MS } from '../src/sources/poll.ts'
 import { Store } from '../src/app/store.ts'
 import { Commands, commandError } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
-import { testDeployment } from './fixtures/deployment.ts'
+import { testDeployment, testFeishu } from './fixtures/deployment.ts'
 import { programSource } from './fixtures/program.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
-import type { SourceContext } from '../src/sources/host.ts'
 import { SetupError, type SetupProblem } from '../src/setup.ts'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -44,19 +43,12 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   // 来源的函数接收上下文；插件条目与类型回调接收宿主，宿主会构建每个类型的上下文。
   const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }, id: string) => sourceContextOf(parts, kind, id) }
-  // 合并的上下文让各来源函数接收宿主；配置取两条记录的并集（任一记录关闭即视为未启用），
-  // `report` 按条目归属写入对应记录的健康项。
-  const context: SourceContext = { ...sourceContextOf(parts, feishuKind, 'feishu'),
-    config: () => {
-      const records = [parts.sources.instance('github'), parts.sources.instance('feishu')].filter(record => record !== undefined)
-      return records.length && records.every(record => record.enabled) ? Object.assign({}, ...records.map(record => record.config)) as never : undefined
-    },
-    report: (entry, value) => {
-      const target = entry === 'github' ? ['github', githubKind] as const : ['feishu', feishuKind] as const
-      parts.sources.healthEntries(target[0], target[1]).get(entry)?.set(value)
-    } }
+  // 测试直接调用各类型的来源函数，所以每种类型各给一个上下文：默认返回的是 GitHub 上下文，
+  // 飞书函数用 eishu 拿到同一份存储与宿主、来源记录为飞书的上下文。
+  const githubContext = sourceContextOf(parts, githubKind, 'github')
+  const feishuContext = sourceContextOf(parts, feishuKind, 'feishu')
   const health = overrides.sources ? healthOf.get(overrides.sources)!.all : board.all
-  return { ...value, ...context, health, store, engine, commands: parts.commands, receive, executor }
+  return { ...value, ...githubContext, feishu: { ...value, ...feishuContext }, health, store, engine, receive, executor }
 }
 const healthOf = new WeakMap<SourceRegistry, HealthBoard>()
 /** 一个尚未注册任何类型的注册表，带一条启用的记录以便观察该类型的循环。 */
@@ -119,7 +111,7 @@ describe('feishu source', () => {
     expect(unset.registered).toBe(feishuKind)
     expect(unset.health).toMatchObject({ feishu: { state: 'paused', code: 'feishuCliUnset' }, 'feishu:history': { state: 'paused', code: 'feishuBotMissing' } })
     const problem = new SetupError('feishuBotNotReady', { app: 'cli_bot', status: 'missing' }).problem
-    const refused = await run({ deployment: testDeployment({ feishu: undefined }), feishuProblem: problem })
+    const refused = await run({ deployment: testDeployment({ feishu: undefined }), sourceProblems: { feishu: problem } })
     // 失败的机器人检查会等待操作者的修复和一次检查；它不会像轮询错误那样自行重试。
     expect(refused.health.feishu).toEqual({ state: 'paused', detail: problem.detail })
     expect((await run({ configured: () => false })).health.feishu).toEqual({ state: 'paused', detail: 'Waiting for the deployment check', code: 'setupPending' })
@@ -144,19 +136,19 @@ describe('feishu source', () => {
     const reply = { message_id: 'om_reply', chat_id: 'oc_1', msg_type: 'text', content: 'more details', sender: { id: 'ou_guest', sender_type: 'user' }, create_time: '1757376000000', thread_id: 'omt_1', root_id: 'om_root', mentions: [] }
     const mine = { ...reply, message_id: 'om_mine', sender: { id: 'ou_bot', sender_type: 'app', open_bot_id: 'ou_bot' } }
     const earlier = { ...reply, message_id: 'om_old', create_time: '1700000000000' }
-    const lark = vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
+    const lark = vi.spyOn(h.feishu.commands, 'lark').mockImplementation(async args => {
       if (args[0] === 'api') return { items: [{ message_id: 'om_root', chat_id: 'oc_1', thread_id: 'omt_1' }] }
       if (args[1] === '+messages-mget') return { messages: [] }
       return { thread_id: 'omt_1', has_more: false, messages: [mine, reply, earlier] }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(h.receive).toHaveBeenCalledTimes(1)
     expect(h.receive.mock.calls[0]![0]).toMatchObject({ id: key('feishu', 'om_reply'), threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
       actor: { id: 'ou_guest' }, human: true, text: 'more details', meta: expect.objectContaining({ threadId: 'omt_1' }) })
     expect(h.store.get('thread-seen:feishu:oc_1:om_root')).toEqual(expect.arrayContaining(['om_reply', 'om_mine', 'om_old']))
     expect(h.store.threads.get('feishu:oc_1:om_root')?.meta).toMatchObject({ threadId: 'omt_1', url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1', facts: { chat: { value: 'oc_1' } } })
     lark.mockRejectedValue(new Error('rate limited'))
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(h.store.threads.get('feishu:oc_1:om_root')?.meta.pollError).toContain('rate limited')
     h.store.close()
   })
@@ -173,14 +165,14 @@ describe('feishu source', () => {
     const page = (message_id: string, sender: Record<string, string>, extra: Record<string, unknown> = {}) => ({ message_id,
       chat_id: 'oc_dm', msg_type: 'text', content: 'and the header', sender,
       create_time: '2026-09-11 12:00', thread_id: 'omt_dm', ...extra })
-    vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
+    vi.spyOn(h.feishu.commands, 'lark').mockImplementation(async args => {
       if (args[0] === 'api') return { items: [{ message_id: 'om_root', chat_id: 'oc_dm', thread_id: 'omt_dm' }] }
       if (args[1] === '+messages-mget') return { messages: [] }
       // 页面列出其回复而不含根消息，并按应用列出机器人自己的消息。
       const messages = [page('om_mine', { id: 'cli_bot', sender_type: 'app' }), page('om_reply', { id: MEMBER, sender_type: 'user' })]
       return { thread_id: 'omt_dm', has_more: false, messages }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     const live = feishuTrigger({ message_id: 'om_reply', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
       content: 'and the header',
       create_time: String(Date.parse('2026-09-11 12:00')), root_id: 'om_root', thread_id: 'omt_dm' }, 'ou_bot', 'cli_bot')
@@ -201,11 +193,11 @@ describe('feishu source', () => {
     subscribed(h, source.threads[0]!)
     h.store.threads.save({ ...h.store.threads.get('feishu:oc_1:om_root')!,
       lastAt: new Date(Date.now() - 15 * 24 * 3600_000).toISOString() })
-    const lark = vi.spyOn(h.commands, 'lark').mockResolvedValue({ items: [] })
-    await pollFeishuThreads(h)
+    const lark = vi.spyOn(h.feishu.commands, 'lark').mockResolvedValue({ items: [] })
+    await pollFeishuThreads(h.feishu)
     expect(lark).not.toHaveBeenCalled()
     h.store.tickets.save(openTicket('ticket'))
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(lark).toHaveBeenCalled()
     h.store.close()
   })
@@ -219,21 +211,21 @@ describe('feishu source', () => {
     h.store.tickets.save(openTicket('ticket'))
     const old = new Date(Date.now() - 30 * day).toISOString()
     h.store.set('feishu-history-threads:oc_team', { omt_followed: old, omt_quiet: old })
-    vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
-    vi.spyOn(h.commands, 'lark').mockResolvedValue({ has_more: false, items: [] })
+    vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
+    vi.spyOn(h.feishu.commands, 'lark').mockResolvedValue({ has_more: false, items: [] })
     const now = new Date().toISOString()
-    await backfillChat(h, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
+    await backfillChat(h.feishu, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
     expect(h.store.get('feishu-history-threads:oc_team')).toEqual({ omt_followed: old })
     h.store.close()
   })
   it('refuses a history page with a message outside its chat or topic, and a page token that does not advance', async () => {
     const h = host()
-    vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
+    vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
     const message = (fields: Record<string, unknown>) => ({ message_id: 'om_1', chat_id: 'oc_team', create_time: String(Date.now() - 1000),
       sender: { id: MEMBER, sender_type: 'user' }, body: { content: '{"text":"hi"}' }, ...fields })
-    const lark = vi.spyOn(h.commands, 'lark')
+    const lark = vi.spyOn(h.feishu.commands, 'lark')
     const now = new Date().toISOString()
-    const recover = () => backfillChat(h, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
+    const recover = () => backfillChat(h.feishu, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
     lark.mockResolvedValueOnce({ has_more: false, items: [message({ chat_id: 'oc_other' })] })
     await expect(recover()).rejects.toThrow('outside the requested chat or thread')
     // 话题页面包含另一个话题的消息。
@@ -259,13 +251,13 @@ describe('feishu source', () => {
     h.store.set('thread-initialized:feishu:oc_1:om_root', true)
     const reply = (id: string) => ({ message_id: id, chat_id: 'oc_1', msg_type: 'text', content: `reply ${id}`, create_time: String(Date.now()),
       sender: { id: 'ou_guest', sender_type: 'user' }, thread_id: 'omt_1', root_id: 'om_root' })
-    const lark = vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
+    const lark = vi.spyOn(h.feishu.commands, 'lark').mockImplementation(async args => {
       if (args[0] === 'api') return { items: [{ message_id: 'om_root', chat_id: 'oc_1', thread_id: 'omt_1' }] }
       if (args[1] === '+messages-mget') return { messages: [] }
       // 从新到旧：一条新回复，然后是线程已知的那条，以及一个未读取的较旧页面。
       return { thread_id: 'omt_1', has_more: true, page_token: 'older', messages: [reply('om_3'), reply('om_2')] }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.feishu)
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.messageId)).toEqual(['om_3'])
     expect(lark.mock.calls.filter(([args]) => args[1] === '+threads-messages-list')).toHaveLength(1)
     h.store.close()
@@ -277,8 +269,8 @@ describe('feishu source', () => {
     h.store.set('feishu-history-threads:oc_team', { omt_old: new Date(start).toISOString() })
     let round = 0
     const scans: string[] = []
-    vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
-    vi.spyOn(h.commands, 'lark').mockImplementation(async args => {
+    vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
+    vi.spyOn(h.feishu.commands, 'lark').mockImplementation(async args => {
       const params = JSON.parse(args[args.indexOf('--params') + 1]!) as { container_id_type: string; container_id: string }
       scans.push(params.container_id)
       // 每天的聊天扫描产生一个新线程；线程扫描不再返回消息。
@@ -289,7 +281,7 @@ describe('feishu source', () => {
     for (round = 0; round < 30; round++) {
       scans.length = 0
       const since = new Date(start + round * day - 60_000).toISOString()
-      await backfillChat(h, 'oc_team', false, since, new Date(start + round * day + 60_000).toISOString(), new AbortController().signal)
+      await backfillChat(h.feishu, 'oc_team', false, since, new Date(start + round * day + 60_000).toISOString(), new AbortController().signal)
       if (round === 0) expect(scans).toContain('omt_old')
     }
     // 聊天，以及最近 14 天内有消息的话题。
@@ -300,15 +292,15 @@ describe('feishu source', () => {
   })
   it('skips and counts a history message it cannot read, and takes in the others', async () => {
     const h = host()
-    vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
+    vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
     const item = (id: string) => ({ message_id: id, chat_id: 'oc_team', create_time: String(Date.now()), sender: { id: MEMBER,
       sender_type: 'user' },
       body: { content: '{"text":"@bot fix it"}' } })
-    vi.spyOn(h.commands, 'lark').mockResolvedValue({ has_more: false, items: [item('om_good'), { message_id: 'om_bad',
+    vi.spyOn(h.feishu.commands, 'lark').mockResolvedValue({ has_more: false, items: [item('om_good'), { message_id: 'om_bad',
       chat_id: 'oc_team' }] })
     const tally = { skipped: 0 }
     const since = new Date(Date.now() - 60_000).toISOString()
-    await backfillChat(h, 'oc_team', false, since, new Date().toISOString(), new AbortController().signal, tally)
+    await backfillChat(h.feishu, 'oc_team', false, since, new Date().toISOString(), new AbortController().signal, tally)
     expect(tally.skipped).toBe(1)
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.messageId)).toEqual(['om_good'])
     h.store.close()
@@ -322,17 +314,17 @@ describe('feishu source', () => {
   it('syncs its part of the Policy from the sync chat: people who left are removed, names follow the chat, new people are appended', async () => {
     const h = host()
     // 同步在其信号下读取聊天，因此停止同步会停止读取。
-    const withSignal = vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
-    const lark = vi.spyOn(h.commands, 'lark').mockResolvedValue({ users: [{ member_id: 'ou_carol', name: 'Carol' }, { member_id: MEMBER, name: 'Alice Li' }], has_more: false })
+    const withSignal = vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
+    const lark = vi.spyOn(h.feishu.commands, 'lark').mockResolvedValue({ users: [{ member_id: 'ou_carol', name: 'Carol' }, { member_id: MEMBER, name: 'Alice Li' }], has_more: false })
     const sync = feishuKind.policy!.sync!
     expect(sync.ready({ allowed: [] })).toBe(false)
     const signal = new AbortController().signal
-    expect(await sync.run(h, 'feishu', { allowed: [{ id: MEMBER, name: 'Alice' }, { id: 'ou_bob', name: 'Bob' }], syncChat: 'oc_team' }, signal))
+    expect(await sync.run(h.feishu, 'feishu', { allowed: [{ id: MEMBER, name: 'Alice' }, { id: 'ou_bob', name: 'Bob' }], syncChat: 'oc_team' }, signal))
       .toEqual({ allowed: [{ id: MEMBER, name: 'Alice Li' }, { id: 'ou_carol', name: 'Carol' }], syncChat: 'oc_team' })
     expect(withSignal).toHaveBeenCalledWith(signal)
     expect(lark.mock.calls[0]![0]).toEqual(expect.arrayContaining(['+chat-members-list', '--chat-id', 'oc_team']))
     lark.mockResolvedValue({ users: [], has_more: true })
-    await expect(sync.run(h, 'feishu', { allowed: [], syncChat: 'oc_team' }, new AbortController().signal)).rejects.toThrow('incomplete member list')
+    await expect(sync.run(h.feishu, 'feishu', { allowed: [], syncChat: 'oc_team' }, new AbortController().signal)).rejects.toThrow('incomplete member list')
     h.store.close()
   })
 })
@@ -430,7 +422,7 @@ describe('github source', () => {
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { by: 'executor', outcome: 'merged', at: '2026-09-02T00:00:00.000Z' } })
     expect(h.store.threads.get('github:9')?.subscriptions).toEqual(['t1'])
     // 其结束产生的通知会跟随来源请求的语言。
-    const notices = pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets')
+    const notices = pullEndNotices(h.store.tickets.get('t1')!, request.text, h.deployment.sources)
     expect(notices).toEqual([expect.objectContaining({ kind: 'notice', channel: expect.objectContaining({ source: 'feishu' }), text: expect.stringContaining('已合并') })])
     expect(h.executor.stop).toHaveBeenCalledOnce()
     // 合并后恢复，工单继续工作：之后查看已合并的 PR 不会再报告任何内容。
@@ -442,7 +434,7 @@ describe('github source', () => {
     expect(h.store.tickets.get('t1')).toMatchObject({ ended: { outcome: 'merged' } })
     expect(Date.parse(h.store.tickets.get('t1')!.ended!.at)).toBeGreaterThan(Date.parse('2026-09-03T00:00:00Z'))
     // 其通知拥有第一条的 id，因此只会发出一次。
-    expect(pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets').map(notice => notice.id)).toEqual(notices.map(notice => notice.id))
+    expect(pullEndNotices(h.store.tickets.get('t1')!, request.text, h.deployment.sources).map(notice => notice.id)).toEqual(notices.map(notice => notice.id))
     h.store.close()
   })
   it('keeps a ticket working on its other open PR when one of its PRs merges', async () => {
@@ -485,7 +477,7 @@ describe('github source', () => {
     h.store.triggers.save(request)
     h.store.tickets.save({ id: 't2', title: 'two', decisionId: 'd2', mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: 'feishu', id: MEMBER }, scope: '' }, channels: [{ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_2' } }], assignments: [], inputs: [], undelivered: [], createdAt: '', updatedAt: '', ...pulled(12), origin: { triggerId: request.id, triggerIds: [request.id] } })
     expect(await observePull(h, endedPull(12, '2026-09-02T00:00:00Z', false))).toBe(true)
-    expect(pullEndNotices(h.store.tickets.get('t2')!, request.text, 'acme/widgets'))
+    expect(pullEndNotices(h.store.tickets.get('t2')!, request.text, h.deployment.sources))
       .toEqual([expect.objectContaining({ text: '[PR #12](https://github.com/acme/widgets/pull/12) was closed without merging.' })])
     h.store.close()
   })
@@ -985,10 +977,10 @@ describe('github source', () => {
 })
 
 describe('source context', () => {
-  it('gives each kind the setup problem whose place it is', () => {
+  it('gives each kind its own record setup problem', () => {
     const feishu: SetupProblem = { place: 'feishu', code: 'feishuNoBot', values: {}, detail: 'No bot' }
     const github: SetupProblem = { place: 'github', code: 'agentCliUnset', values: {}, detail: 'No CLI' }
-    const h = host({ feishuProblem: feishu, setupProblem: github })
+    const h = host({ sourceProblems: { feishu, github } })
     expect(h.context(feishuKind, 'feishu').problem).toBe(feishu)
     expect(h.context(githubKind, 'github').problem).toBe(github)
     expect(h.context({ kind: 'probe', health: [] }, 'probe').problem).toBeUndefined()
@@ -1018,9 +1010,9 @@ describe('source context', () => {
   })
   it('reads the configuration of an instance that is on, removes a record set to undefined, and merges ticket meta', () => {
     const h = host()
-    expect(h.config()).toMatchObject({ directMessages: true })
+    expect(h.feishu.config()).toMatchObject({ directMessages: true })
     h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, feishu: { kind: 'feishu', enabled: false, config: {} } } })
-    expect(h.config()).toBeUndefined()
+    expect(h.feishu.config()).toBeUndefined()
     h.state.set('github-retry', { 1: {} })
     h.state.set('github-retry', undefined)
     expect(h.store.keys('github-retry')).toEqual([])
@@ -1037,7 +1029,7 @@ it('reports GitHub as failing only after the configured number of consecutive fa
   expect(pollFailure(1, 3, eof)).toBeUndefined()
   expect(pollFailure(2, 3, eof)).toBeUndefined()
   expect(pollFailure(3, 3, eof)).toEqual({ state: 'error', detail: '3 consecutive failed polls; last: Error: Get "https://api.github.com/x": EOF', code: 'pollFailures', values: { count: '3', error: 'Error: Get "https://api.github.com/x": EOF' } })
-  expect(githubKind.schema.parse({})).toEqual({ repository: '', cli: '', pollSeconds: 60, failuresBeforeError: 3, observeIssues: false,
+  expect(githubKind.schema.parse({})).toEqual({ instanceUrl: '', repository: '', cli: '', pollSeconds: 60, failuresBeforeError: 3, observeIssues: false,
     observePulls: false, observeComments: false, observeCi: false })
 })
 describe('feishu event consumer', () => {
@@ -1094,7 +1086,7 @@ ${body}`)
     const outbox = { send: () => {}, status: () => undefined, withdraw: () => {} }
     const policy = () => settingsPolicy(store.settings(), sources)
     const engine = new Engine({ repo: store, scope: sources, policy, assessor, executor, outbox })
-    const deployment = testDeployment({ feishu: { ...testDeployment().feishu!, cli: path } })
+    const deployment = testDeployment({ feishu: testFeishu({ cli: path }) })
     const health = board.all
     const commands = new Commands(() => deployment, {}, controller.signal)
     const deps: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment, ready: Promise.resolve(), configured: () => true,

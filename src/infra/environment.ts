@@ -7,7 +7,7 @@ import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node
 import { realpathSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import type { SubprocessOutputReader, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import type { Deployment } from '../deployment.ts'
+import { firstSource, hostOf, type Deployment } from '../deployment.ts'
 import { SetupError } from '../setup.ts'
 import { CliError } from './commands.ts'
 
@@ -124,8 +124,11 @@ function shimFailing(message: string): string {
  * 原子地把工作单元 CLI 垫片和隔离的 git 配置文件写入状态目录，拒绝覆盖外来文件。
  * 每个垫片在运行目标前先从 PATH 移除垫片目录，这样按名称解析 `gh` 或 `lark-cli` 的包装脚本会到达真实二进制。
  */
-export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' | 'repository' | 'github' | 'feishu'>, blockedCommands: readonly string[]): Promise<void> {
-  const { stateDir, repository, github, feishu } = deployment
+export async function writeEnvironment(deployment: Deployment, blockedCommands: readonly string[]): Promise<void> {
+  const { stateDir, sources } = deployment
+  const github = firstSource(deployment, 'github')
+  const feishu = firstSource(deployment, 'feishu')
+  const gitlab = firstSource(deployment, 'gitlab')
   const dir = workerBin(stateDir)
   await mkdir(dir, { recursive: true })
   const before = await readdir(dir)
@@ -139,19 +142,29 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
     await rename(temporary, join(dir, file))
     kept.add(file)
   }
-  await shim('gh', shimRunning(github.cli, dir))
-  await shim('lark-cli', feishu ? shimRunning(feishu.cli, dir) : shimFailing('lark-cli is unavailable: this installation has no Feishu bot.'))
+  await shim('gh', github ? shimRunning(github.cli, dir) : shimFailing('gh is unavailable: this installation has no GitHub Source.'))
+  await shim('lark-cli', feishu ? shimRunning(feishu.cli, dir) : shimFailing('lark-cli is unavailable: this installation has no Feishu Source.'))
+  // 只在配置了 GitLab 来源时遮蔽 PATH 上的 glab；否则保留运维者自带的 glab。
+  if (gitlab) await shim('glab', shimRunning(gitlab.cli, dir))
   for (const name of new Set(blockedCommands.filter(name => !WORKER_COMMANDS.includes(name)))) {
-    await shim(name, shimFailing(`${name} is blocked in this installation; use gh, which acts as ${github.login}.`))
+    const advice = github ? `use gh, which acts as ${github.login}` : 'no GitHub Source is configured'
+    await shim(name, shimFailing(`${name} is blocked in this installation; ${advice}.`))
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
+  // 每个 GitHub 来源记录一个站点的凭据助手；同一站点只保留第一条记录。
+  const credentials = new Map<string, string>()
+  for (const source of Object.values(sources)) {
+    if (source.kind !== 'github') continue
+    const host = hostOf(source.instanceUrl, 'github.com')
+    if (!credentials.has(host)) credentials.set(host, credentialHelper(source.cli))
+  }
   await own(workerGitConfig(stateDir), [
     MARKER,
     // 让 git 在没有工作单元显式设置身份时拒绝提交，而不是从运维者的 OS 用户猜测。
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
-    '[credential "https://github.com"]', `\thelper = ${gitQuote(credentialHelper(github.cli))}`,
-    '[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/',
+    ...credentials.size ? [...credentials].map(([host, helper]) => `[credential "https://${host}"]\n\thelper = ${gitQuote(helper)}`) : [],
+    ...credentials.has('github.com') ? ['[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com/'] : [],
     // 包含 Git LFS 过滤器，因为运维者的全局 gitconfig（通常保存它们）被忽略。
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')
@@ -176,11 +189,14 @@ export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[],
   throw new CliError(read(handle.collected.stderr).trim() || `${argv.join(' ')} ${ended}`, undefined, exitCode ?? undefined)
 }
 
-/** 验证工作单元的 git 调用会解析到部署的 GitHub 凭据助手。 */
-export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 'stateDir'>, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
-  const { github, stateDir } = deployment
+/** 验证工作单元的 git 调用会解析到第一条 GitHub 来源记录的凭据助手；没有 GitHub 来源时不校验。 */
+export async function verifyEnvironment(deployment: Deployment, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
+  const { stateDir } = deployment
+  const github = firstSource(deployment, 'github')
+  if (!github) return
+  const host = hostOf(github.instanceUrl, 'github.com')
   // `-z` 用 NUL 分隔字段，且从不引用路径。
-  const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
+  const helpers = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', `credential.https://${host}.helper`], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
   if (helpers.join('\0') !== [`file:${workerGitConfig(stateDir)}`, credentialHelper(github.cli), ''].join('\0')) throw new SetupError('gitTooOld')
 }
 

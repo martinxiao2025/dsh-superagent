@@ -20,16 +20,14 @@ export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, 
   return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
 }
 export interface SetupState {
-  /** 已解析的部署信息；等待初始安装期间为 undefined。 */
+  /** 已解析的部署信息；机器级初始化失败时为 undefined。 */
   deployment?: Deployment | undefined
-  /** 会停止所有来源的安装失败。 */
+  /** 会停止所有来源的机器级初始化失败。 */
   problem?: SetupProblem | undefined
-  /** 仅暂停飞书来源的飞书机器人检查失败。 */
-  feishuProblem?: SetupProblem | undefined
-  /** 仅暂停 GitLab 来源的 GitLab 项目检查失败。 */
-  gitlabProblem?: SetupProblem | undefined
+  /** 按来源记录 ID 索引的部署校验问题；单条记录失败只暂停该记录。 */
+  sourceProblems?: Readonly<Record<string, SetupProblem>> | undefined
 }
-export const problemOf = (id: string, setup: SetupState) => [setup.problem, setup.feishuProblem, setup.gitlabProblem].find(problem => problem?.place === id)
+export const problemOf = (id: string, setup: SetupState): SetupProblem | undefined => setup.sourceProblems?.[id]
 /** 来源生命周期状态，按优先级排列：类型缺失、已禁用、安装/部件错误、因全局安装受阻、启动中、已暂停或就绪。 */
 export type SourceState = 'missing' | 'off' | 'error' | 'setup' | 'starting' | 'paused' | 'ready'
 function sourceState(instance: SourceInstance & { installed: boolean }, parts: { state: string }[], setup: SetupState): SourceState {

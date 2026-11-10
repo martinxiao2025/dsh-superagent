@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import type { Thread } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
-import { GitlabProjectSchema } from '../deployment.ts'
+import { GitlabSourceSchema, isGitlabSource, type ResolvedGitlabSource } from '../deployment.ts'
 import type { Tally } from '../infra/commands.ts'
 import { KV } from '../kv.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
@@ -14,8 +14,12 @@ import { gitlabThreadContext } from './gitlab-read.ts'
 import { gitlabThread, issueTrigger, ItemSchema, NoteSchema, noteTrigger, pullTrigger, SOURCE, type GitlabRef }
   from './gitlab-trigger.ts'
 
+const account = (ctx: SourceContext): ResolvedGitlabSource => {
+  if (!isGitlabSource(ctx.source)) throw new Error('The GitLab Source has no working CLI')
+  return ctx.source
+}
 /** GitLab 源配置；`project` 为空表示尚未启用，`cli` 默认使用 PATH 上的 glab。 */
-export const GitlabConfigSchema = GitlabProjectSchema.extend({ pollSeconds: z.number().int().min(60).max(3600).default(60),
+export const GitlabConfigSchema = GitlabSourceSchema.extend({ pollSeconds: z.number().int().min(60).max(3600).default(60),
   failuresBeforeError: z.number().int().min(1).max(20).default(3),
   observeIssues: z.boolean().default(false), observePulls: z.boolean().default(false), observeComments: z.boolean().default(false) }).strict()
 export type GitlabConfig = z.infer<typeof GitlabConfigSchema>
@@ -30,6 +34,8 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   description: { zh: '智能体的 GitLab 账号；接收所选项目里的新 Issue、新 Merge Request，以及 @ 智能体或打开开关后的 note。', en: 'The agent\'s GitLab account; receives new Issues and merge requests in the selected project, and notes that mention the agent or arrive with the switch on.' },
   schema: GitlabConfigSchema,
   fields: [
+    { key: 'instanceUrl', type: 'text', label: { zh: '实例地址', en: 'Instance URL' },
+      hint: { zh: '留空使用 gitlab.com；自建 GitLab 填站点根地址，例如 https://gitlab.example.com。', en: 'Leave empty for gitlab.com; for a self-hosted GitLab, enter the site root such as https://gitlab.example.com.' } },
     { key: 'project', type: 'text', pattern: '[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)+', label: { zh: '监听的 GitLab 项目', en: 'GitLab project' },
       hint: { zh: '写作 group/project，支持多级命名空间。保存时检查 glab 登录的账号能否读取项目并有 Developer 及以上权限，然后重启 dsh-superagent。', en: 'Written group/project; multi-level namespaces are supported. Saving checks that the account signed in to glab can read the project with Developer access or higher, then restarts dsh-superagent.' } },
     { key: 'cli', type: 'text', label: { zh: '智能体的 GitLab CLI', en: 'Agent GitLab CLI' },
@@ -80,15 +86,15 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
       { key: 'DSH_SUPERAGENT_GITLAB_NUMBER', description: { zh: '接下工单的 Issue 或 MR 编号；工单不是从 GitLab 来的时为空。', en: 'IID of the Issue or merge request that started the ticket; empty when the ticket did not start on GitLab.' } },
       { key: 'DSH_SUPERAGENT_GITLAB_KIND', description: { zh: '接下工单的是 issue 还是 merge_request；不是 GitLab 工单时为空。', en: 'Whether the ticket started from an issue or a merge_request; empty when it did not start on GitLab.' } },
     ],
-    values: ({ deployment, trigger }) => {
+    values: ({ source, trigger }) => {
       const mine = trigger?.threads[0]?.source === SOURCE
       const number = mine ? Number(trigger?.meta.number) || 0 : 0
-      return { DSH_SUPERAGENT_GITLAB_PROJECT: deployment.gitlab?.project ?? '', DSH_SUPERAGENT_GITLAB_ACCOUNT: deployment.gitlab?.login ?? '',
+      return { DSH_SUPERAGENT_GITLAB_PROJECT: source?.kind === 'gitlab' ? source.project : '', DSH_SUPERAGENT_GITLAB_ACCOUNT: source?.kind === 'gitlab' ? source.login : '',
         DSH_SUPERAGENT_GITLAB_NUMBER: number ? String(number) : '', DSH_SUPERAGENT_GITLAB_KIND: number ? trigger?.meta.kind === 'pull' ? 'merge_request' : 'issue' : '' }
     },
   },
-  facts: (deployment): Record<string, Localized | string> => deployment?.gitlab ? {
-    cli: { zh: `当前账号 @${deployment.gitlab.login}`, en: `Current account @${deployment.gitlab.login}` },
+  facts: (source): Record<string, Localized | string> => source?.kind === 'gitlab' ? {
+    cli: { zh: `当前账号 @${source.login}`, en: `Current account @${source.login}` },
   } : {},
 }
 export const gitlabAdapter: SourceAdapter<GitlabConfig> = {
@@ -147,7 +153,7 @@ async function pollStream(ctx: SourceContext, round: Round, stream: Stream, conf
   const path = `projects/${encoded}/${stream}?order_by=updated_at&sort=asc&state=all&updated_after=${encodeURIComponent(since)}`
   const items = await commands.gitlabPages(ItemSchema, path, round.tally)
   const page = items.slice(0, MAX_ITEMS_PER_STREAM)
-  const { login } = ctx.deployment.gitlab ?? { login: '' }
+  const { login } = account(ctx)
   let newest = Date.parse(since)
   for (const item of page) {
     if (stopped(ctx, round)) throw new Error('The GitLab Source stopped during the poll')
@@ -175,7 +181,7 @@ async function readNotes(ctx: SourceContext, round: Round, ref: GitlabRef, defau
   const checkpoint = KV.gitlab.notes(thread)
   const since = ctx.state.get(checkpoint) ?? defaultSince
   const section = sectionOf(ref.isPr ? 'merge_requests' : 'issues')
-  const project = ctx.deployment.gitlab
+  const project = account(ctx)
   if (!project) throw new Error('The GitLab Source has no working CLI')
   const encoded = encodeURIComponent(project.project)
   const notes = await ctx.commands.withSignal(round.signal)
@@ -223,7 +229,7 @@ export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, roun
     round.read.add(thread.key)
     let current = thread
     if (typeof thread.meta.isPr !== 'boolean' || typeof thread.meta.title !== 'string') {
-      const project = ctx.deployment.gitlab
+      const project = account(ctx)
       if (!project) throw new Error('The GitLab Source has no working CLI')
       const item = await ctx.commands.withSignal(round.signal)
         .gitlabApi(ItemSchema, `${isPr ? 'merge_requests' : 'issues'}/${iid}`)

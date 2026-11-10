@@ -99,7 +99,7 @@ it('shows the account each CLI signs in as, and keeps a saved CLI on screen whil
   const github = all('.dt-card')[1]!
   expect(github.textContent).toContain('当前账号 @agent-bot')
   const labels = () => [...github.querySelectorAll('label')].map(label => label.textContent)
-  expect(labels()).toEqual(['监听的仓库', '智能体的 GitHub CLI'])
+  expect(labels()).toEqual(['实例地址', '监听的仓库', '智能体的 GitHub CLI'])
   expect(field<HTMLInputElement>('监听的仓库').value).toBe('acme/widgets')
   // 事实描述已保存的值，因此编辑后的 CLI 在保存前不显示任何内容。
   await type(field<HTMLInputElement>('智能体的 GitHub CLI'), 'gh-other')
@@ -107,7 +107,7 @@ it('shows the account each CLI signs in as, and keeps a saved CLI on screen whil
   await click(zh.discard)
   expect(github.textContent).toContain('当前账号 @agent-bot')
   await click([...github.querySelectorAll<HTMLElement>('[data-disclosure-row]')].find(row => row.textContent?.includes('高级'))!)
-  expect(labels()).toEqual(['监听的仓库', '智能体的 GitHub CLI', '轮询间隔 / 秒', '连续失败几次后报告异常'])
+  expect(labels()).toEqual(['实例地址', '监听的仓库', '智能体的 GitHub CLI', '轮询间隔 / 秒', '连续失败几次后报告异常'])
   expect(all('.dt-card')[0]!.textContent).toContain('当前机器人 Widgets Bot')
   await type(field<HTMLInputElement>('智能体的 GitHub CLI'), '/opt/bin/gh-agent')
   expect(github.textContent).toContain('保存会重启 dsh-superagent：2 个进行中的派工会中断，并带恢复说明重新开始。')
@@ -131,7 +131,7 @@ it('points a setup problem at the settings that fix it', async () => {
   // 设置等待期间不会运行任何内容，因此执行器会说明这一点，而不是计数。
   expect(text()).toContain(zh.executorWaitingSetup)
   expect(all('.dt-stat').map(stat => stat.textContent)).not.toContain('执行中2 / 3')
-  expect(text()).toContain('在设置 › 来源的 GitHub 卡片修正后保存，会重新检查')
+  expect(text()).toContain(zh['problemSetupFix.source'])
   await click(find(zh.problemSetup, 'button, a, [role="button"]'))
   expect(tab(zh['tab.settings']).getAttribute('aria-selected')).toBe('true')
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
