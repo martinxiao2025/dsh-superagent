@@ -59,6 +59,11 @@ declare module '@deepseek-ai/cordis' {
  */
 const WORK_TOOLS = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill', 'web_search',
   'web_fetch', 'skill', 'todo_write', 'subagent', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent']
+/**
+ * 主会话可保留的工具：技能、读取、shell 及其任务。shell 工具按平台命名（`bash` 或 `pwsh`），
+ * 因此两者都列出，再由 `inherited` 过滤到宿主实际提供的那一个，因为 `restrict` 拒绝命名未知的全局工具。
+ */
+const MASTER_TOOLS = ['skill', 'bash', 'pwsh', 'read', 'read_image', 'job_output', 'job_list', 'job_kill']
 /** 主会话将要等待时被告知的内容：它等待的东西会主动送达，而等待步骤会阻塞下一步。 */
 const NO_WAIT = 'Reports, follow_up notices, new candidates and a background job\'s end with its output arrive by themselves as messages; '
   + 'end the turn instead of waiting for them.'
@@ -259,11 +264,7 @@ export class Sessions {
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
-      // 只在宿主实际提供该工具时命名它：Windows 的 DSH 暴露 `pwsh` 而不暴露 `bash`，
-      // 命名不存在的全局工具会让 tools.restrict 抛错，主会话因此无法创建或恢复。
-      const allow = ['skill', 'bash', 'pwsh', 'read', 'read_image', 'job_output', 'job_list', 'job_kill']
-        .filter(name => agent.ctx.tools.get(name, scopeParentOf(agent)))
-      binding.disposers.push(agent.ctx.tools.restrict({ allow }),
+      binding.disposers.push(agent.ctx.tools.restrict({ allow: this.inherited(agent, MASTER_TOOLS) }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
     } else {
       // 执行器会话保留其已有的配置文件工作工具（DSH 要求这些工具已知）；其自身工具不会被遮蔽。
@@ -284,15 +285,21 @@ export class Sessions {
     } catch { return false }
   }
   /**
+   * 父作用域（预设）实际提供的工具名。`restrict` 拒绝命名未知的全局工具，而工具名随环境不同：
+   * 全局视图会遗漏预设工具；智能体自身的视图还会包含 `subagent` 等本地工具。
+   */
+  private inherited(agent: Agent, names: readonly string[]): string[] {
+    const parent = scopeParentOf(agent)
+    return names.filter(name => agent.ctx.tools.get(name, parent))
+  }
+  /**
    * 执行器会话的工具：仅包含配置文件的工作工具（DSH 要求这些工具已知），其工单结束后则没有。
    * 失败或被阻塞的执行器会保留其工具，以便人员可在其会话中继续；只有自动化输入会等待（见执行器）。
-   * 通过父作用域读取继承的工具，其中包含预设的工具。全局视图会遗漏预设工具；
-   * 智能体自身的视图还会包含 `subagent` 等本地工具，而 restrict 拒绝命名它们。
+   * 通过父作用域读取继承的工具，其中包含预设的工具。
    */
   private workOnly(agent: Agent, ticketId: string): (() => void)[] {
     const store = this.host.store
-    const parent = scopeParentOf(agent)
-    const allow = WORK_TOOLS.filter(name => agent.ctx.tools.get(name, parent))
+    const allow = this.inherited(agent, WORK_TOOLS)
     return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(() => {
       const current = store.tickets.get(ticketId)
       return !current || !liveTicket(current) ? 'Ticket ended; new work needs a new authorized ticket' : undefined
