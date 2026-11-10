@@ -24,7 +24,7 @@ export const CHAT = 'oc_team'
 /** 根据 `oc_team` 中 Alice 的消息构建飞书提及触发器，使用 `id` 中的数字作为以秒为单位的时间戳偏移。 */
 export function feishu(id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
   const at = String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000)
-  return feishuTrigger({ message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: at,
+  return feishuTrigger('feishu', { message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: at,
     mentions: [{ id: 'ou_bot' }], ...overrides }, 'ou_bot', 'cli_bot')!
 }
 

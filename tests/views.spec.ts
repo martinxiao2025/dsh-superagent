@@ -37,14 +37,14 @@ const drop = (id: string, channel: ChannelRef, ticketId?: string) => {
 
 it('names the Thread of each dropped message: the one of the Trigger its Channel answers, or the Channel\'s own', () => {
   // 飞书渠道标明其群聊；它所回复的消息属于话题根消息所在的线程。
-  store.triggers.save({ id: feishuTriggerId('om_reply'), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
+  store.triggers.save({ id: feishuTriggerId('feishu', 'om_reply'), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
     actor: { source: 'feishu', id: 'ou_a' }, human: true, at: new Date().toISOString(), text: 'please', meta: {} })
   store.threads.save({ key: 'github:42', ref: { source: 'github', id: '42' }, createdAt: '', subscriptions: [], correlated: [], pending: [],
     meta: {} })
-  drop('a', feishuChannel('oc_1', 'om_reply'))
+  drop('a', feishuChannel('feishu', 'oc_1', 'om_reply'))
   drop('b', githubChannel('github', 42))
   // 触发器与线程在存储中都已不存在的消息不会链接到任何地方。
-  drop('c', feishuChannel('oc_2', 'om_gone'))
+  drop('c', feishuChannel('feishu', 'oc_2', 'om_gone'))
   expect(Object.fromEntries(droppedReplies({ store, links }).map(item => [item.id, item.thread])))
     .toEqual({ a: 'feishu:oc_1:om_root', b: 'github:42', c: undefined })
 })

@@ -123,11 +123,13 @@ export class Commands {
       return stdout
     } catch (error) { throw commandError(error, program) }
   }
-  /** 企业实例的 `gh` 调用需要以 `GH_HOST` 路由到该站点；github.com 不设置，保持默认行为。 */
+  /** 企业实例的 `gh` / `glab` 调用需要以 `GH_HOST` / `GITLAB_HOST` 路由到该站点；官方站点不设置，保持默认行为。 */
   private hostEnvironment(): Record<string, string> {
     const source = this.source
-    if (source?.kind !== 'github' || !source.instanceUrl) return {}
-    return { GH_HOST: hostOf(source.instanceUrl, '') }
+    if (!source?.instanceUrl) return {}
+    if (source.kind === 'github') return { GH_HOST: hostOf(source.instanceUrl, '') }
+    if (source.kind === 'gitlab') return { GITLAB_HOST: hostOf(source.instanceUrl, '') }
+    return {}
   }
   /** 运行智能体的 GitHub CLI 并解析其 JSON 输出；调用方应优先使用 `api`，它会限制在配置的仓库内并校验输出。 */
   async gh<T>(args: string[]): Promise<T> { return JSON.parse(await this.run(this.github.cli, args)) as T }

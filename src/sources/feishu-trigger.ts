@@ -2,11 +2,12 @@
 import { z } from 'zod'
 import { key, type ChannelRef, type Trigger } from '../core/index.ts'
 import type { FeishuMessage, FeishuRef } from './feishu-read.ts'
+import { threadKey } from './identity.ts'
 
 export const SOURCE = 'feishu'
-/** 构建飞书回复频道地址；因为群聊和单聊的 ID 都以 `oc_` 开头，所以显式记录 `direct`。 */
-export const feishuChannel = (chatId: string, messageId: string, direct = false): ChannelRef =>
-  ({ source: SOURCE, thread: `feishu:${chatId}`, address: { chatId, messageId, ...direct ? { direct: 'true' } : {} } })
+/** 构建飞书回复频道地址；`record` 是来源记录 ID。因为群聊和单聊的 ID 都以 `oc_` 开头，所以显式记录 `direct`。 */
+export const feishuChannel = (record: string, chatId: string, messageId: string, direct = false): ChannelRef =>
+  ({ source: record, thread: threadKey(record, chatId), address: { chatId, messageId, ...direct ? { direct: 'true' } : {} } })
 /** 实时事件消费者输出的消息结构；历史记录和话题分页路径也会把读取内容归一化为该结构。 */
 const EventSchema = z.object({ message_id: z.string(), chat_id: z.string(), chat_type: z.enum(['p2p', 'group']),
   sender_id: z.string(), sender_type: z.enum(['user', 'bot']), content: z.string(), create_time: z.string(),
@@ -14,8 +15,8 @@ const EventSchema = z.object({ message_id: z.string(), chat_id: z.string(), chat
   root_id: z.string().optional(), parent_id: z.string().optional(), thread_id: z.string().optional(), message_app_link: z.url().optional() })
 export type FeishuEvent = z.infer<typeof EventSchema>
 export const feishuThreadId = (chatId: string, rootId: string | undefined, messageId: string): string => `${chatId}:${rootId ?? messageId}`
-/** 飞书消息的确定性触发器 ID；该消息的每条读取路径都会产生相同的 ID。 */
-export const feishuTriggerId = (messageId: string): string => key('feishu', messageId)
+/** 飞书消息的确定性触发器 ID；同一记录下该消息的每条读取路径都会产生相同的 ID。 */
+export const feishuTriggerId = (record: string, messageId: string): string => key(record, messageId)
 export const withMentionNames = (text: string, mentions: { key?: string | undefined; name?: string | undefined }[]): string =>
   mentions.reduce((result, mention) => mention.key && mention.name ? result.replaceAll(mention.key, `@${mention.name}`) : result, text)
 /**
@@ -27,26 +28,26 @@ export function feishuTime(value: string): string {
   if (!Number.isFinite(time)) throw new Error(`Unreadable Feishu message time: ${value}`)
   return new Date(time).toISOString()
 }
-/** 把归一化的飞书事件转为触发器；机器人自己发送的消息返回 undefined。 */
-export function feishuTrigger(input: unknown, botId: string, botAppId: string): Trigger | undefined {
+/** 把归一化的飞书事件转为触发器；`record` 是来源记录 ID，机器人自己发送的消息返回 undefined。 */
+export function feishuTrigger(record: string, input: unknown, botId: string, botAppId: string): Trigger | undefined {
   const event = EventSchema.parse(input)
   if (event.sender_id === botId || event.sender_id === botAppId) return
   const direct = event.chat_type === 'p2p'
   const mentioned = event.mentions.some(mention => mention.id === botId || mention.id === botAppId)
   const thread = feishuThreadId(event.chat_id, event.root_id, event.message_id)
-  return { id: feishuTriggerId(event.message_id), source: SOURCE, threads: [{ source: SOURCE, id: thread }],
-    actor: { source: SOURCE, id: event.sender_id }, human: event.sender_type === 'user',
+  return { id: feishuTriggerId(record, event.message_id), source: record, threads: [{ source: record, id: thread }],
+    actor: { source: record, id: event.sender_id }, human: event.sender_type === 'user',
     ...(direct ? { addressed: 'direct' as const } : mentioned ? { addressed: 'mention' as const } : {}),
     at: feishuTime(event.create_time), text: withMentionNames(event.content, event.mentions),
-    channel: feishuChannel(event.chat_id, event.message_id, direct), ...(event.message_app_link ? { url: event.message_app_link } : {}),
+    channel: feishuChannel(record, event.chat_id, event.message_id, direct), ...(event.message_app_link ? { url: event.message_app_link } : {}),
     meta: { chatId: event.chat_id, messageId: event.message_id, direct, mentioned, ...(event.root_id ? { rootId: event.root_id } : {}),
       ...(event.parent_id ? { parentId: event.parent_id } : {}), ...(event.thread_id ? { threadId: event.thread_id } : {}) } }
 }
 export const feishuParent = (trigger: Trigger): string | undefined =>
-  trigger.source === SOURCE && typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.meta.parentId) : undefined
+  typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.source, trigger.meta.parentId) : undefined
 export function feishuRef(trigger: Trigger): FeishuRef | undefined {
   const meta = trigger.meta as { chatId?: string; messageId?: string }
-  if (trigger.source !== SOURCE || !meta.chatId || !meta.messageId) return undefined
+  if (!meta.chatId || !meta.messageId) return undefined
   return { triggerId: trigger.id, chatId: meta.chatId, messageId: meta.messageId, at: trigger.at }
 }
 

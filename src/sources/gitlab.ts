@@ -13,6 +13,7 @@ import { gitlabLink, sendGitlab } from './gitlab-channel.ts'
 import { gitlabThreadContext } from './gitlab-read.ts'
 import { gitlabThread, issueTrigger, ItemSchema, NoteSchema, noteTrigger, pullTrigger, SOURCE, type GitlabRef }
   from './gitlab-trigger.ts'
+import { threadKey } from './identity.ts'
 
 const account = (ctx: SourceContext): ResolvedGitlabSource => {
   if (!isGitlabSource(ctx.source)) throw new Error('The GitLab Source has no working CLI')
@@ -55,12 +56,13 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
   health: ['gitlab'],
   channel: { allowed: address => address.kind === 'issue' || address.kind === 'mr', send: sendGitlab, link: gitlabLink },
   threadContext: gitlabThreadContext,
-  // `#12`、`!12` 或 GitLab 网页 URL 分别指向 Issue 与 MR；两者编号独立。
-  find: (_instance, query) => {
+  // `#12`、`!12` 或 GitLab 网页 URL 分别指向 Issue 与 MR；两者编号独立，线程键带记录。
+  find: (instance, query) => {
     const text = query.trim()
     const issue = (/^#(\d+)$/.exec(text) ?? /^(\d+)$/.exec(text) ?? /\/-\/issues\/(\d+)/.exec(text))?.[1]
     const mr = (/^!(\d+)$/.exec(text) ?? /\/-\/merge_requests\/(\d+)/.exec(text))?.[1]
-    return { threads: [...issue ? [`${SOURCE}:issue:${issue}`] : [], ...mr ? [`${SOURCE}:mr:${mr}`] : []], terms: [] }
+    return { threads: [...issue ? [threadKey(instance.id, gitlabThread(Number(issue), false))] : [],
+      ...mr ? [threadKey(instance.id, gitlabThread(Number(mr), true))] : []], terms: [] }
   },
   policy: forgePolicy({
     config: GitlabConfigSchema,
@@ -87,7 +89,7 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
       { key: 'DSH_SUPERAGENT_GITLAB_KIND', description: { zh: '接下工单的是 issue 还是 merge_request；不是 GitLab 工单时为空。', en: 'Whether the ticket started from an issue or a merge_request; empty when it did not start on GitLab.' } },
     ],
     values: ({ source, trigger }) => {
-      const mine = trigger?.threads[0]?.source === SOURCE
+      const mine = trigger?.threads[0]?.source === source?.id
       const number = mine ? Number(trigger?.meta.number) || 0 : 0
       return { DSH_SUPERAGENT_GITLAB_PROJECT: source?.kind === 'gitlab' ? source.project : '', DSH_SUPERAGENT_GITLAB_ACCOUNT: source?.kind === 'gitlab' ? source.login : '',
         DSH_SUPERAGENT_GITLAB_NUMBER: number ? String(number) : '', DSH_SUPERAGENT_GITLAB_KIND: number ? trigger?.meta.kind === 'pull' ? 'merge_request' : 'issue' : '' }
@@ -143,7 +145,7 @@ const prefix = (isPr: boolean): string => isPr ? '!' : '#'
  * 首次轮询只写游标，不补发历史；每个流独立失败，游标按最后处理的条目推进。
  */
 async function pollStream(ctx: SourceContext, round: Round, stream: Stream, config: GitlabConfig): Promise<number> {
-  const state = KV.gitlab.cursor(stream)
+  const state = KV.gitlab.cursor(ctx.id, stream)
   const stored = ctx.state.get(state)
   if (!stored) { ctx.state.set(state, cursorAt(round.started)); return 0 }
   const since = stored
@@ -158,10 +160,10 @@ async function pollStream(ctx: SourceContext, round: Round, stream: Stream, conf
   for (const item of page) {
     if (stopped(ctx, round)) throw new Error('The GitLab Source stopped during the poll')
     const ref: GitlabRef = { iid: item.iid, isPr, ...item.web_url ? { url: item.web_url } : {}, ...isPr ? { prAuthor: item.author.username } : {} }
-    round.read.add(`gitlab:${gitlabThread(item.iid, isPr)}`)
+    round.read.add(threadKey(ctx.id, gitlabThread(item.iid, isPr)))
     const created = Date.parse(item.created_at) >= Date.parse(since)
     if (created && !sameName(item.author.username, login)) {
-      await ctx.receive(isPr ? pullTrigger(item, login) : issueTrigger(item, login))
+      await ctx.receive(isPr ? pullTrigger(ctx.id, item, login) : issueTrigger(ctx.id, item, login))
       nameThread(ctx, item.iid, isPr, item.title, item.web_url ?? undefined)
     }
     // 新建的条目从创建时间起读评论；已有条目只读游标之后的，避免回放历史评论。
@@ -177,8 +179,7 @@ async function pollStream(ctx: SourceContext, round: Round, stream: Stream, conf
 }
 /** 读取一个 Issue/MR 上自 notes 游标以来的 note；系统 note、智能体自己的 note 和空 note 跳过。 */
 async function readNotes(ctx: SourceContext, round: Round, ref: GitlabRef, defaultSince: string, config: GitlabConfig): Promise<void> {
-  const thread = `gitlab:${gitlabThread(ref.iid, ref.isPr)}`
-  const checkpoint = KV.gitlab.notes(thread)
+  const checkpoint = KV.gitlab.notes(ctx.id, gitlabThread(ref.iid, ref.isPr))
   const since = ctx.state.get(checkpoint) ?? defaultSince
   const section = sectionOf(ref.isPr ? 'merge_requests' : 'issues')
   const project = account(ctx)
@@ -191,7 +192,7 @@ async function readNotes(ctx: SourceContext, round: Round, ref: GitlabRef, defau
     if (stopped(ctx, round)) throw new Error('The GitLab Source stopped during the poll')
     if (note.system || sameName(note.author.username, login)) continue
     if (Date.parse(note.created_at ?? '') < Date.parse(since)) continue
-    const trigger = noteTrigger(note, ref, login)
+    const trigger = noteTrigger(ctx.id, note, ref, login)
     if (!trigger.text) continue
     // 评论只有在 @ 智能体或打开了“接收项目里的评论”时才进入来源，与 GitHub 的通知语义一致。
     if (trigger.addressed || config.observeComments) await ctx.receive(trigger)
@@ -221,7 +222,7 @@ export async function pollRound(ctx: SourceContext, signal?: AbortSignal): Promi
 /** 已订阅 Thread 的 note 轮询；本轮流中已经读过的 Thread 跳过，避免重复调用。 */
 export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, round = newRound(signal), config = ctx.config<GitlabConfig>()): Promise<void> {
   if (!config?.project) return
-  await pollEach(ctx, SOURCE, () => stopped(ctx, round), async thread => {
+  await pollEach(ctx, ctx.id, () => stopped(ctx, round), async thread => {
     const match = /^(issue|mr):([1-9]\d*)$/.exec(thread.ref.id)
     if (!match) throw new Error('Subscribed thread has no GitLab Issue or merge request IID')
     const isPr = match[1] === 'mr'
@@ -242,7 +243,7 @@ export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, roun
   }, thread => round.read.has(thread.key))
 }
 function nameThread(ctx: SourceContext, iid: number, isPr: boolean, title: string, url?: string): void {
-  const key = `gitlab:${gitlabThread(iid, isPr)}`
+  const key = threadKey(ctx.id, gitlabThread(iid, isPr))
   const label = `${prefix(isPr)}${iid}`
   ctx.threads.patch(key, { title, number: iid, isPr, ...(url ? { url } : {}) })
   ctx.threads.describe(key, { label: `${label} ${title}`, ...(url ? { url } : {}), facts: { number: { value: label } } })

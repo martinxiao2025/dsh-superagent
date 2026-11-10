@@ -60,7 +60,7 @@ const BANNED: [rule: string, where: RegExp, phrase: RegExp][] = [
 const KNOWN_FAILURES: [owner: string, failure: string][] = []
 
 const MEMBER = 'ou_alice', CHAT = 'oc_team'
-const feishu = (id: string, text: string, overrides: Record<string, unknown> = {}) => feishuTrigger({ message_id: `om_${id}`, chat_id: CHAT,
+const feishu = (id: string, text: string, overrides: Record<string, unknown> = {}) => feishuTrigger('feishu', { message_id: `om_${id}`, chat_id: CHAT,
   chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, mentions: [{ id: 'ou_bot' }],
   create_time: String(Date.parse('2026-09-09T00:00:00Z') + Number(id) * 1000), ...overrides }, 'ou_bot', 'cli_bot')!
 const sentences = (text: string) => text.split(/(?<=[。！？])|(?<=[.!?])\s+|\n+/)

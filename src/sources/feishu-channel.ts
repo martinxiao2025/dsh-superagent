@@ -4,7 +4,7 @@ import { CliError } from '../infra/commands.ts'
 import { checkedImText } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import type { ChannelLink, ChannelLinks } from './kind.ts'
-import { feishuTriggerId } from './feishu-trigger.ts'
+import { feishuTriggerId, SOURCE } from './feishu-trigger.ts'
 
 /** 打开某个群的飞书或 Lark AppLink；当消息自身的链接未随事件送达时使用。 */
 export const feishuChatLink = (brand: 'feishu' | 'lark', chatId: string): string =>
@@ -31,5 +31,5 @@ export async function sendFeishu(host: Pick<SourceContext, 'commands'>, message:
 /** 机器人品牌上的兜底群链接；可用时优先使用触发器上消息自身的深链。 */
 export const feishuLink = (address: Record<string, string>, links: ChannelLinks): ChannelLink => ({
   url: feishuChatLink(links.feishu?.brand ?? 'feishu', address.chatId ?? ''), label: { zh: '飞书消息', en: 'Feishu message' },
-  ...address.messageId ? { triggerId: feishuTriggerId(address.messageId) } : {},
+  ...address.messageId ? { triggerId: feishuTriggerId(links.feishu?.id ?? SOURCE, address.messageId) } : {},
 })

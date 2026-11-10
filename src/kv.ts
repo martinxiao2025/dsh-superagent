@@ -50,13 +50,14 @@ export const KV = {
     branchCi: family<{ branch?: string; failures?: string[]; revision: number }, [record: string]>('github-branch-ci:'),
     ci: family<{ fingerprint: string; revision: number }, [record: string, number: number]>('github-ci:') },
   /**
-   * 飞书来源：已知会话（私聊为 `true`）；按会话记录的历史游标，以及把话题 ID 映射到最近可见时间戳的活动话题；
-   * 以及按轮询线程记录的已见消息 ID 和初始化标记。
+   * 飞书来源：按记录记录已知会话（私聊为 `true`）；按记录与会话记录的历史游标，以及把话题 ID 映射到最近可见时间戳的活动话题；
+   * 以及按轮询线程记录的已见消息 ID 和初始化标记（线程键已含记录）。
    */
-  feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
-    topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
+  feishu: { chats: family<Record<string, boolean>, [record: string]>('feishu-chats:'),
+    history: family<string, [record: string, chat: string]>('feishu-history:'),
+    topics: family<Record<string, string>, [record: string, chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
-  /** GitLab Source: 每个流（issues/merge_requests）独立的光标，以及每个 Thread 的 notes 光标。 */
-  gitlab: { cursor: family<string, [stream: 'issues' | 'merge_requests']>('gitlab-cursor:'),
-    notes: family<string, [thread: string]>('gitlab-notes:') },
+  /** GitLab Source: 每个记录、每个流（issues/merge_requests）独立的光标，以及每个记录与 Thread 的 notes 光标。 */
+  gitlab: { cursor: family<string, [record: string, stream: 'issues' | 'merge_requests']>('gitlab-cursor:'),
+    notes: family<string, [record: string, thread: string]>('gitlab-notes:') },
 }

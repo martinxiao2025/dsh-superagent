@@ -8,7 +8,7 @@ import { githubChannel } from '../src/sources/github-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { key, type OutboundMessage } from '../src/core/index.ts'
-import { testDeployment, testFeishu, testGithub } from './fixtures/deployment.ts'
+import { testDeployment, testFeishu, testGithub, testGitlab } from './fixtures/deployment.ts'
 const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} },
   feishu: { kind: 'feishu', enabled: true, config: {} } } }))
 sources.register(feishuKind); sources.register(githubKind)
@@ -46,6 +46,19 @@ describe('account-isolated operations', () => {
       expect(await environment(deployment, 'github')).not.toHaveProperty('GH_HOST')
     } finally { delete process.env.GH_HOST }
   })
+  it('routes glab to the record\'s own enterprise instance with GITLAB_HOST', async () => {
+    delete process.env.GITLAB_HOST
+    const enterprise = testDeployment({ sources: {
+      'gitlab-self': testGitlab({ id: 'gitlab-self', instanceUrl: 'https://gitlab.example.com/', cli: '/path/agent-glab' }),
+      gitlab: testGitlab({ cli: '/path/agent-glab' }) } })
+    const environment = async (value: ReturnType<typeof testDeployment>, record: string) => JSON.parse(await new Commands(() => value, {},
+      new AbortController().signal).scope(record).run(process.execPath, ['-e', 'console.log(JSON.stringify(process.env))'])) as Record<string, string>
+    try {
+      expect((await environment(enterprise, 'gitlab-self')).GITLAB_HOST).toBe('gitlab.example.com')
+      expect(await environment(enterprise, 'gitlab')).not.toHaveProperty('GITLAB_HOST')
+      expect(await environment(enterprise, 'gitlab-self')).not.toHaveProperty('GH_HOST')
+    } finally { delete process.env.GITLAB_HOST }
+  })
   it('refuses Feishu commands when the deployment has no Feishu bot', async () => {
     await expect(feishuCommands(testDeployment({ feishu: undefined })).lark(['im', '+chat-list'])).rejects.toThrow('The Feishu Source has no working bot CLI')
   })
@@ -72,7 +85,7 @@ describe('account-isolated operations', () => {
   })
   it('uses Feishu bot identity and one idempotency key on retries', async () => {
     const commands = feishuCommands(); const run = vi.spyOn(commands,'run').mockResolvedValue('{"ok":true,"data":{}}')
-    await send(commands, { ...reply, channel: feishuChannel('oc_1', 'om_1') })
+    await send(commands, { ...reply, channel: feishuChannel('feishu', 'oc_1', 'om_1') })
     expect(run.mock.calls[0]![1]).toEqual(expect.arrayContaining(['--as','bot','--idempotency-key','stable-operation','--message-id','om_1']))
   })
 })
@@ -83,7 +96,7 @@ it('reports Feishu failures with their code and without command arguments', () =
   expect(commandError({stderr:JSON.stringify({error:{code:999,message:'scope missing'}})}).message).toBe('scope missing (999)')
 })
 describe('Channels', () => {
-  const feishu = { ...reply, channel: feishuChannel('oc_1', 'om_1') }
+  const feishu = { ...reply, channel: feishuChannel('feishu', 'oc_1', 'om_1') }
   const lark = (code: number, message: string) => commandError({ stderr: JSON.stringify({ error: { code, message } }), code: 1 })
   it('drop a Feishu reply to a recalled message or one Feishu no longer finds, and say how to add the bot to a chat', async () => {
     const value = feishuCommands()
@@ -137,7 +150,7 @@ describe('Channels', () => {
     expect(githubKind.channel!.link(githubChannel('github', 8, review).address, links))
       .toEqual({ url: review, label: { zh: 'GitHub #8 的 review 讨论', en: 'Review discussion on GitHub #8' } })
     expect(githubKind.channel!.link(githubChannel('github', 8).address, {}).url).toBe('')
-    const message = feishuChannel('oc_1', 'om_1').address
+    const message = feishuChannel('feishu', 'oc_1', 'om_1').address
     expect(feishuKind.channel!.link(message, links)).toEqual({ url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1',
       label: { zh: '飞书消息', en: 'Feishu message' }, triggerId: key('feishu', 'om_1') })
   })

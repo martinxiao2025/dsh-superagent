@@ -8,7 +8,7 @@ import { feishuChatLink } from './feishu-channel.ts'
 import type { ResolvedFeishuSource } from '../deployment.ts'
 import { validItems, spawnCommand, type Tally } from '../infra/commands.ts'
 import { readFeishu, type FeishuRef } from './feishu-read.ts'
-import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, SOURCE, topicEvent }
+import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, topicEvent }
   from './feishu-trigger.ts'
 import { health, type SourceContext } from './host.ts'
 import { KV } from '../kv.ts'
@@ -26,7 +26,7 @@ async function receive(ctx: SourceContext, trigger: Trigger): Promise<void> {
   await ctx.receive(trigger)
   const chatId = String(trigger.meta.chatId ?? '')
   if (!chatId) return
-  const name = ctx.state.get(KV.sources.labels(SOURCE))?.[chatId] ?? chatId
+  const name = ctx.state.get(KV.sources.labels(ctx.id))?.[chatId] ?? chatId
   const chat = trigger.meta.direct === true ? { value: { zh: '私聊', en: 'Direct message' } } : { value: name }
   for (const ref of trigger.threads) ctx.threads.describe(threadKey(ref), { url: chatLink(ctx, chatId), facts: { chat } })
 }
@@ -99,12 +99,12 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   stdout.on('line', (line: string) => {
     chain = chain.then(async () => {
       if (line.length > 1_048_576) throw new Error('Feishu event exceeds 1 MiB')
-      const trigger = feishuTrigger(JSON.parse(line), bot(ctx).botId, bot(ctx).appId)
+      const trigger = feishuTrigger(ctx.id, JSON.parse(line), bot(ctx).botId, bot(ctx).appId)
       // 来源被禁用时已读取的事件会被丢弃；消费者随后不久停止。
       if (!trigger || !enabled(ctx)) return
-      const chats = ctx.state.get(KV.feishu.chats) ?? {}
+      const chats = ctx.state.get(KV.feishu.chats(ctx.id)) ?? {}
       chats[String(trigger.meta.chatId)] = trigger.meta.direct === true
-      ctx.state.set(KV.feishu.chats, chats)
+      ctx.state.set(KV.feishu.chats(ctx.id), chats)
       await receive(ctx, trigger)
     }).catch(error => { ctx.report('feishu', { state: 'error', detail: String(error), at: new Date().toISOString() }) })
   })
@@ -123,7 +123,7 @@ export async function refreshChatNames(ctx: SourceContext, signal?: AbortSignal)
   const result = z.looseObject({ chats: z.array(z.looseObject({ chat_id: z.string(), name: z.string().nullish() })).optional() })
     .parse(await commands.lark(['im', '+chat-list', '--page-all', '--page-size', '100']))
   const names = Object.fromEntries((result.chats ?? []).filter(chat => chat.name).map(chat => [chat.chat_id, chat.name!]))
-  ctx.state.set(KV.sources.labels(SOURCE), names)
+  ctx.state.set(KV.sources.labels(ctx.id), names)
   return names
 }
 /** 独立于历史补收每分钟重读群列表（后者的轮次可能长得多），使新加入的群能在一分钟内出现。 */
@@ -148,7 +148,7 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
       await delay(60_000, undefined, { signal }).catch(() => {})
       continue
     }
-    const seen = ctx.state.get(KV.feishu.chats) ?? {}
+    const seen = ctx.state.get(KV.feishu.chats(ctx.id)) ?? {}
     const known = Object.entries(seen).filter(([, direct]) => direct && config.directMessages)
     const chats = { ...Object.fromEntries(config.chats.map(chat => [chat.chatId, false])), ...Object.fromEntries(known) }
     const errors: string[] = []
@@ -156,7 +156,7 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
     for (const [chatId, direct] of Object.entries(chats)) {
       if (signal.aborted) break
       const started = new Date().toISOString()
-      const cursorKey = KV.feishu.history(chatId)
+      const cursorKey = KV.feishu.history(ctx.id, chatId)
       const since = ctx.state.get(cursorKey)
       if (since === undefined) { ctx.state.set(cursorKey, started); continue }
       try {
@@ -179,7 +179,7 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
 export async function backfillChat(ctx: SourceContext, chatId: string, direct: boolean, since: string, until: string,
   signal: AbortSignal, tally: Tally = { skipped: 0 }): Promise<void> {
   const commands = ctx.commands.withSignal(signal)
-  const topicsKey = KV.feishu.topics(chatId)
+  const topicsKey = KV.feishu.topics(ctx.id, chatId)
   const topics = { ...ctx.state.get(topicsKey) }
   const scan = async (kind: 'chat' | 'thread', id: string): Promise<void> => {
     let page: string | undefined
@@ -197,7 +197,7 @@ export async function backfillChat(ctx: SourceContext, chatId: string, direct: b
         if (message.deleted) continue
         const at = feishuTime(message.create_time)
         if (message.thread_id && !(Date.parse(topics[message.thread_id] ?? '') >= Date.parse(at))) topics[message.thread_id] = at
-        const trigger = feishuTrigger(historyEvent(message, chatId, direct), bot(ctx).botId, bot(ctx).appId)
+        const trigger = feishuTrigger(ctx.id, historyEvent(message, chatId, direct), bot(ctx).botId, bot(ctx).appId)
         if (trigger) await receive(ctx, trigger)
       }
       const stuck = result.has_more && (!result.page_token || pages.has(result.page_token))
@@ -208,7 +208,7 @@ export async function backfillChat(ctx: SourceContext, chatId: string, direct: b
   }
   await scan('chat', chatId)
   // 无人关注的话题会被遗忘，除非有仍在轮询的已订阅线程跟随它。
-  const followed = new Set(ctx.threads.subscribed(SOURCE).filter(thread => polled(ctx, thread))
+  const followed = new Set(ctx.threads.subscribed(ctx.id).filter(thread => polled(ctx, thread))
     .map(thread => String(thread.meta.threadId ?? ctx.triggers.latest(thread.key)?.meta.threadId ?? '')))
   for (const [id, seen] of Object.entries(topics)) {
     if (!followed.has(id) && Date.parse(until) - Date.parse(seen) >= POLL_HORIZON_MS) delete topics[id]
@@ -229,7 +229,7 @@ export function threadRef(ctx: SourceContext, thread: Thread): FeishuRef | undef
 }
 /** 在轮询时间窗内轮询已订阅的飞书线程，使实时流遗漏的回复成为触发器。 */
 export async function pollThreads(ctx: SourceContext, signal?: AbortSignal, tally?: Tally): Promise<void> {
-  await pollEach(ctx, SOURCE, () => !!signal?.aborted, thread => pollThread(ctx, thread, signal, tally))
+  await pollEach(ctx, ctx.id, () => !!signal?.aborted, thread => pollThread(ctx, thread, signal, tally))
 }
 async function pollThread(ctx: SourceContext, thread: Thread, signal?: AbortSignal, tally?: Tally): Promise<void> {
   const ref = threadRef(ctx, thread)
@@ -250,7 +250,7 @@ async function pollThread(ctx: SourceContext, thread: Thread, signal?: AbortSign
     }
     ctx.state.set(checkpoint, [...known])
   }
-  const direct = ctx.state.get(KV.feishu.chats)?.[ref.chatId] === true
+  const direct = ctx.state.get(KV.feishu.chats(ctx.id))?.[ref.chatId] === true
   const since = Date.parse(thread.createdAt)
   const root = thread.ref.id.slice(thread.ref.id.indexOf(':') + 1)
   let resource: string | null = `feishu/${ref.triggerId}/thread`
@@ -266,7 +266,7 @@ async function pollThread(ctx: SourceContext, thread: Thread, signal?: AbortSign
     const { botId, appId } = bot(ctx)
     for (const message of result.messages.filter(item => !known.has(item.message_id) && !item.deleted).reverse()) {
       if (signal?.aborted) return
-      const trigger = feishuTrigger(topicEvent(message, ref.chatId, direct, root), botId, appId)
+      const trigger = feishuTrigger(ctx.id, topicEvent(message, ref.chatId, direct, root), botId, appId)
       // 初始轮询时忽略早于线程订阅时间的消息。
       if (!trigger || (!initialized && Date.parse(trigger.at) < since)) continue
       await receive(ctx, trigger)

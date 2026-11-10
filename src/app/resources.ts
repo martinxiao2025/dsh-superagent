@@ -68,7 +68,8 @@ export interface ResourceHost {
   promptVersion(sessionId: string): PromptVersion
   /** 会话是否有权读取 `revision`（其当前运行的修订或之前运行过的任何修订）。 */
   mayRead(sessionId: string, revision: number): boolean
-  feishuPageSize(): number
+  /** 按记录读取飞书消息分页大小；省略记录时用默认飞书记录。 */
+  feishuPageSize(source?: string): number
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
 }
 export interface MainResourceHost extends ResourceHost {
@@ -206,7 +207,7 @@ const ROUTES: readonly Route[] = [
     const ref = feishuRef(source)
     if (!ref) throw new Error('A Feishu source trigger is required')
     const commands = read.host.commands.scope(source.source).withSignal(read.signal)
-    return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize()))
+    return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize(source.source)))
   }],
   ['github/', read => sourcePage(read, 'github', () => readGithub(read.host.commands.withSignal(read.signal), read.resource))],
   ['gitlab/', read => sourcePage(read, 'gitlab', () => readGitlab(read.host.commands.withSignal(read.signal), read.resource))],
@@ -223,8 +224,8 @@ const ROUTES: readonly Route[] = [
       : disposition
     // 省略卡片预览和自引用，因为该资源返回完整文本。
     const { preview: _preview, chars: _chars, read: _read, ...card } = triggerCard(found, visible)
-    const parent = found.source === 'feishu' && typeof found.meta.parentId === 'string' ? found.meta.parentId : undefined
-    const repliedTo = shown(parent ? host.store.triggers.get(feishuTriggerId(parent)) : undefined)
+    const parent = ref && typeof found.meta.parentId === 'string' ? found.meta.parentId : undefined
+    const repliedTo = shown(parent ? host.store.triggers.get(feishuTriggerId(found.source, parent)) : undefined)
     const neighbours = host.store.read.neighbours(threadKey(found.threads[0]!), found.at, found.id)
     const around = { before: shown(neighbours.before), after: shown(neighbours.after) }
     return { ...card, ...await host.sourceLink(found, signal), acknowledgement: host.store.replyStatus(key('ack', found.id)) ?? 'not_requested',

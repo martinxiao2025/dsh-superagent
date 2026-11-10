@@ -67,7 +67,7 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   threadContext: feishuThreadContext,
   find: (_instance, query) => ({ threads: [], terms: [...new Set(query.match(/om_[A-Za-z0-9_-]+/g) ?? [])] }),
   // 消息的触发器以该消息命名，因此它所回复的消息以其父消息命名。
-  repliesTo: trigger => typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.meta.parentId) : undefined,
+  repliesTo: trigger => typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.source, trigger.meta.parentId) : undefined,
   policy: {
     unnamed: { person: { zh: '飞书用户', en: 'Feishu user' }, bot: { zh: '飞书机器人', en: 'Feishu bot' } },
     schema: z.object({
@@ -121,7 +121,8 @@ export const feishuKind: SourceKind<FeishuConfig> = {
       { key: 'DSH_SUPERAGENT_FEISHU_BOT', description: { zh: '飞书机器人；lark-cli 以它行事', en: 'The Feishu bot; lark-cli acts as it' } },
       { key: 'DSH_SUPERAGENT_FEISHU_CHAT', description: { zh: '接下工单的飞书群 chat_id；工单不是从飞书来的时为空', en: 'chat_id of the Feishu chat that started the ticket; empty when the ticket did not start on Feishu' } },
     ],
-    values: ({ source, trigger }) => ({ DSH_SUPERAGENT_FEISHU_BOT: source?.kind === 'feishu' ? source.name || source.botId : '', DSH_SUPERAGENT_FEISHU_CHAT: trigger?.source === SOURCE ? String(trigger.meta.chatId ?? '') : '' }),
+    values: ({ source, trigger }) => ({ DSH_SUPERAGENT_FEISHU_BOT: source?.kind === 'feishu' ? source.name || source.botId : '',
+      DSH_SUPERAGENT_FEISHU_CHAT: trigger && trigger.threads[0]?.source === source?.id ? String(trigger.meta.chatId ?? '') : '' }),
   },
   facts: (source): Record<string, Localized | string> => source?.kind === 'feishu' ? { cli: { zh: `当前机器人 ${source.name || source.botId}`, en: `Current bot ${source.name || source.botId}` } } : {},
 }

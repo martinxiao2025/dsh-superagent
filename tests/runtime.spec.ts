@@ -120,7 +120,7 @@ const relays = (sessionId: string) => deliveries.mock.calls.map(([call]) => call
 const MEMBER = 'ou_alice'
 const CHAT = 'oc_team'
 function feishu(id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
-  return feishuTrigger({ message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000), mentions: [{ id: 'ou_bot' }], ...overrides }, 'ou_bot', 'cli_bot')!
+  return feishuTrigger('feishu', { message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000), mentions: [{ id: 'ou_bot' }], ...overrides }, 'ou_bot', 'cli_bot')!
 }
 const worktreeName = 'fix-regression'
 /** 用主会话的 orchestrator_route 路由一个决定并返回其结果；被拒绝的会抛出原因。 */
@@ -1181,7 +1181,7 @@ it('shows a failed reply as a problem with its attempts, an error of the reply e
 describe('the order of a Ticket\'s messages to one conversation', () => {
   const sent: string[] = []
   const refused = new Set<string>()
-  const message = (id: string, ticketId: string, channel = feishuChannel(CHAT, 'om_1')) => ({ id, channel, text: id, kind: 'reply' as const, ticketId })
+  const message = (id: string, ticketId: string, channel = feishuChannel('feishu', CHAT, 'om_1')) => ({ id, channel, text: id, kind: 'reply' as const, ticketId })
   const at = async (ms: number) => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + ms })
     try { await runtime.sendReplies() } finally { vi.useRealTimers() }
@@ -1202,7 +1202,7 @@ describe('the order of a Ticket\'s messages to one conversation', () => {
     refused.delete('ack-a')
     runtime.outbox.send(message('result-a', 'a'))
     // 同一聊天中的另一个工单，以及 Issue 中的同一工单，是其他订单。
-    runtime.outbox.send(message('ack-b', 'b', feishuChannel(CHAT, 'om_2')))
+    runtime.outbox.send(message('ack-b', 'b', feishuChannel('feishu', CHAT, 'om_2')))
     runtime.outbox.send(message('issue-a', 'a', githubChannel('github', 7)))
     await runtime.sendReplies()
     expect([runtime.outbox.status('result-a'), sent]).toEqual(['pending', ['ack-b', 'issue-a']])

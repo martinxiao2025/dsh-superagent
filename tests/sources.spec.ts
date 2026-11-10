@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Engine, MemoryRepositories, key, type Assessor, type Executor, type Thread, type Ticket, type Trigger } from '../src/core/index.ts'
-import { backfillChat, consumerRetry, feishuAdapter, feishuKind, feishuRef, feishuTime, feishuTrigger, feishuTriggerId, historyEvent } from '../src/sources/feishu.ts'
+import { backfillChat, consumerRetry, feishuAdapter, feishuKind, feishuRef, feishuSettings, feishuTime, feishuTrigger, feishuTriggerId, historyEvent } from '../src/sources/feishu.ts'
 import { KV } from '../src/kv.ts'
 import { pollThreads as pollFeishuThreads } from '../src/sources/feishu.ts'
 import { runFeishu } from '../src/sources/feishu-loops.ts'
@@ -122,18 +122,18 @@ describe('feishu source', () => {
     expect((await run({ configured: () => false })).health.feishu).toEqual({ state: 'paused', detail: 'Waiting for the deployment check', code: 'setupPending' })
   })
   it('translates live events into triggers keyed by root message, and drops the bot\'s own messages', () => {
-    const trigger = feishuTrigger({ message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: 'hi', create_time: '1757376000000', mentions: [{ id: 'cli_bot' }], root_id: 'om_1', parent_id: 'om_1', thread_id: 'omt_1', message_app_link: 'https://applink/x' }, 'ou_bot', 'cli_bot')!
+    const trigger = feishuTrigger('feishu', { message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: 'hi', create_time: '1757376000000', mentions: [{ id: 'cli_bot' }], root_id: 'om_1', parent_id: 'om_1', thread_id: 'omt_1', message_app_link: 'https://applink/x' }, 'ou_bot', 'cli_bot')!
     expect(trigger).toMatchObject({ id: key('feishu', 'om_2'), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_1' }], actor: { source: 'feishu', id: MEMBER }, human: true, at: '2025-09-09T00:00:00.000Z', url: 'https://applink/x', channel: { source: 'feishu', address: { chatId: 'oc_1', messageId: 'om_2' } }, meta: { chatId: 'oc_1', direct: false, mentioned: true, rootId: 'om_1', parentId: 'om_1', threadId: 'omt_1', messageId: 'om_2' } })
     expect(trigger.addressed).toBe('mention')
-    expect(feishuTrigger({ message_id: 'om_5', chat_id: 'oc_2', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user', content: 'hi', create_time: '1' }, 'ou_bot', 'cli_bot')!.addressed).toBe('direct')
-    expect(feishuTrigger({ message_id: 'om_6', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: 'hi', create_time: '1' }, 'ou_bot', 'cli_bot')).not.toHaveProperty('addressed')
+    expect(feishuTrigger('feishu', { message_id: 'om_5', chat_id: 'oc_2', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user', content: 'hi', create_time: '1' }, 'ou_bot', 'cli_bot')!.addressed).toBe('direct')
+    expect(feishuTrigger('feishu', { message_id: 'om_6', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: 'hi', create_time: '1' }, 'ou_bot', 'cli_bot')).not.toHaveProperty('addressed')
     expect(feishuRef(trigger)).toEqual({ triggerId: trigger.id, chatId: 'oc_1', messageId: 'om_2', at: trigger.at })
-    expect(feishuTrigger({ message_id: 'om_3', chat_id: 'oc_1', chat_type: 'p2p', sender_id: 'ou_bot', sender_type: 'bot', content: 'me', create_time: '1' }, 'ou_bot', 'cli_bot')).toBeUndefined()
-    expect(feishuTrigger(historyEvent({ message_id: 'om_4', chat_id: 'oc_1', create_time: '2', sender: { id: 'ou_x', sender_type: 'app' }, body: { content: '{"text":"from app"}' } }, 'oc_1', false), 'ou_bot', 'cli_bot')).toMatchObject({ human: false, text: 'from app', threads: [{ id: 'oc_1:om_4' }] })
+    expect(feishuTrigger('feishu', { message_id: 'om_3', chat_id: 'oc_1', chat_type: 'p2p', sender_id: 'ou_bot', sender_type: 'bot', content: 'me', create_time: '1' }, 'ou_bot', 'cli_bot')).toBeUndefined()
+    expect(feishuTrigger('feishu', historyEvent({ message_id: 'om_4', chat_id: 'oc_1', create_time: '2', sender: { id: 'ou_x', sender_type: 'app' }, body: { content: '{"text":"from app"}' } }, 'oc_1', false), 'ou_bot', 'cli_bot')).toMatchObject({ human: false, text: 'from app', threads: [{ id: 'oc_1:om_4' }] })
   })
   it('polls subscribed threads and stores unseen replies as triggers on that thread', async () => {
     const h = host()
-    const source = feishuTrigger({ message_id: 'om_root', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot fix', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
+    const source = feishuTrigger('feishu', { message_id: 'om_root', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot fix', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(source)
     subscribed(h, source.threads[0]!, { chatId: 'oc_1', messageId: 'om_root', sourceTriggerId: source.id })
     h.store.threads.save({ ...h.store.threads.get('feishu:oc_1:om_root')!, createdAt: '2025-09-01T00:00:00Z',
@@ -160,8 +160,8 @@ describe('feishu source', () => {
   it('translates a polled topic reply as the event consumer translates the live event', async () => {
     const h = host()
     // 机器人从其事件中获知的直接消息聊天。
-    h.store.set('feishu-chats', { oc_dm: true })
-    const source = feishuTrigger({ message_id: 'om_root', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
+    h.store.set('feishu-chats:feishu', { oc_dm: true })
+    const source = feishuTrigger('feishu', { message_id: 'om_root', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
       content: 'fix it', create_time: '1757376000000' }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(source)
     subscribed(h, source.threads[0]!)
@@ -178,7 +178,7 @@ describe('feishu source', () => {
       return { thread_id: 'omt_dm', has_more: false, messages }
     })
     await pollFeishuThreads(h.feishu)
-    const live = feishuTrigger({ message_id: 'om_reply', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
+    const live = feishuTrigger('feishu', { message_id: 'om_reply', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
       content: 'and the header',
       create_time: String(Date.parse('2026-09-11 12:00')), root_id: 'om_root', thread_id: 'omt_dm' }, 'ou_bot', 'cli_bot')
     expect(h.receive.mock.calls.map(([trigger]) => trigger)).toEqual([live])
@@ -192,7 +192,7 @@ describe('feishu source', () => {
   })
   it('polls a subscribed topic while a live ticket follows it or it had a message in the last two weeks', async () => {
     const h = host()
-    const source = feishuTrigger({ message_id: 'om_root', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
+    const source = feishuTrigger('feishu', { message_id: 'om_root', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
       content: 'fix', create_time: '1' }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(source)
     subscribed(h, source.threads[0]!)
@@ -209,18 +209,18 @@ describe('feishu source', () => {
   it('keeps a quiet topic in history recovery while a subscribed Thread that is polled follows it', async () => {
     const h = host()
     const day = 24 * 3600_000
-    const source = feishuTrigger({ message_id: 'om_root', chat_id: 'oc_team', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
+    const source = feishuTrigger('feishu', { message_id: 'om_root', chat_id: 'oc_team', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
       content: 'fix', create_time: String(Date.now() - 30 * day), thread_id: 'omt_followed' }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(source)
     subscribed(h, source.threads[0]!)
     h.store.tickets.save(openTicket('ticket'))
     const old = new Date(Date.now() - 30 * day).toISOString()
-    h.store.set('feishu-history-threads:oc_team', { omt_followed: old, omt_quiet: old })
+    h.store.set('feishu-history-threads:feishu:oc_team', { omt_followed: old, omt_quiet: old })
     vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
     vi.spyOn(h.feishu.commands, 'lark').mockResolvedValue({ has_more: false, items: [] })
     const now = new Date().toISOString()
     await backfillChat(h.feishu, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
-    expect(h.store.get('feishu-history-threads:oc_team')).toEqual({ omt_followed: old })
+    expect(h.store.get('feishu-history-threads:feishu:oc_team')).toEqual({ omt_followed: old })
     h.store.close()
   })
   it('refuses a history page with a message outside its chat or topic, and a page token that does not advance', async () => {
@@ -234,10 +234,10 @@ describe('feishu source', () => {
     lark.mockResolvedValueOnce({ has_more: false, items: [message({ chat_id: 'oc_other' })] })
     await expect(recover()).rejects.toThrow('outside the requested chat or thread')
     // 话题页面包含另一个话题的消息。
-    h.store.set('feishu-history-threads:oc_team', { omt_1: now })
+    h.store.set('feishu-history-threads:feishu:oc_team', { omt_1: now })
     lark.mockResolvedValueOnce({ has_more: false, items: [] }).mockResolvedValueOnce({ has_more: false, items: [message({ thread_id: 'omt_2' })] })
     await expect(recover()).rejects.toThrow('outside the requested chat or thread')
-    h.store.set('feishu-history-threads:oc_team', {})
+    h.store.set('feishu-history-threads:feishu:oc_team', {})
     const stuck = { has_more: true, page_token: 'p1', items: [] }
     lark.mockResolvedValueOnce(stuck).mockResolvedValueOnce(stuck)
     await expect(recover()).rejects.toThrow('did not advance')
@@ -247,7 +247,7 @@ describe('feishu source', () => {
   })
   it('stops reading a polled topic at the first message it knew, once the topic\'s first poll ran', async () => {
     const h = host()
-    const source = feishuTrigger({ message_id: 'om_root', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
+    const source = feishuTrigger('feishu', { message_id: 'om_root', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
       content: '@bot fix', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(source)
     subscribed(h, source.threads[0]!, { chatId: 'oc_1', messageId: 'om_root', sourceTriggerId: source.id })
@@ -271,7 +271,7 @@ describe('feishu source', () => {
     const h = host()
     const day = 24 * 3600_000
     const start = Date.parse('2026-09-01T00:00:00.000Z')
-    h.store.set('feishu-history-threads:oc_team', { omt_old: new Date(start).toISOString() })
+    h.store.set('feishu-history-threads:feishu:oc_team', { omt_old: new Date(start).toISOString() })
     let round = 0
     const scans: string[] = []
     vi.spyOn(h.feishu.commands, 'withSignal').mockReturnValue(h.feishu.commands)
@@ -291,8 +291,8 @@ describe('feishu source', () => {
     }
     // 聊天，以及最近 14 天内有消息的话题。
     expect(scans).toHaveLength(1 + 14)
-    expect(Object.keys(h.store.get<Record<string, string>>('feishu-history-threads:oc_team')!)).toHaveLength(14)
-    expect(h.store.get<Record<string, string>>('feishu-history-threads:oc_team')!.omt_29).toBe(new Date(start + 29 * day).toISOString())
+    expect(Object.keys(h.store.get<Record<string, string>>('feishu-history-threads:feishu:oc_team')!)).toHaveLength(14)
+    expect(h.store.get<Record<string, string>>('feishu-history-threads:feishu:oc_team')!.omt_29).toBe(new Date(start + 29 * day).toISOString())
     h.store.close()
   })
   it('skips and counts a history message it cannot read, and takes in the others', async () => {
@@ -412,7 +412,7 @@ describe('github source', () => {
   it('binds a PR to the unique live ticket on its branch and ends tickets when the PR closes', async () => {
     const h = host()
     const decisionId = 'd'
-    const request = feishuTrigger({ message_id: 'om_1', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot 修一下标题', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
+    const request = feishuTrigger('feishu', { message_id: 'om_1', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot 修一下标题', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(request)
     h.store.tickets.save({ id: 't1', title: 'one', decisionId, mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: 'feishu', id: MEMBER }, scope: '' }, channels: [{ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_1' } }], assignments: [{ id: 'a', state: 'running', createdAt: '' }], inputs: [], undelivered: [], createdAt: '', updatedAt: '', execution: execution('one'), origin: { triggerId: request.id, triggerIds: [request.id] } })
     const agentsPull = (number: number): Pull => ({ ...openPull(number), user: { login: 'agent-bot' }, head: { sha: 'abc',
@@ -478,7 +478,7 @@ describe('github source', () => {
   })
   it('writes the terminal notice in English for a request without Han characters', async () => {
     const h = host()
-    const request = feishuTrigger({ message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot fix the title', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
+    const request = feishuTrigger('feishu', { message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot fix the title', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(request)
     h.store.tickets.save({ id: 't2', title: 'two', decisionId: 'd2', mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: 'feishu', id: MEMBER }, scope: '' }, channels: [{ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_2' } }], assignments: [], inputs: [], undelivered: [], createdAt: '', updatedAt: '', ...pulled(12), origin: { triggerId: request.id, triggerIds: [request.id] } })
     expect(await observePull(h, endedPull(12, '2026-09-02T00:00:00Z', false))).toBe(true)
@@ -1109,9 +1109,9 @@ ${body}`)
       event('om_3', 'oc_group', 'group')].join('\n') + '\n')
     const { ctx, health, store } = consumerSource(cli('events'))
     running = runFeishu(ctx, controller.signal)
-    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_3'))).toBeDefined(), until)
-    expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId(id))?.meta.direct)).toEqual([false, true])
-    expect(store.get(KV.feishu.chats)).toEqual({ oc_group: false, oc_dm: true })
+    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('feishu', 'om_3'))).toBeDefined(), until)
+    expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId('feishu', id))?.meta.direct)).toEqual([false, true])
+    expect(store.get(KV.feishu.chats('feishu'))).toEqual({ oc_group: false, oc_dm: true })
     expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
     controller.abort(); await running; store.close()
   }, 20_000)
@@ -1119,7 +1119,7 @@ ${body}`)
     writeFileSync(join(dir, 'events'), event('om_crlf', 'oc_group', 'group') + '\n')
     const { ctx, health, store } = consumerSource(cli('crlf'))
     running = runFeishu(ctx, controller.signal)
-    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_crlf'))).toBeDefined(), until)
+    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('feishu', 'om_crlf'))).toBeDefined(), until)
     expect(health.feishu).toMatchObject({ state: 'ready' })
     controller.abort(); await running; store.close()
   }, 20_000)
@@ -1132,7 +1132,7 @@ ${body}`)
     // CLI 在就绪一秒后打印事件，早于消费者因来源关闭而停止。
     await vi.waitFor(() => expect(existsSync(join(dir, 'printed'))).toBe(true), until)
     await new Promise(resolve => setTimeout(resolve, 300))
-    expect(store.triggers.get(feishuTriggerId('om_9'))).toBeUndefined()
+    expect(store.triggers.get(feishuTriggerId('feishu', 'om_9'))).toBeUndefined()
     controller.abort(); await running; store.close()
   }, 20_000)
   it('keeps a chat\'s history cursor when its read fails, and recovers known direct chats only while direct messages are on', async () => {
@@ -1140,8 +1140,8 @@ ${body}`)
     const recovered = async (directMessages: boolean) => {
       const chat = (chatId: string) => ({ chatId, listen: 'mentions' })
       const { ctx, health, store } = consumerSource(cli('ready'), { chats: [chat('oc_a'), chat('oc_b')], directMessages })
-      store.set(KV.feishu.chats, { oc_dm: true, oc_a: false })
-      for (const chat of ['oc_a', 'oc_b', 'oc_dm']) store.set(KV.feishu.history(chat), hour)
+      store.set(KV.feishu.chats('feishu'), { oc_dm: true, oc_a: false })
+      for (const chat of ['oc_a', 'oc_b', 'oc_dm']) store.set(KV.feishu.history('feishu', chat), hour)
       const chats: string[] = []
       const lark = vi.spyOn(Commands.prototype, 'lark').mockImplementation(async args => {
         const params = args[2] === '/open-apis/im/v1/messages' ? JSON.parse(args.at(-1)!) as { container_id: string } : undefined
@@ -1153,7 +1153,7 @@ ${body}`)
       const loops = runFeishu(ctx, AbortSignal.any([stop.signal, controller.signal]))
       await vi.waitFor(() => expect(['ready', 'error']).toContain(health['feishu:history']?.state), until)
       stop.abort(); await loops; lark.mockRestore()
-      const cursors = Object.fromEntries(['oc_a', 'oc_b', 'oc_dm'].map(chat => [chat, store.get(KV.feishu.history(chat))]))
+      const cursors = Object.fromEntries(['oc_a', 'oc_b', 'oc_dm'].map(chat => [chat, store.get(KV.feishu.history('feishu', chat))]))
       const result = { chats, cursors, history: health['feishu:history'] }
       store.close(); rmSync(join(dir, 'db.sqlite'), { force: true }); rmSync(join(dir, 'db.sqlite-wal'), { force: true })
       rmSync(join(dir, 'db.sqlite-shm'), { force: true })
@@ -1481,5 +1481,19 @@ describe('observing the GitHub repository', () => {
       meta: { ci: true, branch: 'main', sha: 'bbb2222' }, url: 'https://github.com/acme/widgets/commit/bbb2222' })
     expect(h.receive.mock.calls[0]![0].text).toContain('Read github/commits/bbb2222/checks for every check.')
     h.store.close()
+  })
+})
+describe('Feishu records', () => {
+  it('reads page size and link timeout from the record\'s own settings and keeps its keys apart', () => {
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: {
+      feishu: { kind: 'feishu', enabled: true, config: { readPageSize: 5, linkTimeoutMs: 1000 } },
+      'feishu-work': { kind: 'feishu', enabled: true, config: { readPageSize: 33, linkTimeoutMs: 9000 } } } }))
+    sources.register(feishuKind)
+    expect(feishuSettings(sources, 'feishu')).toMatchObject({ readPageSize: 5, linkTimeoutMs: 1000 })
+    expect(feishuSettings(sources, 'feishu-work')).toMatchObject({ readPageSize: 33, linkTimeoutMs: 9000 })
+    expect(feishuSettings(sources)).toMatchObject({ readPageSize: 5 })
+    expect(KV.feishu.history('feishu', 'oc_1')).not.toBe(KV.feishu.history('feishu-work', 'oc_1'))
+    expect(KV.feishu.topics('feishu', 'oc_1')).not.toBe(KV.feishu.topics('feishu-work', 'oc_1'))
+    expect(KV.feishu.chats('feishu')).not.toBe(KV.feishu.chats('feishu-work'))
   })
 })

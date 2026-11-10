@@ -403,7 +403,8 @@ it('writes the Sources\' records in their current shape once, so no Source conve
   }
   db.close()
   const store = new Store(path)
-  expect(store.get(KV.feishu.topics('oc_team'))).toEqual({ omt_old: '2026-09-01T00:00:00.000Z' })
+  // 模式 10 的飞书键没有记录段，迁移按旧键名改写。
+  expect(store.get('feishu-history-threads:oc_team')).toEqual({ omt_old: '2026-09-01T00:00:00.000Z' })
   expect(store.triggers.get('dm')!.channel!.address).toEqual({ chatId: 'oc_dm', messageId: 'om_1', direct: 'true' })
   expect(store.receipts.waiting()[0]!.channel.address).toEqual({ chatId: 'oc_dm', messageId: 'om_1', direct: 'true' })
   expect(store.threads.get('feishu:oc_team:om_9')!.meta.url).toBe('https://applink.feishu.cn/client/chat/open?openChatId=oc_team')

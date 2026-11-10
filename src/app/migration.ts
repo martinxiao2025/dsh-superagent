@@ -15,7 +15,7 @@ import type { EffectKind, EffectPayloads } from './effects.ts'
 import { promptsNotice, settingsNotice, subscriptionNotice } from './notices.ts'
 import type { SettingsVersion, Store } from './store.ts'
 import { Versions } from './versions.ts'
-import { KV, type Key } from '../kv.ts'
+import { KV, record, type Key } from '../kv.ts'
 
 export const SCHEMA_VERSION = 11
 /** 此构建可直接打开并迁移的最旧数据库模式版本。 */
@@ -457,21 +457,25 @@ function migrateSourceRecords(store: Store): void {
   githubCursors(store)
   assessmentTriggers(store)
 }
+/** 模式 10 的飞书键没有记录段；迁移只读写这些旧键，运行时的新键由来源按记录写入。 */
+const legacyFeishuTopics = 'feishu-history-threads:'
+const legacyFeishuHistory = (chat: string): Key<string> => record<string>(`feishu-history:${chat}`)
+const legacyFeishuChats = (): Key<Record<string, boolean>> => record<Record<string, boolean>>('feishu-chats')
 /** 将旧版飞书话题 ID 数组转换为以话题 ID 为键、包含会话最后恢复时间戳的映射。 */
 function feishuTopics(store: Store): void {
-  for (const name of store.keys(KV.feishu.topics)) {
+  for (const name of store.keys(legacyFeishuTopics)) {
     const topics: unknown = store.get(name)
     if (!Array.isArray(topics)) continue
-    const seen = store.get(KV.feishu.history(name.slice(KV.feishu.topics.prefix.length))) ?? new Date().toISOString()
+    const seen = store.get(legacyFeishuHistory(name.slice(legacyFeishuTopics.length))) ?? new Date().toISOString()
     store.set(name, Object.fromEntries(topics.map(id => [String(id), seen])))
   }
 }
 /**
- * 从 `KV.feishu.chats` 向飞书渠道地址回填 `direct: 'true'`，因为飞书 `oc_` 会话 ID
+ * 从旧版 `feishu-chats` 向飞书渠道地址回填 `direct: 'true'`，因为飞书 `oc_` 会话 ID
  * 自身无法区分私聊与群聊。
  */
 function feishuDirectAddresses(store: Store): void {
-  const chats = store.get(KV.feishu.chats) ?? {}
+  const chats = store.get(legacyFeishuChats()) ?? {}
   const direct = (channel: unknown): channel is ChannelRef => isObject(channel) && channel.source === 'feishu' && isObject(channel.address)
     && chats[String(channel.address.chatId)] === true && channel.address.direct === undefined
   const marked = (channel: ChannelRef): ChannelRef => direct(channel)

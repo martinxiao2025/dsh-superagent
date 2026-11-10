@@ -1,11 +1,12 @@
 /** GitLab 出站频道：用智能体账号在 Issue/MR 下回帖。 */
 import { z } from 'zod'
 import type { OutboundMessage } from '../core/index.ts'
+import { webBaseOf } from '../deployment.ts'
 import { CliError } from '../infra/commands.ts'
 import { sameName } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import type { ChannelLink, ChannelLinks } from './kind.ts'
-import { NoteSchema } from './gitlab-trigger.ts'
+import { GITLAB_WEB, NoteSchema } from './gitlab-trigger.ts'
 
 /** GitLab 返回 404 表示 issue/MR/note 已不存在，重试也不会成功。 */
 const gone = (error: unknown): boolean => error instanceof CliError && error.code === 404
@@ -31,12 +32,13 @@ export async function sendGitlab(host: Pick<SourceContext, 'commands'>, message:
     throw error
   }
 }
-/** 频道深链优先使用触发器的网页 URL；没有时按 gitlab.com 的规范路径拼接。 */
+/** 频道深链优先使用触发器的网页 URL；没有时按记录实例的规范路径拼接。 */
 export function gitlabLink(address: Record<string, string>, links: ChannelLinks): ChannelLink {
   const number = address.number ?? ''
   const isPr = address.kind === 'mr'
   const project = links.gitlab?.project
-  const fallback = project ? `https://gitlab.com/${project}/-/${isPr ? 'merge_requests' : 'issues'}/${number}` : ''
+  const site = webBaseOf(links.gitlab?.instanceUrl ?? '', GITLAB_WEB).replace(/\/+$/, '')
+  const fallback = project ? `${site}/${project}/-/${isPr ? 'merge_requests' : 'issues'}/${number}` : ''
   return { url: address.url ?? fallback,
     label: isPr ? { zh: `GitLab !${number}`, en: `GitLab !${number}` }
       : { zh: `GitLab #${number}`, en: `GitLab #${number}` } }

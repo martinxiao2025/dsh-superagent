@@ -122,11 +122,26 @@ describe('Source registry', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: {} },
       github: { kind: 'github', enabled: true, config: {} } } }))
     sources.register(feishuKind); sources.register(githubKind)
-    const reply = feishuTrigger({ message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: 'ou_alice', sender_type: 'user',
+    const reply = feishuTrigger('feishu', { message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: 'ou_alice', sender_type: 'user',
       content: 'yes', create_time: '1757376000000', parent_id: 'om_1' }, 'ou_bot', 'cli_bot')!
-    expect(sources.repliesTo(reply)).toBe(feishuTriggerId('om_1'))
+    expect(sources.repliesTo(reply)).toBe(feishuTriggerId('feishu', 'om_1'))
     expect(sources.repliesTo({ ...reply, meta: { ...reply.meta, parentId: undefined } })).toBeUndefined()
     expect(sources.repliesTo({ ...reply, source: 'github' })).toBeUndefined()
+  })
+  it('keeps two Feishu records\' triggers, threads and replies apart', () => {
+    const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: {
+      feishu: { kind: 'feishu', enabled: true, config: {} },
+      'feishu-work': { kind: 'feishu', enabled: true, config: {} } } }))
+    sources.register(feishuKind)
+    const event = { message_id: 'om_7', chat_id: 'oc_1', chat_type: 'group', sender_id: 'ou_alice', sender_type: 'user',
+      content: 'yes', create_time: '1757376000000', parent_id: 'om_1' }
+    const primary = feishuTrigger('feishu', event, 'ou_bot', 'cli_bot')!
+    const second = feishuTrigger('feishu-work', event, 'ou_bot', 'cli_bot')!
+    expect(second).toMatchObject({ source: 'feishu-work', threads: [{ source: 'feishu-work', id: 'oc_1:om_7' }],
+      actor: { source: 'feishu-work', id: 'ou_alice' }, channel: { source: 'feishu-work', thread: 'feishu-work:oc_1' } })
+    expect(second.id).not.toBe(primary.id)
+    expect(sources.repliesTo(primary)).toBe(feishuTriggerId('feishu', 'om_1'))
+    expect(sources.repliesTo(second)).toBe(feishuTriggerId('feishu-work', 'om_1'))
   })
   it('finds what a search query names in each installed record', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: {
@@ -169,13 +184,13 @@ describe('Source registry', () => {
     expect(sources.channelAllowed({ source: 'feishu', address: { chatId: 'oc_team' } })).toBe(true)
     expect(sources.channelAllowed({ source: 'feishu', address: { chatId: 'oc_other' } })).toBe(false)
     // 直接聊天 ID 也以 oc_ 开头；地址表明它是直接聊天，而关闭直接消息后它不会得到回复。
-    expect(sources.channelAllowed(feishuChannel('oc_dm', 'om_1', true))).toBe(false)
+    expect(sources.channelAllowed(feishuChannel('feishu', 'oc_dm', 'om_1', true))).toBe(false)
     expect(sources.channelAllowed({ source: 'github', address: { number: '7' } })).toBe(true)
   })
   it('delivers a reply to a direct message under the default settings', async () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', enabled: true, config: {} } } }))
     sources.register(feishuKind)
-    const trigger = feishuTrigger({ message_id: 'om_dm', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: 'ou_alice', sender_type: 'user',
+    const trigger = feishuTrigger('feishu', { message_id: 'om_dm', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: 'ou_alice', sender_type: 'user',
       content: 'fix it', create_time: '1757376000000' }, 'ou_bot', 'cli_bot')!
     const channel = trigger.channel!
     expect(channel.address).toEqual({ chatId: 'oc_dm', messageId: 'om_dm', direct: 'true' })
