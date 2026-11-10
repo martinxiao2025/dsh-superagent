@@ -23,8 +23,30 @@ export interface WorkItem {
   text: string
 }
 
+/** 清单中的一行：行号用于把导入问题定位回原表，`values` 已按表头映射。 */
+export interface TaskRow { number: number; values: Record<string, string> }
+
+/** 一次导入的原始输入：表头与数据行。 */
+export interface TaskTableInput { header: readonly string[]; rows: readonly TaskRow[] }
+
+/** 一条导入问题：定位到具体行，便于用户回到表格修正后重新导入。 */
+export interface TaskIssue { row: number; reason: string }
+
+/**
+ * 清单不满足导入契约时抛出：携带全部问题，整批拒绝。
+ * 用显式错误替代“成功导入 0 条”或静默丢行，调用方把 message 直接写进运行状态与健康详情。
+ */
+export class TaskListError extends Error {
+  readonly issues: TaskIssue[]
+  constructor(message: string, issues: readonly TaskIssue[] = []) {
+    super(message)
+    this.name = 'TaskListError'
+    this.issues = [...issues]
+  }
+}
+
 /** 工作项在流水线中的状态；工单自身的状态仍由引擎维护。 */
-export type ItemState = 'queued' | 'running' | 'succeeded' | 'failed' | 'written-back' | 'writeback-failed' | 'skipped'
+export type ItemState = 'queued' | 'running' | 'succeeded' | 'failed' | 'written-back' | 'writeback-failed'
 /** 持久化到 KV 的单条工作项记录。 */
 export interface ItemRecord {
   state: ItemState
@@ -38,19 +60,49 @@ export interface ItemRecord {
 }
 export type ItemRecords = Record<string, ItemRecord>
 
-/** 把一行按列映射规范化；编号缺失时用标题与描述的摘要补齐。 */
-function normalizeRow(row: Record<string, string>, columns: TaskColumns): RawTask | undefined {
-  const title = (row[columns.title] ?? '').trim()
-  if (!title) return undefined
-  const description = (row[columns.description] ?? '').trim()
-  const id = (row[columns.id] ?? '').trim() || `row-${simpleHash(`${title}\n${description}`)}`
-  return { id, title, description, status: (row[columns.status] ?? '').trim(),
-    ...(row[columns.priority]?.trim() ? { priority: row[columns.priority]!.trim() } : {}) }
+/** 问题摘要里最多逐条列出的行数。 */
+const ISSUE_LIMIT = 5
+
+/** 把多条问题压成一句可直接展示的摘要；超出上限时注明剩余条数，避免日志被长表格淹没。 */
+function describe(issues: readonly TaskIssue[]): string {
+  const shown = issues.slice(0, ISSUE_LIMIT).map(issue => `第 ${issue.row} 行 ${issue.reason}`)
+  const rest = issues.length - shown.length
+  return `${issues.length} 处问题：${shown.join('；')}${rest > 0 ? `；另有 ${rest} 处未列出` : ''}`
 }
 
-/** 规范化全部行，丢弃没有标题的行并保持原顺序。 */
-export function normalizeTasks(rows: readonly Record<string, string>[], columns: TaskColumns): RawTask[] {
-  return rows.flatMap(row => { const task = normalizeRow(row, columns); return task ? [task] : [] })
+/**
+ * 校验并规范化清单：编号与标题列必须存在，每行必须有非空编号与标题，编号在整张表内唯一。
+ * 任一条件不满足即整批拒绝，并把问题按行号汇总，避免“成功导入 0 条”或静默丢行。
+ * @throws TaskListError 表头缺列、没有数据行或存在行级问题时。
+ */
+export function importTasks(input: TaskTableInput, columns: TaskColumns): RawTask[] {
+  if (!columns.id || !columns.title) throw new TaskListError('任务编号列与标题列不能为空，请先填写列名')
+  const missing = [columns.id, columns.title].filter(name => !input.header.some(cell => cell.trim() === name))
+  if (missing.length) {
+    const header = input.header.filter(Boolean).join('、') || '空'
+    throw new TaskListError(`任务清单缺少必填列：${missing.join('、')}（当前表头：${header}）。`
+      + '请修正表头拼写，或在流水线记录里把编号列、标题列改成实际表头。')
+  }
+  if (!input.rows.length) throw new TaskListError('任务清单只有表头、没有数据行，本次未导入任何任务')
+
+  const issues: TaskIssue[] = []
+  const seen = new Map<string, number>()
+  const tasks: RawTask[] = []
+  for (const row of input.rows) {
+    const value = (name: string): string => (row.values[name] ?? '').trim()
+    const id = value(columns.id)
+    const title = value(columns.title)
+    if (!id) { issues.push({ row: row.number, reason: `缺少任务编号（列 ${columns.id} 不能为空）` }); continue }
+    const first = seen.get(id)
+    if (first !== undefined) { issues.push({ row: row.number, reason: `任务编号 ${id} 与第 ${first} 行重复` }); continue }
+    if (!title) { issues.push({ row: row.number, reason: `缺少标题（列 ${columns.title} 不能为空）` }); continue }
+    seen.set(id, row.number)
+    const description = value(columns.description)
+    const priority = value(columns.priority)
+    tasks.push({ id, title, description, status: value(columns.status), ...(priority ? { priority } : {}) })
+  }
+  if (issues.length) throw new TaskListError(`任务清单未导入，${describe(issues)}`, issues)
+  return tasks
 }
 
 const CHECKBOX = /^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]\s+(.+)$/

@@ -12,30 +12,53 @@ export interface XlsxTarget { taskId: string; taskTitle: string }
 /** 回写所需的列映射；只用到定位行与状态列。 */
 export interface XlsxColumns { id: string; title: string; status: string }
 
+/** 清单中的一行：`number` 是表内物理行号（表头为第 1 行），用于把导入问题定位回原表。 */
+export interface TaskTableRow { number: number; values: Record<string, string> }
+/** 清单的首行表头与其余非空数据行。 */
+export interface TaskTable { header: string[]; rows: TaskTableRow[] }
+
+/** 表格的原始形态：保留行号与未映射的单元格，供表头校验与行号定位共用。 */
+interface NumberedCells { number: number; cells: string[] }
+
 /**
- * 读取清单并返回以表头为键的行；第一张表或 `sheet` 指定的表。
+ * 读取清单为带行号的表格；第一张表或 `sheet` 指定的表。
  * @throws TaskFileError 当文件不可读、格式不支持或缺少表头时。
  */
-export async function readTaskRows(file: string, sheet: string): Promise<Record<string, string>[]> {
+export async function readTaskTable(file: string, sheet: string): Promise<TaskTable> {
   const extension = extname(file).toLowerCase()
   const buffer = await readFile(file).catch(error => { throw new TaskFileError(`无法读取任务清单：${messageOf(error)}`) })
-  if (extension === '.xlsx') return rowsOf(sheetRows(buffer, sheet))
+  if (extension === '.xlsx') return tableOf(sheetRows(buffer, sheet))
   if (extension === '.csv' || extension === '.tsv') {
     const delimiter = extension === '.tsv' ? '\t' : ','
-    return rowsOf(parseDelimited(buffer.toString('utf8').replace(/^\uFEFF/, ''), delimiter))
+    return tableOf(numbered(parseDelimited(buffer.toString('utf8').replace(/^\uFEFF/, ''), delimiter)))
   }
   throw new TaskFileError(`不支持的任务清单格式：${extension || '(无扩展名)'}`)
 }
 
-/** 第一行作为表头；缺少表头或只有表头时返回空数组。 */
-export function rowsOf(table: readonly (readonly string[])[]): Record<string, string>[] {
-  const [header, ...body] = table
-  if (!header?.length) return []
-  return body.filter(row => row.some(cell => cell.trim())).map(row => {
-    const record: Record<string, string> = {}
-    header.forEach((name, index) => { if (name.trim()) record[name.trim()] = row[index] ?? '' })
-    return record
+/** 读取清单并返回以表头为键的行；需要行号的调用方应使用 `readTaskTable`。 */
+export async function readTaskRows(file: string, sheet: string): Promise<Record<string, string>[]> {
+  const table = await readTaskTable(file, sheet)
+  return table.rows.map(row => row.values)
+}
+
+/** 给 CSV/TSV 的记录补上物理行号；序号包含表头，与表格软件的行号一致。 */
+function numbered(table: readonly (readonly string[])[]): NumberedCells[] {
+  return table.map((cells, index) => ({ number: index + 1, cells: [...cells] }))
+}
+
+/**
+ * 第一行作为表头，其余行按表头映射为键值；整行空白的行被忽略。
+ * @throws TaskFileError 当第一行没有可用的列名时。
+ */
+export function tableOf(table: readonly NumberedCells[]): TaskTable {
+  const header = (table[0]?.cells ?? []).map(cell => cell.trim())
+  if (!header.some(Boolean)) throw new TaskFileError('任务清单缺少表头：第一行必须是列名')
+  const rows = table.slice(1).filter(row => row.cells.some(cell => cell.trim())).map(row => {
+    const values: Record<string, string> = {}
+    header.forEach((name, index) => { if (name) values[name] = row.cells[index] ?? '' })
+    return { number: row.number, values }
   })
+  return { header, rows }
 }
 
 /** 解析带引号的 CSV/TSV；支持双引号转义与字段内换行。 */
@@ -82,7 +105,7 @@ interface ZipEntry {
 }
 
 /** 从 xlsx（ZIP）中取出指定文档的文本；`sheet` 为空时取第一张表。 */
-function sheetRows(buffer: Buffer, sheet: string): string[][] {
+function sheetRows(buffer: Buffer, sheet: string): NumberedCells[] {
   const entries = zipEntries(buffer)
   const entry = (name: string): Buffer | undefined => {
     const found = entries.find(item => item.name === name)
@@ -270,17 +293,18 @@ function sheetPath(workbook: string, rels: string, sheet: string): string {
   return path.replace(/^xl\/xl\//, 'xl/')
 }
 
-/** 解析工作表行；单元格按 `r` 属性的列字母定位，空缺列留空。 */
-function xmlRows(xml: string, shared: readonly string[]): string[][] {
-  return [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].map(match => {
+/** 解析工作表行；单元格按 `r` 属性的列字母定位，空缺列留空，行号取 `r` 属性。 */
+function xmlRows(xml: string, shared: readonly string[]): NumberedCells[] {
+  return [...xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)].map((match, position) => {
     const cells: string[] = []
-    for (const cell of match[1]!.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    for (const cell of match[2]!.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
       const attrs = attributes(cell[1]!)
       const index = columnIndex(attrs.r ?? '')
       while (cells.length < index) cells.push('')
       cells[index] = cellValue(attrs, cell[2]!, shared)
     }
-    return cells
+    const declared = Number(attributes(match[1]!).r ?? '')
+    return { number: Number.isFinite(declared) && declared > 0 ? declared : position + 1, cells }
   })
 }
 

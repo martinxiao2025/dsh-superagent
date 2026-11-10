@@ -9,7 +9,7 @@ import { parseDelimited, readTaskRows } from '../src/pipeline/excel.ts'
 import { serialize as serializeTable } from '../src/pipeline/writeback.ts'
 import { checklistTasks, feishuToken, tableRows } from '../src/pipeline/feishu.ts'
 import { runPipeline, type PipelineHost } from '../src/pipeline/runner.ts'
-import { normalizeTasks, plannable, splitTask, workItems } from '../src/pipeline/tasks.ts'
+import { importTasks, plannable, splitTask, workItems, type TaskTableInput } from '../src/pipeline/tasks.ts'
 import { writeTaskStatus } from '../src/pipeline/writeback.ts'
 import type { Commands } from '../src/infra/commands.ts'
 import type { ScheduledTicket, Ticket } from '../src/core/index.ts'
@@ -18,6 +18,17 @@ const columns = { id: 'id', title: 'title', description: 'description', status: 
 
 /** 创建临时目录，用于清单、代码镜像与运行状态。 */
 const temporary = (): string => mkdtempSync(join(tmpdir(), 'dsh-pipeline-'))
+
+/** 用表头与二维单元格拼出一次导入输入；行号从第 2 行开始，与表格软件显示一致。 */
+function table(header: readonly string[], rows: readonly (readonly string[])[]): TaskTableInput {
+  return {
+    header,
+    rows: rows.map((cells, index) => ({
+      number: index + 2,
+      values: Object.fromEntries(header.map((name, position) => [name, cells[position] ?? '']).filter(entry => entry[0] !== '')),
+    })),
+  }
+}
 
 describe('code remote', () => {
   it('derives HTTPS remotes from source records and accepts an SSH override', () => {
@@ -41,11 +52,11 @@ describe('task list parsing', () => {
     expect(rows).toEqual([['id', 'title', 'description'], ['1', '登录', '第一行\n第二行'], ['2', '导出', '含 "引号"']])
   })
 
-  it('normalizes rows into tasks and generates a stable id when missing', () => {
-    const tasks = normalizeTasks([{ title: ' 修复登录 ', description: '文案', status: '待处理' }, { title: '   ' }], columns)
-    expect(tasks).toHaveLength(1)
-    expect(tasks[0]).toMatchObject({ title: '修复登录', description: '文案', status: '待处理' })
-    expect(tasks[0]!.id).toMatch(/^row-/)
+  it('imports rows into tasks, trims cells and keeps the sheet order', () => {
+    const tasks = importTasks(table(['id', 'title', 'description', 'status'],
+      [[' 1 ', ' 修复登录 ', '文案', '待处理'], ['2', '导出', '', '']]), columns)
+    expect(tasks).toEqual([{ id: '1', title: '修复登录', description: '文案', status: '待处理' },
+      { id: '2', title: '导出', description: '', status: '' }])
   })
 
   it('splits checkboxes first, then numbered lists, otherwise keeps one item', () => {
@@ -57,7 +68,7 @@ describe('task list parsing', () => {
   })
 
   it('keeps work item keys stable across runs and plans failed items until the retry limit', () => {
-    const tasks = normalizeTasks([{ id: '1', title: 'A', description: '- [ ] x', status: '' }], columns)
+    const tasks = importTasks(table(['id', 'title', 'description', 'status'], [['1', 'A', '- [ ] x', '']]), columns)
     const first = workItems(tasks, 'pipe')
     expect(workItems(tasks, 'pipe')).toEqual(first)
     const records = { [first[0]!.key]: { state: 'failed' as const, attempts: 2, at: '2026-11-10T00:00:00.000Z' } }
@@ -73,6 +84,35 @@ describe('task list parsing', () => {
     const rows = await readTaskRows(file, '任务')
     expect(rows).toEqual([{ id: '1', title: '修复登录', description: '来自共享字符串', status: '待处理' },
       { id: '2', title: '导出', description: '内联文本', status: '进行中' }])
+  })
+})
+
+describe('task list import contract', () => {
+  it('rejects a header that misses id or title, naming the actual columns', () => {
+    expect(() => importTasks(table(['编号', '标题'], [['1', 'A']]), columns))
+      .toThrow('缺少必填列：id、title（当前表头：编号、标题）')
+    expect(() => importTasks(table(['编号', 'title'], [['1', 'A']]), columns))
+      .toThrow('缺少必填列：id（当前表头：编号、title）')
+  })
+
+  it('rejects duplicate ids in one batch and names both rows', () => {
+    expect(() => importTasks(table(['id', 'title'], [['DEMO-1', 'A'], ['DEMO-1', 'B']]), columns))
+      .toThrow('第 3 行 任务编号 DEMO-1 与第 2 行重复')
+  })
+
+  it('rejects rows without an id or a title instead of dropping them', () => {
+    expect(() => importTasks(table(['id', 'title'], [['', 'A'], ['2', '   ']]), columns))
+      .toThrow('第 2 行 缺少任务编号（列 id 不能为空）；第 3 行 缺少标题（列 title 不能为空）')
+  })
+
+  it('rejects a sheet that only has a header instead of reporting zero imports', () => {
+    expect(() => importTasks({ header: ['id', 'title'], rows: [] }, columns)).toThrow('只有表头、没有数据行')
+  })
+
+  it('keeps priority only when the cell is filled', () => {
+    const tasks = importTasks(table(['id', 'title', 'priority'], [['1', 'A', '高'], ['2', 'B', ' ']]), columns)
+    expect(tasks[0]).toEqual({ id: '1', title: 'A', description: '', status: '', priority: '高' })
+    expect(tasks[1]).toEqual({ id: '2', title: 'B', description: '', status: '' })
   })
 })
 
@@ -238,6 +278,28 @@ describe('pipeline runner', () => {
     await runPipeline(hostValue, new AbortController().signal)
     expect(h.admitted).toHaveLength(2)
     expect(readFileSync(file, 'utf8')).toContain('1,登录,,失败')
+  })
+
+  it('rejects a whole batch with repeated ids and admits nothing', async () => {
+    const dir = temporary()
+    const file = join(dir, 'tasks.csv')
+    writeFileSync(file, 'id,title,status\n1,登录,待处理\n1,导出,待处理\n', 'utf8')
+    const h = host(file)
+    const reports: string[] = []
+    await expect(runPipeline({ ...h.host, sleep: h.sleep, report: (_entry, value) => { reports.push(value.code ?? '') } },
+      new AbortController().signal)).rejects.toThrow('第 3 行 任务编号 1 与第 2 行重复')
+    expect(h.admitted).toHaveLength(0)
+    expect(reports).toContain('pipelineRunFailed')
+  })
+
+  it('fails instead of importing zero rows when the title header is misspelled', async () => {
+    const dir = temporary()
+    const file = join(dir, 'tasks.csv')
+    writeFileSync(file, 'id,titel,status\n1,登录,待处理\n', 'utf8')
+    const h = host(file)
+    await expect(runPipeline({ ...h.host, sleep: h.sleep }, new AbortController().signal))
+      .rejects.toThrow('缺少必填列：title（当前表头：id、titel、status）')
+    expect(h.admitted).toHaveLength(0)
   })
 })
 

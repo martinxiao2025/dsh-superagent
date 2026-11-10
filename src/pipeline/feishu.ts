@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import type { Commands } from '../infra/commands.ts'
 import type { TaskColumns, PipelineConfig } from './config.ts'
-import { normalizeTasks, simpleHash, type RawTask } from './tasks.ts'
+import { importTasks, simpleHash, type RawTask } from './tasks.ts'
 
 const nodeSchema = z.object({ node: z.object({ obj_token: z.string(), obj_type: z.string() }) })
 const contentSchema = z.object({ content: z.string() })
@@ -30,7 +30,10 @@ export async function readFeishuTasks(commands: Commands, config: PipelineConfig
   const token = reference.kind === 'wiki' ? await resolveWikiNode(commands, reference.token) : reference.token
   const { content } = contentSchema.parse(await commands.lark(['api', 'GET', `/open-apis/docx/v1/documents/${token}/raw_content`]))
   const table = tableRows(content)
-  if (table.length && Object.hasOwn(table[0]!, columns.title)) return normalizeTasks(table, columns)
+  if (table.length && Object.hasOwn(table[0]!, columns.title)) {
+    const header = Object.keys(table[0]!)
+    return importTasks({ header, rows: table.map((values, index) => ({ number: index + 2, values })) }, columns)
+  }
   return checklistTasks(content)
 }
 

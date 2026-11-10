@@ -84,20 +84,26 @@ export async function runPipeline(host: PipelineHost, signal: AbortSignal): Prom
   }
 
   let items: WorkItem[]
+  /** 本次读到但与待办状态不匹配、暂不派工的任务数；写进运行状态，避免“跑了但没动”看起来像静默失败。 */
+  let filtered = 0
   try {
     state('loading-tasks')
     const reader = createTaskSource(config, config.taskKind === 'feishu' ? host.commands.scope(config.feishuSource) : host.commands)
     const tasks = await reader.load({ signal })
     const pending = new Set(config.pendingStatuses.split(',').map(item => item.trim()).filter(Boolean))
     const eligible = tasks.filter(task => task.status === '' || pending.has(task.status))
+    filtered = tasks.length - eligible.length
     items = workItems(eligible, host.recordId)
-    host.report('tasks', health('ready', 'pipelineTasks', { total: String(tasks.length), pending: String(items.length) }))
+    host.report('tasks', health('ready', 'pipelineTasks', { total: String(tasks.length), pending: String(eligible.length),
+      ...(filtered ? { filtered: String(filtered) } : {}) }))
   } catch (error) {
+    host.report('tasks', health('error', 'pipelineRunFailed', { error: messageOf(error) }))
     state('failed', messageOf(error))
     throw error
   }
 
-  state('planning')
+  const unplanned = !filtered ? undefined : `共 ${filtered} 项任务不是待办状态，本次未派工`
+  state('planning', unplanned)
   const records: ItemRecords = host.state.get(KV.pipeline.items(host.recordId)) ?? {}
   recover(host, records)
   const candidates = plannable(items, records, config.maxRetries)
