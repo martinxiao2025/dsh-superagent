@@ -1,0 +1,402 @@
+{
+  "generatedAt": "2026-11-11T11:48:29.203Z",
+  "scratch": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-excel-e2e",
+  "stateDir": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-excel-e2e\\state",
+  "workCopy": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-excel-e2e\\state\\repos\\ledger",
+  "origin": "C:\\Users\\61054\\AppData\\Local\\Temp\\dsh-excel-e2e\\origin.git",
+  "phases": [
+    {
+      "phase": "启动轮询：真实同步 + 拆分 + 派工",
+      "at": "2026-11-11T11:48:17.278Z",
+      "detail": {
+        "entries": [
+          {
+            "id": "7f5e833a60d65c25d40f49ca7772fe2d",
+            "task": "A",
+            "item": 0,
+            "title": "发布准备",
+            "state": "running"
+          },
+          {
+            "id": "5ed8b37e246b4205885ba968e20fc624",
+            "task": "B",
+            "item": 0,
+            "title": "回归测试",
+            "state": "queued"
+          },
+          {
+            "id": "814fb889fc42e2b828b813d99f93532d",
+            "task": "C",
+            "item": 0,
+            "title": "文档更新 / 改 012",
+            "state": "queued"
+          },
+          {
+            "id": "20441c6ec89ae71475b0bde7faa64435",
+            "task": "C",
+            "item": 1,
+            "title": "文档更新 / 改 013",
+            "state": "queued"
+          }
+        ],
+        "workCopyHead": "80d7c1c5a0008b144b74a3874c0eb86282b12aa4"
+      }
+    },
+    {
+      "phase": "执行中扫描：轮询推迟",
+      "at": "2026-11-11T11:48:17.278Z",
+      "detail": {
+        "deferred": {
+          "reason": "A task from this project is running; polling and the git pull are deferred",
+          "at": "2026-11-11T11:48:17.278Z"
+        },
+        "gitHead": "80d7c1c5a0008b144b74a3874c0eb86282b12aa4",
+        "entries": 4
+      }
+    },
+    {
+      "phase": "A 成功：回写 done",
+      "at": "2026-11-11T11:48:17.278Z",
+      "detail": {
+        "ticket": "ticket-1",
+        "csv": "﻿task_id,title,status,description,priority\r\nA,发布准备,done,,P1\r\nB,回归测试,todo,,P1\r\nC,文档更新,todo,\"1. 改 012\r\n2. 改 013\",P2\r\n",
+        "workCopyLog": "2ee3811 chore: record task A as done\n80d7c1c seed: 初始任务清单"
+      }
+    },
+    {
+      "phase": "B 首次失败：退避重排",
+      "at": "2026-11-11T11:48:17.278Z",
+      "detail": {
+        "ticket": "ticket-2",
+        "entry": {
+          "state": "queued",
+          "attempt": 1,
+          "dueAt": 1794397702278,
+          "reason": "The ticket ended: failed"
+        }
+      }
+    },
+    {
+      "phase": "B 重试耗尽：最终失败并回写 blocked",
+      "at": "2026-11-11T11:48:22.278Z",
+      "detail": {
+        "ticket": "ticket-3",
+        "entry": {
+          "state": "failed",
+          "attempt": 2,
+          "reason": "The ticket ended: failed"
+        },
+        "csv": "﻿task_id,title,status,description,priority\r\nA,发布准备,done,,P1\r\nB,回归测试,blocked,,P1\r\nC,文档更新,todo,\"1. 改 012\r\n2. 改 013\",P2\r\n"
+      }
+    },
+    {
+      "phase": "C 首个子项成功：整任务回写 done，次子项取消",
+      "at": "2026-11-11T11:48:22.278Z",
+      "detail": {
+        "ticket": "ticket-4",
+        "entries": [
+          {
+            "state": "succeeded",
+            "item": 0
+          },
+          {
+            "state": "cancelled",
+            "reason": "The task disappeared from its source",
+            "item": 1
+          }
+        ],
+        "csv": "﻿task_id,title,status,description,priority\r\nA,发布准备,done,,P1\r\nB,回归测试,blocked,,P1\r\nC,文档更新,done,\"1. 改 012\r\n2. 改 013\",P2\r\n"
+      }
+    },
+    {
+      "phase": "幂等重扫：队列不变",
+      "at": "2026-11-11T11:48:22.278Z",
+      "detail": {
+        "entries": [
+          {
+            "id": "7f5e833a60d65c25d40f49ca7772fe2d",
+            "task": "A",
+            "state": "succeeded"
+          },
+          {
+            "id": "5ed8b37e246b4205885ba968e20fc624",
+            "task": "B",
+            "state": "failed"
+          },
+          {
+            "id": "814fb889fc42e2b828b813d99f93532d",
+            "task": "C",
+            "state": "succeeded"
+          },
+          {
+            "id": "20441c6ec89ae71475b0bde7faa64435",
+            "task": "C",
+            "state": "cancelled"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "工作项变化：旧项取消、新项入队",
+      "at": "2026-11-11T11:48:22.278Z",
+      "detail": {
+        "entries": [
+          {
+            "itemKey": "hkwook-0",
+            "state": "cancelled",
+            "reason": "The work item changed or disappeared; its newer version is queued"
+          },
+          {
+            "itemKey": "1bdkilm-0",
+            "state": "queued"
+          },
+          {
+            "itemKey": "1bdkiln-0",
+            "state": "queued"
+          }
+        ]
+      }
+    }
+  ],
+  "final": {
+    "queue": [
+      {
+        "id": "7f5e833a60d65c25d40f49ca7772fe2d",
+        "project": "books",
+        "task": "A",
+        "item": 0,
+        "title": "发布准备",
+        "state": "succeeded",
+        "attempt": 0,
+        "ticketId": "ticket-1",
+        "contentHash": "o58c2p"
+      },
+      {
+        "id": "5ed8b37e246b4205885ba968e20fc624",
+        "project": "books",
+        "task": "B",
+        "item": 0,
+        "title": "回归测试",
+        "state": "failed",
+        "attempt": 2,
+        "reason": "The ticket ended: failed",
+        "ticketId": "ticket-3",
+        "contentHash": "sfknia"
+      },
+      {
+        "id": "814fb889fc42e2b828b813d99f93532d",
+        "project": "books",
+        "task": "C",
+        "item": 0,
+        "title": "文档更新 / 改 012",
+        "state": "succeeded",
+        "attempt": 0,
+        "ticketId": "ticket-4",
+        "contentHash": "1wp12o0"
+      },
+      {
+        "id": "20441c6ec89ae71475b0bde7faa64435",
+        "project": "books",
+        "task": "C",
+        "item": 1,
+        "title": "文档更新 / 改 013",
+        "state": "cancelled",
+        "attempt": 0,
+        "reason": "The task disappeared from its source",
+        "contentHash": "1wp13ep"
+      },
+      {
+        "id": "fcd2722b3515dc163816143ffe534b87",
+        "project": "books",
+        "task": "D",
+        "item": 0,
+        "title": "附录更新",
+        "state": "cancelled",
+        "attempt": 0,
+        "reason": "The work item changed or disappeared; its newer version is queued",
+        "contentHash": "1ostveg"
+      },
+      {
+        "id": "e1f69e0f2bd5f097e7a52895c576e329",
+        "project": "books",
+        "task": "D",
+        "item": 0,
+        "title": "附录更新 / 补附录 A",
+        "state": "queued",
+        "attempt": 0,
+        "contentHash": "1xgler2"
+      },
+      {
+        "id": "bbd4c6ae45c7ffaafd7a51df0ea26f1b",
+        "project": "books",
+        "task": "D",
+        "item": 1,
+        "title": "附录更新 / 补附录 B",
+        "state": "queued",
+        "attempt": 0,
+        "contentHash": "1xglfhr"
+      }
+    ],
+    "tickets": [
+      {
+        "id": "ticket-4",
+        "ended": {
+          "outcome": "completed",
+          "by": "executor",
+          "at": "2026-11-11T11:48:22.278Z"
+        }
+      },
+      {
+        "id": "ticket-3",
+        "ended": {
+          "outcome": "failed",
+          "by": "executor",
+          "at": "2026-11-11T11:48:22.278Z"
+        }
+      },
+      {
+        "id": "ticket-2",
+        "ended": {
+          "outcome": "failed",
+          "by": "executor",
+          "at": "2026-11-11T11:48:17.278Z"
+        }
+      },
+      {
+        "id": "ticket-1",
+        "ended": {
+          "outcome": "completed",
+          "by": "executor",
+          "at": "2026-11-11T11:48:17.278Z"
+        }
+      }
+    ],
+    "csv": "﻿task_id,title,status,description,priority\r\nA,发布准备,done,,P1\r\nB,回归测试,blocked,,P1\r\nC,文档更新,done,\"1. 改 012\r\n2. 改 013\",P2\r\nD,附录更新,todo,\"1. 补附录 A\r\n2. 补附录 B\",P2\r\n",
+    "csvFeatures": {
+      "bom": true,
+      "crlf": true,
+      "text": "﻿task_id,title,status,description,priority\r\nA,发布准备,done,,P1\r\nB,回归测试,blocked,,P1\r\nC,文档更新,done,\"1. 改 012\r\n2. 改 013\",P2\r\nD,附录更新,todo,\"1. 补附录 A\r\n2. 补附录 B\",P2\r\n"
+    },
+    "workCopyLog": [
+      "6a68880 feat: 补充任务 D 的工作项",
+      "8739a96 feat: 新增任务 D",
+      "4ba689b chore: record task C as done",
+      "608afac chore: record task B as blocked",
+      "2ee3811 chore: record task A as done",
+      "80d7c1c seed: 初始任务清单"
+    ],
+    "effects": [],
+    "snapshot": {
+      "at": "2026-11-11T11:48:22.278Z",
+      "maxWorkers": 1,
+      "used": 0,
+      "projects": [
+        {
+          "id": "books",
+          "name": "电子书",
+          "enabled": true,
+          "nextPollAt": "2026-11-11T12:18:22.278Z"
+        }
+      ],
+      "items": [
+        {
+          "id": "7f5e833a60d65c25d40f49ca7772fe2d",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "A",
+          "item": 0,
+          "title": "发布准备",
+          "state": "succeeded",
+          "attempt": 0,
+          "dueAt": 1794397697278,
+          "ticketId": "ticket-1",
+          "enqueuedAt": "2026-11-11T11:48:17.278Z",
+          "updatedAt": "2026-11-11T11:48:17.278Z"
+        },
+        {
+          "id": "5ed8b37e246b4205885ba968e20fc624",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "B",
+          "item": 0,
+          "title": "回归测试",
+          "state": "failed",
+          "attempt": 2,
+          "dueAt": 1794397702278,
+          "ticketId": "ticket-3",
+          "reason": "The ticket ended: failed",
+          "enqueuedAt": "2026-11-11T11:48:17.278Z",
+          "updatedAt": "2026-11-11T11:48:22.278Z"
+        },
+        {
+          "id": "814fb889fc42e2b828b813d99f93532d",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "C",
+          "item": 0,
+          "title": "文档更新 / 改 012",
+          "state": "succeeded",
+          "attempt": 0,
+          "dueAt": 1794397702278,
+          "ticketId": "ticket-4",
+          "enqueuedAt": "2026-11-11T11:48:17.278Z",
+          "updatedAt": "2026-11-11T11:48:22.278Z"
+        },
+        {
+          "id": "20441c6ec89ae71475b0bde7faa64435",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "C",
+          "item": 1,
+          "title": "文档更新 / 改 013",
+          "state": "cancelled",
+          "attempt": 0,
+          "dueAt": 1794397697278,
+          "reason": "The task disappeared from its source",
+          "enqueuedAt": "2026-11-11T11:48:17.278Z",
+          "updatedAt": "2026-11-11T11:48:22.278Z"
+        },
+        {
+          "id": "fcd2722b3515dc163816143ffe534b87",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "D",
+          "item": 0,
+          "title": "附录更新",
+          "state": "cancelled",
+          "attempt": 0,
+          "dueAt": 1794397702278,
+          "reason": "The work item changed or disappeared; its newer version is queued",
+          "enqueuedAt": "2026-11-11T11:48:22.278Z",
+          "updatedAt": "2026-11-11T11:48:22.278Z"
+        },
+        {
+          "id": "e1f69e0f2bd5f097e7a52895c576e329",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "D",
+          "item": 0,
+          "title": "附录更新 / 补附录 A",
+          "state": "queued",
+          "attempt": 0,
+          "dueAt": 1794397702278,
+          "enqueuedAt": "2026-11-11T11:48:22.278Z",
+          "updatedAt": "2026-11-11T11:48:22.278Z"
+        },
+        {
+          "id": "bbd4c6ae45c7ffaafd7a51df0ea26f1b",
+          "project": "books",
+          "projectName": "电子书",
+          "task": "D",
+          "item": 1,
+          "title": "附录更新 / 补附录 B",
+          "state": "queued",
+          "attempt": 0,
+          "dueAt": 1794397702278,
+          "enqueuedAt": "2026-11-11T11:48:22.278Z",
+          "updatedAt": "2026-11-11T11:48:22.278Z"
+        }
+      ]
+    }
+  }
+}

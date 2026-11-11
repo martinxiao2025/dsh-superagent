@@ -1,7 +1,7 @@
 /** 代码仓库同步：把 GitHub / GitLab 仓库同步到工作副本目录，不覆盖本地改动。 */
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { Commands } from '../infra/commands.ts'
 import { hostOf, type Probe, type RepoAuth } from '../deployment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
@@ -92,7 +92,7 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   await recordTicketSource(input.stateDir, input.directory, input.codeSource)
   signal.throwIfAborted()
   try {
-    if (!(await isRepository(git))) {
+    if (!(await isRepository(git, input.directory))) {
       await git(['init', '--quiet'])
       await git(['remote', 'add', 'origin', remote])
     } else {
@@ -152,9 +152,22 @@ export function remoteOf(source: {
   return ssh ? `git@${host}:${source.project}.git` : `https://${host}/${source.project}.git`
 }
 
-/** 判断目录是否已经是 git 仓库。 */
-async function isRepository(git: (args: string[]) => Promise<string>): Promise<boolean> {
-  return git(['rev-parse', '--git-dir']).then(() => true, () => false)
+/**
+ * 判断目录自身就是仓库根。
+ * 用 `--show-toplevel` 而不是 `--git-dir`：后者会向上找到父仓库，把嵌在别的仓库里的工作副本目录
+ * 误认为已初始化，进而改写父仓库的远端与分支。
+ */
+async function isRepository(git: (args: string[]) => Promise<string>, directory: string): Promise<boolean> {
+  const top = await git(['rev-parse', '--show-toplevel']).then(value => value.trim(), () => '')
+  return top !== '' && samePath(top, directory)
+}
+
+/** 比较两个路径是否指向同一目录；Windows 大小写不敏感且允许混用分隔符。 */
+function samePath(left: string, right: string): boolean {
+  const normalize = (value: string): string => resolve(value).replace(/\\/g, '/')
+  const a = normalize(left)
+  const b = normalize(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 /** 当前提交；空仓库返回空字符串。 */

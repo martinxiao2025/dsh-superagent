@@ -95,7 +95,7 @@ describe('syncCode', () => {
     const { commands, calls } = fake(github, (args) => {
       const name = command(args)
       if (name === 'rev-parse') {
-        if (args.includes('--git-dir')) return '.git'
+        if (args.includes('--show-toplevel')) return `${directory}\n`
         if (args.includes('--verify') && args.some(arg => arg.startsWith('refs/heads/'))) throw new Error('missing ref')
         if (args.includes('--verify')) return 'refs/remotes/origin/main'
         return ++heads === 1 ? '' : 'abc123'
@@ -107,6 +107,21 @@ describe('syncCode', () => {
       signal: new AbortController().signal })
     expect(result).toEqual({ directory, commit: 'abc123', changed: true, empty: false })
     expect(calls).toContainEqual(['checkout', '--quiet', '-B', 'main', 'origin/main'])
+  })
+
+  it('initializes a nested directory instead of adopting the outer repository', async () => {
+    const outer = temporary()
+    const directory = join(outer, 'repos', 'demo-tree')
+    const { commands, calls } = fake(github, (args) => {
+      // 目录本身不是仓库时，父仓库的 toplevel 会返回外层目录；不能据此改写父仓库远端。
+      if (command(args) === 'rev-parse' && args.includes('--show-toplevel')) return `${outer}\n`
+      return ''
+    })
+    await syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal })
+    expect(calls).toContainEqual(['init', '--quiet'])
+    expect(calls).toContainEqual(['remote', 'add', 'origin', 'https://github.com/acme/widgets.git'])
+    expect(calls.some(args => args.includes('set-url'))).toBe(false)
   })
 
   it('refuses a record that is not a GitHub or GitLab repository', async () => {
