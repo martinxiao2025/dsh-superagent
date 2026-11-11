@@ -84,6 +84,19 @@ async function waitMarkerGone(timeoutMs: number): Promise<{ gone: boolean; detai
   return { gone: false, detail: (await health(startup().port))?.detail, waitedMs: Date.now() - started }
 }
 
+/** 汇总设置与队列的规模，用来证明重载后持久化状态没有被清空。 */
+async function stateSummary(port: number): Promise<{ projects: number; taskSources: number; codeRepos: number; queueItems: number } | undefined> {
+  try {
+    const headers = { 'x-orchestrator-request': '1' }
+    const settings = await (await fetch(`http://127.0.0.1:${port}/orchestrator/api/settings`, { headers })).json() as any
+    const queue = await (await fetch(`http://127.0.0.1:${port}/orchestrator/api/queue`, { headers })).json() as any
+    return { projects: (settings.projects ?? []).length, taskSources: (settings.taskSources ?? []).length,
+      codeRepos: (settings.codeRepos ?? []).length, queueItems: (queue.items ?? []).length }
+  } catch {
+    return undefined
+  }
+}
+
 /** 主流程：改产物 → 等自动重载 → 触发重组 → 记录结论 → 恢复文件。 */
 async function main(): Promise<void> {
   const result: Record<string, unknown> = { startedAt: stamp(), marker, libFile, patchFile, phases: [] }
@@ -94,7 +107,8 @@ async function main(): Promise<void> {
   }
   const before = startup()
   const beforeHealth = await health(before.port)
-  log('基线', { startup: before, detail: beforeHealth?.detail })
+  result.baselineState = await stateSummary(before.port)
+  log('基线', { startup: before, detail: beforeHealth?.detail, state: result.baselineState })
   if (!existsSync(libFile)) throw new Error(`找不到构建产物：${libFile}（先运行 pnpm build）`)
 
   const libOriginal = readFileSync(libFile)
@@ -141,10 +155,12 @@ async function main(): Promise<void> {
   // 状态保留证据：重载前后同一份设置与队列记录仍在（都来自状态库，而不是内存）。
   const entry = startup()
   const probe = await health(entry.port)
-  result.final = { startup: entry, detail: probe?.detail, settingsStillServed: probe?.ok === true }
+  const finalState = await stateSummary(entry.port)
+  result.final = { startup: entry, detail: probe?.detail, settingsStillServed: probe?.ok === true, state: finalState }
   result.finishedAt = stamp()
   log('结论', { autoReload: (result.autoReload as { seen?: boolean })?.seen ?? false,
-    reloadOnProfilePatch: (result.afterProfilePatch as { seen?: boolean } | undefined)?.seen ?? false })
+    reloadOnProfilePatch: (result.afterProfilePatch as { seen?: boolean } | undefined)?.seen ?? false,
+    restored: (result.restored as { gone?: boolean } | undefined)?.gone ?? false })
   save(result)
   console.log('HOT_RELOAD_PROBE_DONE')
 }

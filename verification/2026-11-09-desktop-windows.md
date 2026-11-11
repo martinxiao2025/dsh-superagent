@@ -82,3 +82,15 @@
 - 真实飞书租户：条件见上一节的清单。
 - 桌面端服务端插件挂载的稳定复现条件：4 次 404 与 2 次 200 用的是同一构建与配置，未能找到触发因素。
 
+## 桌面版直连与热加载（2026-11-11）
+
+上述挂载不稳定的原因已定位：profile 里的目录联接曾被 pnpm 拼成 `…\profiles\desktop\D:\dsh-superagent`（不存在），
+用 `New-Item -ItemType Junction -Target 'D:\dsh-superagent'` 重建后稳定加载。桌面应用需用 WMI 启动才常驻。
+
+- Excel 任务来源端到端已在桌面版内跑通：真实调度、git 同步、拆分、建单、DSH 会话执行（`orchestrator_report` 返回
+  `ready` / `desktop-live-ok`）、队列结算与 CSV 回写（BOM + CRLF 保留）。证据与步骤见
+  `verification/2026-11-11-desktop-live/README.md`。
+- 热加载实测：只改构建产物不会生效；编辑 profile 的 `cordis.patch.yml` 触发 profile 重组后约 3 秒插件重载，
+  pid 与端口不变，设置与队列条目保留。失败版本不回退旧代码（依据 `@deepseek-ai/dsh-hmr` 文档，未做失败注入）。
+  因此改代码后的验证流程是「`pnpm build` → 触发一次 profile 重组」，不需要重启应用。
+

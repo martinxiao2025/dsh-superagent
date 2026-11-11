@@ -64,7 +64,7 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   } as unknown as Store
   const driver = memory()
   /** 调度器宿主；热加载测试用同一份宿主（同一份状态）重建调度器实例。 */
-  const host = { store, settings: () => settings, registry: new TaskSourceRegistry([driver]),
+  const host: ConstructorParameters<typeof ProjectScheduler>[0] = { store, settings: () => settings, registry: new TaskSourceRegistry([driver]),
     engine: {
       schedule: input => {
         const existing = byTrigger.get(input.trigger.id)
