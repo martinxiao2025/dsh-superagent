@@ -99,7 +99,7 @@ it('shows save and discard only while a settings block has edits, at the end of 
   await click(save)
   expect(all('.dt-savebar')).toHaveLength(0)
   expect(document.activeElement).toBe(workers.form)
-  await click(find(zh['term.source'], '.dt-settings-link'))
+  await click(find(zh['settingsGroup.taskSources'], '.dt-settings-link'))
   expect(all('.dt-savebar')).toHaveLength(0)
   const feishu = document.getElementById('dt-source-feishu')!
   const cli = field<HTMLInputElement>('机器人的 lark-cli', feishu)
@@ -129,10 +129,15 @@ it('builds the TaskSource kind dropdown from the driver catalog and reports a mi
   await mount()
   await click(zh['tab.settings'])
   await click(find(zh['settingsGroup.taskSources'], '.dt-settings-link'))
-  expect(all('.dt-select option').map(option => option.textContent)).toEqual(['Excel 文件', '飞书知识库'])
-  await click(document.querySelector(`[aria-label="${zh.verify} · ${zh.sourceName}"]`) as HTMLElement)
+  expect(all(`[aria-label="${zh.taskSourceAddTitle}"] .dt-select option`).map(option => option.textContent))
+    .toEqual(['Excel 文件', '飞书知识库'])
+  // 消息来源与任务清单在同一页分区展示。
+  expect(text()).toContain(zh.sourceMessageTitle)
+  expect(text()).toContain(zh.sourceTaskListTitle)
+  await click(document.querySelector(`[aria-label="${zh.taskSourceAddTitle}"] [aria-label="${zh.verify} · ${zh.sourceName}"]`) as HTMLElement)
   await settle()
-  expect(document.querySelector('.dt-error.dt-check')?.textContent).toBe(zh['check.sourceNameRequired'])
+  expect(document.querySelector(`[aria-label="${zh.taskSourceAddTitle}"] .dt-error.dt-check`)?.textContent)
+    .toBe(zh['check.sourceNameRequired'])
 })
 
 it('renders the code repository auth fields and verifies them with the draft value', async () => {
@@ -195,10 +200,10 @@ it('lists the settings groups stages first, opens each stage\'s group from its s
   async () => {
   await mount()
   await click(tab(zh['tab.settings']))
-  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['来源', '代码仓库', 'Git 凭据', '任务来源', '飞书凭据', '项目', '评估',
-    '执行', '提示词', '部署'])
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
-  for (const [tab, group] of [['来源', '来源'], ['项目', '项目'], ['评估', '评估'], ['执行', '执行']] as const) {
+  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['Git 凭据', '飞书凭据', '代码仓库', '任务来源', '项目',
+    '评估', '执行', '提示词', '部署'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.taskSources'])
+  for (const [tab, group] of [['来源', '任务来源'], ['项目', '项目'], ['评估', '评估'], ['执行', '执行']] as const) {
     await click(find(tab, '[role="tab"]'))
     await click(find(zh['tab.settings'], '.dt-status-head button'))
     expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(group)

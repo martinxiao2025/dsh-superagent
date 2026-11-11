@@ -21,7 +21,7 @@ it('shows each Source\'s state on the Source status and opens its settings from 
   await click(zh['tab.source'])
   await click(zh.sourceOpenSettings)
   expect(tab(zh['tab.settings']).getAttribute('aria-selected')).toBe('true')
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.taskSources'])
   expect(all('.dt-card')[0]!.textContent).toContain(zh['setup.feishuCliUnset'])
 })
 
@@ -104,7 +104,7 @@ it('points a setup problem at the settings that fix it', async () => {
   expect(text()).toContain(zh['problemSetupFix.source'])
   await click(find(zh.problemSetupFeishu, 'button, a, [role="button"]'))
   expect(tab(zh['tab.settings']).getAttribute('aria-selected')).toBe('true')
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.taskSources'])
   expect(all('.dt-card')[0]!.textContent).toContain(zh['setup.feishuCliUnset'])
   expect(scroll.mock.contexts).toContain(all('.dt-card')[0])
   delete (Element.prototype as Partial<Element>).scrollIntoView
@@ -161,7 +161,7 @@ it('shows the Source whose deployment check failed, with the problem that fixes 
   expect(text()).not.toContain('Waiting for setup')
   expect(rows[0]!.textContent).toContain(zh['setup.feishuCliUnset'])
   await click(find(zh.sourceOpenSettings, '.dt-row button'))
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.taskSources'])
 })
 
 it('shows a Source\'s health in the interface language, and a diagnostic as reported', async () => {
@@ -187,7 +187,7 @@ it('shows a refused Source save with the output of the tool that failed on its o
 it('shows a setup problem on its Source card within one read of the settings, which the settings groups share', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
   onTestFinished(() => { vi.useRealTimers() })
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   const card = () => document.getElementById('dt-source-feishu')!
   expect(card().textContent).not.toContain(zh['setup.feishuCliUnset'])
@@ -235,7 +235,7 @@ it('takes no space for messages that were all sent', async () => {
 it('reads the settings again as soon as dsh-superagent answers after a save restarted it', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
   onTestFinished(() => { vi.useRealTimers() })
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   const feishu = document.getElementById('dt-source-feishu')!
   await type(field<HTMLInputElement>('机器人的 lark-cli', feishu), '/opt/bin/lark-agent')
@@ -255,7 +255,7 @@ it('reads the settings again as soon as dsh-superagent answers after a save rest
 })
 
 it('creates a Source record through the API and shows the new card', async () => {
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   await type(field<HTMLInputElement>(zh.sourceName, document.querySelector('.dt-source-add')!), '第二个飞书')
   await type(field<HTMLSelectElement>(zh.sourceAddKind), 'feishu')
@@ -267,7 +267,7 @@ it('creates a Source record through the API and shows the new card', async () =>
 })
 
 it('deletes a Source through the API and removes its card', async () => {
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   await click(find(zh.sourceDelete, '#dt-source-feishu button'))
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('删除“飞书”？')
@@ -279,7 +279,7 @@ it('deletes a Source through the API and removes its card', async () => {
 
 it('shows the server refusal when deleting a Source that still has unfinished Tickets', async () => {
   server.openTickets = { feishu: 2 }
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   await click(find(zh.sourceDelete, '#dt-source-feishu button'))
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('该来源还有 2 个未完成工单，不能删除')
@@ -291,7 +291,7 @@ it('shows the server refusal when deleting a Source that still has unfinished Ti
 
 it('warns that disabling a Source with unfinished Tickets ends them before saving', async () => {
   server.openTickets = { feishu: 1 }
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   await click('运行来源：飞书')
   expect(document.getElementById('dt-source-feishu')?.querySelector('.dt-savebar')?.textContent)
@@ -299,7 +299,7 @@ it('warns that disabling a Source with unfinished Tickets ends them before savin
 })
 
 it('verifies one key field at a time in the Add Source form and reports the result in place', async () => {
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   const add = document.querySelector<HTMLElement>('.dt-source-add')!
   const verify = (label: string) => [...add.querySelectorAll<HTMLButtonElement>('.dt-verify-row button')]
@@ -320,7 +320,7 @@ it('verifies one key field at a time in the Add Source form and reports the resu
 })
 
 it('verifies every key field of the Add Source form with one button', async () => {
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   const add = document.querySelector<HTMLElement>('.dt-source-add')!
   await click(find(zh.verifyAll, '.dt-source-add button'))
@@ -331,7 +331,7 @@ it('verifies every key field of the Add Source form with one button', async () =
 })
 
 it('saves a project name for an existing Source and shows it as the card title', async () => {
-  at({ page: 'settings', query: { group: 'source' } })
+  at({ page: 'settings', query: { group: 'taskSources' } })
   await mount()
   const feishu = document.getElementById('dt-source-feishu')!
   await type(field<HTMLInputElement>(zh.sourceName, feishu), '支付重构')

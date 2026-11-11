@@ -6,7 +6,8 @@ import type { T } from './text.ts'
 
 export const TABS = ['overview', 'source', 'projects', 'trigger', 'eval', 'execution', 'settings'] as const
 export type Tab = typeof TABS[number]
-export const SETTINGS_GROUPS = ['source', 'codeRepos', 'gitCredentials', 'taskSources', 'feishuCredentials', 'projects', 'eval',
+/** 设置分组按创建与使用流程排列：先凭据，再数据接入，再项目，最后系统级配置。 */
+export const SETTINGS_GROUPS = ['gitCredentials', 'feishuCredentials', 'codeRepos', 'taskSources', 'projects', 'eval',
   'execution', 'prompts', 'deployment'] as const
 export type SettingsGroup = typeof SETTINGS_GROUPS[number]
 export type Route = { page: 'overview' | 'source'; id?: undefined; query?: undefined }
@@ -21,7 +22,7 @@ export const HOME: Route = { page: 'overview' }
 export const settingsRoute = (group: SettingsGroup, query: { source?: string; version?: string } = {}): Route =>
   ({ page: 'settings', query: { group, ...query } })
 export const setupPage = (place: SetupPlace): Route =>
-  place === 'deployment' ? settingsRoute('deployment') : settingsRoute('source', { source: place })
+  place === 'deployment' ? settingsRoute('deployment') : settingsRoute('taskSources', { source: place })
 export const routeLabel = (t: T, route: Route): string =>
   route.id ? t(route.page === 'trigger' ? 'term.thread' : route.page === 'projects' ? 'term.project' : 'term.ticket') : t(`tab.${route.page}`)
 
@@ -43,7 +44,7 @@ export function parseRoute(value: unknown): Route | undefined {
     case 'eval': return { page, query: compact({ filter: pick(DECISION_FILTERS, query?.filter),
       window: query?.window === '24h' ? '24h' as const : undefined }) }
     case 'execution': return record ? { page, id: record } : { page, query: compact({ filter: pick(TICKET_FILTERS, query?.filter) }) }
-    case 'settings': return { page, query: { group: pick(SETTINGS_GROUPS, query?.group) ?? 'source',
+    case 'settings': return { page, query: { group: pick(SETTINGS_GROUPS, query?.group) ?? 'taskSources',
       ...compact({ source: text('source'), version: text('version') }) } }
     default: return undefined
   }
@@ -52,7 +53,7 @@ export function parseRoute(value: unknown): Route | undefined {
 const ROUTE_KEY = 'dsh-superagent/route'
 export interface Location { route: Route; stack: Route[]; group?: SettingsGroup | undefined }
 export const lastSettingsGroup = ({ route, group }: Location): SettingsGroup => route.page === 'settings' ? route.query.group
-  : group ?? 'source'
+  : group ?? 'taskSources'
 export function initialLocation(): Location {
   try {
     const stored = JSON.parse(sessionStorage.getItem(ROUTE_KEY) ?? 'null') as { route?: unknown; stack?: unknown; group?: unknown } | null

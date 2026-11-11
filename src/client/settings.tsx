@@ -1,4 +1,4 @@
-/** 设置标签页外壳，在阶段设置（来源、评估、执行）、提示词与部署之间进行路由。 */
+/** 设置标签页外壳，按创建流程在凭据、代码仓库、任务来源、项目、阶段配置、提示词与部署之间路由。 */
 import type { StateView } from './api.ts'
 import { CodeRepoSettings } from './code-repos.tsx'
 import { DeploymentPage, type DeploymentForm } from './deployment.tsx'
@@ -11,10 +11,9 @@ import { PromptsPage } from './prompts.tsx'
 import { usePanel } from './provider.tsx'
 import { SETTINGS_GROUPS, settingsRoute, type SettingsGroup } from './route.ts'
 import { SettingsProvider } from './settings-kit.tsx'
-import { SourceSettings } from './source.tsx'
-import { TaskSourceSettings } from './task-sources.tsx'
+import { SourceTaskSettings } from './task-sources.tsx'
 
-const STAGE_GROUPS: readonly SettingsGroup[] = ['source', 'codeRepos', 'gitCredentials', 'taskSources', 'feishuCredentials',
+const STAGE_GROUPS: readonly SettingsGroup[] = ['gitCredentials', 'feishuCredentials', 'codeRepos', 'taskSources',
   'projects', 'eval', 'execution']
 export function SettingsPage({ group, query, state, deploymentForm }: {
   group: SettingsGroup; query: { source?: string; version?: string }; state: StateView; deploymentForm: DeploymentForm
@@ -22,10 +21,9 @@ export function SettingsPage({ group, query, state, deploymentForm }: {
   const { t, navigate } = usePanel()
   const content = (() => {
     switch (group) {
-      case 'source': return <SettingsProvider><SourceSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>
       case 'codeRepos': return <SettingsProvider><CodeRepoSettings /></SettingsProvider>
       case 'gitCredentials': return <SettingsProvider><GitCredentialSettings /></SettingsProvider>
-      case 'taskSources': return <SettingsProvider><TaskSourceSettings /></SettingsProvider>
+      case 'taskSources': return <SettingsProvider><SourceTaskSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>
       case 'feishuCredentials': return <SettingsProvider><FeishuCredentialSettings /></SettingsProvider>
       case 'projects': return <SettingsProvider><ProjectSettings /></SettingsProvider>
       case 'eval': return <SettingsProvider><EvalSettings version={query.version} /></SettingsProvider>

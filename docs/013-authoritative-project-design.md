@@ -5,6 +5,7 @@
 > 关系：不取代 [001-domain.md](001-domain.md)（Source → Trigger → Thread → Eval → Ticket 主链路）、[003-execution.md](003-execution.md)（工单执行与会话）、[005-panel.md](005-panel.md)（面板骨架）、[007-architecture.md](007-architecture.md)（模块与测试清单）。
 > 前提：不考虑向后兼容，**不做任何旧数据迁移**；旧状态一律清空重建（见 9.2），新库启动即最终结构。
 > 配套清单：代码裁剪见 `014-code-pruning-inventory.md`，生产就绪差距见 `015-production-readiness-gaps.md`（两份清单为本轮审计产物）。
+> 实现进度（2026-11-11）：设置分组已按创建流程重排，消息来源配置并入「任务来源」页；独立「来源」页签暂保留为输入总览。代码仓库与任务来源内联进项目、凭据引用改造仍待后续单元。
 
 ## 0. 关键约束（不可协商）
 

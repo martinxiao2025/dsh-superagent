@@ -3,9 +3,10 @@ import { useState, type ReactElement } from 'react'
 import type { FieldSpec } from '../sources/kind.ts'
 import type { SourceCheck } from '../setup.ts'
 import { Button, Input, Tag } from './controls.tsx'
-import { ConfirmButton } from './widgets.tsx'
+import { ConfirmButton, Section } from './widgets.tsx'
 import { useAction, usePanel } from './provider.tsx'
 import { Field, SourceField, useSettings } from './settings-kit.tsx'
+import { SourceSettings } from './source.tsx'
 import { errorText, localized, sourceCheckText } from './text.ts'
 
 /** 一行字段加一个独立的验证按钮，结果就地显示在字段下方。 */
@@ -120,7 +121,20 @@ function AddTaskSource() {
   </div>
 }
 
-/** 任务来源设置页：新增表单 + 已保存记录列表。 */
+/** 任务来源设置页：消息来源与任务清单在同一页管理，底层仍走各自的运行链路。 */
+export function SourceTaskSettings({ focus }: { focus?: string }) {
+  const { t } = usePanel()
+  return <>
+    <Section title={t('sourceMessageTitle')} hint={t('sourceMessageHint')}>
+      <SourceSettings {...focus ? { focus } : {}} />
+    </Section>
+    <Section title={t('sourceTaskListTitle')} hint={t('sourceTaskListHint')}>
+      <TaskSourceSettings />
+    </Section>
+  </>
+}
+
+/** 任务清单设置：新增表单 + 已保存记录列表。 */
 export function TaskSourceSettings() {
   const { t, call, notify } = usePanel()
   const { settings, reload } = useSettings()

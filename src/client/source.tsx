@@ -10,7 +10,7 @@ import { useAction, usePanel, usePanelData } from './provider.tsx'
 import { setupPage, settingsRoute, type Route } from './route.ts'
 import { ConfigHistory, Field, Fields, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
 import { actorName, errorText, healthText, localized, readableMarkers, reasonLabel, sourceCheckText, valueLabel, when } from './text.ts'
-import { CheckSetupButton, ConfirmButton, Hint, LabelValue, LoadState, SetupMessage, StatusHead, When } from './widgets.tsx'
+import { CheckSetupButton, ConfirmButton, Hint, LabelValue, LoadState, Section, SetupMessage, StatusHead, When } from './widgets.tsx'
 
 /** 新增表单里每个类型优先展示的关键字段；消息来源目前只有飞书。 */
 const ADD_FIELDS: Readonly<Record<string, readonly string[]>> = {
@@ -237,7 +237,7 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
       </div>
       {problem && <p className="dt-error">
         <SetupMessage problem={problem} lead /> <button type="button" className="dt-textlink"
-          onClick={() => navigate(settingsRoute('source', { source: source.id }))}>
+          onClick={() => navigate(settingsRoute('taskSources', { source: source.id }))}>
           {t('sourceOpenSettings')}
         </button>
       </p>}
@@ -261,19 +261,48 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
   </li>
 }
 
-export function SourceStatus() {
+/** 消息来源健康列表；不含页头，供来源总览与任务来源设置页共用。 */
+export function SourceHealth() {
   const { t, call, navigate } = usePanel()
   const { setup } = usePanelData()
   const { data, error } = usePoll(() => call('GET sources'), [])
   // 全局部署初始化问题会停掉所有来源并显示在顶部；来源特有的初始化问题显示在该来源行上。
   const elsewhere = setup?.problem?.place === 'deployment' ? setup.problem : undefined
-  return <div className="dt-form">
-    <StatusHead hint={t('sourceStatusIntro')} settings="source" />
+  return <>
     {elsewhere && <p className="dt-error">
       <SetupMessage problem={elsewhere} lead /> <button type="button" className="dt-textlink"
         onClick={() => navigate(setupPage(elsewhere.place))}>{t('setupFixLink')}</button>
     </p>}
     <LoadState error={error} loading={!data} />
     {data && <ul className="dt-list">{data.map(source => <SourceRow key={source.id} source={source} />)}</ul>}
+  </>
+}
+
+export function SourceStatus() {
+  const { t, call } = usePanel()
+  const settings = usePoll(() => call('GET settings'), [])
+  const taskSources = settings.data?.taskSources ?? []
+  const projects = settings.data?.projects ?? []
+  return <div className="dt-form">
+    <StatusHead hint={t('sourceStatusIntro')} settings="taskSources" />
+    <SourceHealth />
+    <Section title={t('sourceTaskListTitle')} hint={t('sourceTaskListHint')}
+      count={settings.data ? taskSources.length : undefined}>
+      <LoadState error={settings.error} loading={!settings.data} />
+      {settings.data && (taskSources.length === 0 ? <Hint>{t('taskSourceNone')}</Hint>
+        : <ul className="dt-list">{taskSources.map(source => {
+          const bound = projects.filter(project => project.value.taskSource === source.id)
+          return <li className="dt-row" key={source.id}>
+            <div className="dt-row-main">
+              <div className="dt-row-title"><span className="dt-row-name">{source.name}</span><Tag>{source.kind}</Tag></div>
+              <div className="dt-row-meta">
+                <span>{source.title ? localized(t, source.title) : source.kind}</span>
+                <span>{t('sourceTaskBoundProjects', { count: bound.length })}</span>
+                {bound.map(project => <span key={project.id}>{project.name}</span>)}
+              </div>
+            </div>
+          </li>
+        })}</ul>)}
+    </Section>
   </div>
 }
