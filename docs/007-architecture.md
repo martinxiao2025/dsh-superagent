@@ -350,7 +350,6 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/notices.ts` | 主会话的通知和中继：`eventNotice`、`reportRelay`、`resultRelay` 和 `followupRelay` |
 | `src/app/store.ts` | Store，以及 `Receipt`，即出站的一条消息 |
 | `src/app/store-read.ts` | `storeReads`：供视图、工具和来源轮询使用的 Store 读取查询，从不写入 |
-| `src/app/migration.ts` | 架构 13 迁移：从架构 10、11、12 一步转换，按当前形态写入每条已存储记录 |
 | `src/app/effects.ts` | Effects |
 | `src/app/versions.ts` | `Versions`：保存为带编号快照并指向当前快照的记录，用于设置和提示词 |
 | `src/app/cache.ts` | `TextCache`：在大小限制内保存在内存中的文本，最先丢弃最久未使用的 |
@@ -466,8 +465,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/settings.spec.ts` | 与模型或账号检查竞争的设置保存、被保存越过的策略同步，以及暂停、同步和块的拒绝 |
 | `tests/views.spec.ts` | 管理视图从 Store 派生的内容，例如被丢弃消息所属的线程 |
 | `tests/timeline.spec.ts` | 线程的页面和按时间再按 id 排序的触发器邻居，每个收到的触发器时间只有一种形态 |
-| `tests/migration.spec.ts` | 架构 14 迁移：每条已存储记录都处于当前形态，以及拒绝更旧的架构 |
-| `tests/store.spec.ts` | 仓库及其工作集（SQLite 和内存中一致）、kv 区域（`KV` 的每个键只在 `src/kv.ts` 和迁移中拼写）、设置历史与查询 |
+| `tests/store.spec.ts` | 空库建基线、拒绝其他架构、仓库及其工作集（SQLite 和内存中一致）、kv 区域（`KV` 的每个键只在 `src/kv.ts` 中拼写）、设置历史与查询 |
 | `tests/prompts.spec.ts` | 提示词校验、组装和版本 |
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
@@ -529,7 +527,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 目前不会删除旧记录，因此以下内容会无限增长：`trigger`、`disposition` 和 `decision` 行；已结束的工单及其线程；outbox 的回执；以及 `kv` 中每个已保存的设置修订和提示词版本、每个会话曾使用的提示词修订号，以及来源按线程和按 Issue 或拉取请求保存的记录。
 
-`SCHEMA_VERSION` 只增不减。较新版本的数据库会拒绝启动；`src/app/migration.ts` 会在启动时把预发布架构 10、11、12 的数据库升级到当前架构，并拒绝更旧的数据库。
+`SCHEMA_VERSION` 只增不减。只接受当前架构的数据库：空库按当前基线建表并写入版本，其他架构（更旧或更新）一律拒绝启动，并提示备份后用 `reset` 从空基线重新开始；本版本不做任何架构迁移。
 
 ## 面向模型的接口
 

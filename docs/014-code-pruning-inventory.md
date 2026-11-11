@@ -45,7 +45,7 @@
 | B2 | `checkRepoBinding` 补偿校验 | [settings.ts:352-370](../src/app/settings.ts#L352-L370) | 结构上仓库已唯一，校验无意义 | 保存路径与两条错误文案 | 删除后两个保存路径仍拒绝非法仓库；错误码表清理 |
 | B3 | `taskSource.config.repo` / `config.source` | [excel.ts:26-38](../src/task-sources/excel.ts#L26-L38)、[feishu-wiki.ts:18-27](../src/task-sources/feishu-wiki.ts#L18-L27) | 仓库固定为项目仓库；飞书凭据改引用 | 任务来源 schema、校验、读取 | Excel 从项目仓库读；知识库用 `feishuCredential`；新库不含这两个字段 |
 | B4 | 设置视图下发原始配置 | [views/settings.ts:44-63](../src/app/views/settings.ts#L44-L63) | 凭据独立后不能把 Secret 发到前端；改为凭据掩码摘要 | 面板全部设置页 | 响应体不含 `sshKey`/`token`/`appSecret`；面板仍能渲染 |
-| B5 | 全部历史迁移分支 | [migration.ts:91-134](../src/app/migration.ts#L91-L134) | 本方案不做迁移，历史分支只服务旧库 | 启动流程、旧库报错路径 | 删除后旧库启动必须明确报错并提示 `reset`；空库启动建表成功 |
+| B5 | 全部历史迁移分支（已完成） | `src/app/migration.ts`（已删除） | 本方案不做迁移，历史分支只服务旧库 | 启动流程、旧库报错路径 | 已删除：旧库启动明确报错并提示 `reset`，空库启动建表成功 |
 | B6 | `src/sources/github.ts` / `gitlab.ts` 作为 SourceKind | [code-repos/types.ts](../src/code-repos/types.ts) 引用 | 仓库类型不属于「消息来源」 | `deployment.ts`、`setup.ts`、`locales`、面板 | 迁到 `code-repos/` 后删除来源侧注册；git 凭据测试与仓库校验通过 |
 | B7 | 遗留 `projectWorkers` 相关设置与 UI | 以 `rg -n "projectWorkers" src tests` 结果为准 | D3 已规定全局上限为唯一硬上限 | 策略、面板、测试 | 扫描无引用；执行器并发用例通过 |
 | B8 | 失败/环境依赖测试 | `tests/deployment.spec.ts`、`tests/environment.spec.ts` | 依赖符号链接，Windows 下直接 `EPERM`（本机已复现），CI 不可重复 | 测试稳定性 | 改为临时目录 + 跳过策略或平台矩阵；本地与 CI 均绿 |
@@ -64,7 +64,7 @@
 | C4 | [deployment.ts](../src/deployment.ts)、[infra/environment.ts](../src/infra/environment.ts) | GitHub / GitLab / 飞书三类解析混在一个 185 行模块，且与 infra 成环 | 被设置、启动、执行多处调用 | 按凭据类型拆 `deployment/git.ts`、`deployment/feishu.ts`，infra 只保留环境探测 | 拆分完成后 `deployment.ts` 只做聚合 |
 | C5 | [sources/github.ts](../src/sources/github.ts)、[sources/gitlab.ts](../src/sources/gitlab.ts) | 名字在 `sources/`，实际是代码仓库类型 | 被 `code-repos/types.ts`、`deployment.ts` 引用 | 搬移到 `src/code-repos/types/` 并更新 007 模块表 | 搬移后删除来源目录下的同名文件 |
 | C6 | [client/code-repos.tsx](../src/client/code-repos.tsx)、[client/task-sources.tsx](../src/client/task-sources.tsx) | P2 后页面消失，但表单字段要进项目表单 | 当前仍是唯一编辑入口 | 先把仓库组、任务来源组抽成项目表单子组件 | 抽完并验收后删除两个页面与路由 |
-| C7 | [app/migration.ts](../src/app/migration.ts) | 历史迁移分支与基线建表混在一处 | 新库仍需要「建表 + 写基线版本」 | 删除全部版本升级分支，只保留基线建表 | 基线入口保留，历史分支全删 |
+| C7 | `src/app/migration.ts`（已完成，文件已删除） | 历史迁移分支与基线建表混在一处 | 新库仍需要「建表 + 写基线版本」 | 删除全部版本升级分支，只保留基线建表 | 已收敛：基线建表移入 `src/app/store.ts`，历史分支全删 |
 | C8 | [views/settings.ts](../src/app/views/settings.ts) | 聚合下发多类记录 | 设置页唯一数据源 | 拆成 `settings/projects.ts`、`settings/credentials.ts` | 拆完后删除旧聚合字段 |
 
 ## 4. 执行顺序与统一验证

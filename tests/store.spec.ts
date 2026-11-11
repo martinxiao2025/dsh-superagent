@@ -23,6 +23,26 @@ it('refuses databases newer than this build and rolls back failed atomic work', 
   store.set('schema', SCHEMA_VERSION + 1); store.close()
   expect(() => new Store(path)).toThrow('Unsupported')
 })
+it('writes the current schema into an empty database and creates the baseline tables', () => {
+  const store = new Store(join(directory, 'fresh.sqlite'))
+  expect(store.get(KV.store.schema)).toBe(SCHEMA_VERSION)
+  const tables = store.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => String(row.name))
+  expect(tables).toEqual(expect.arrayContaining(['kv', 'trigger', 'ticket', 'thread', 'outbox', 'queue', 'git_credential', 'feishu_credential']))
+  store.close()
+})
+it('refuses a database at another schema without touching it and names reset', () => {
+  const path = join(directory, 'orchestrator.sqlite')
+  new Store(path).close()
+  const db = new DatabaseSync(path)
+  db.prepare("UPDATE kv SET value = '13' WHERE key = 'schema'").run()
+  db.prepare('INSERT INTO kv VALUES (?, ?)').run('kept', '"value"')
+  db.close()
+  expect(() => new Store(path)).toThrow(/version 13.*reset/s)
+  const kept = new DatabaseSync(path)
+  expect(kept.prepare("SELECT value FROM kv WHERE key = 'schema'").get()).toEqual({ value: '13' })
+  expect(kept.prepare("SELECT value FROM kv WHERE key = 'kept'").get()).toEqual({ value: '"value"' })
+  kept.close()
+})
 it('finds triggers by thread', () => {
   const store = new Store(join(directory, 'orchestrator.sqlite'))
   store.triggers.save({ id: 'a', source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_%_x' }], actor: { source: 'feishu', id: 'u' }, human: true, at: '2', text: 'later', meta: {} })
@@ -136,7 +156,7 @@ it('spells every kv key in KV alone, so each record is named by its entry there'
   // 忽略与无关字符串字面量冲突的单词键。
   const keys = entries.map(entry => typeof entry === 'string' ? entry : entry.prefix).filter(name => /[-:]/.test(name))
   const modules = readdirSync(src, { recursive: true, encoding: 'utf8' })
-    .filter(path => /\.tsx?$/.test(path) && !['kv.ts', join('app', 'migration.ts')].includes(path))
+    .filter(path => /\.tsx?$/.test(path) && path !== 'kv.ts')
   const spelled = modules.flatMap(path => {
     const text = readFileSync(join(src, path), 'utf8')
     return keys.filter(name => text.includes(`'${name}`) || text.includes(`\`${name}`)).map(name => `${path}: ${name}`)

@@ -9,7 +9,6 @@ import { QueueEntrySchema, type QueueEntry } from '../queue/model.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
 import type { GitCredential } from '../git-credentials/kind.ts'
 import type { FeishuCredential } from '../feishu-credentials/kind.ts'
-import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, migrateTo12, tooOld } from './migration.ts'
 import { Versions } from './versions.ts'
 import { storeReads } from './store-read.ts'
 
@@ -28,7 +27,7 @@ export interface SettingsVersion {
 }
 /**
  * 定义活跃工作集的生成列和部分索引，使轮次只扫描活跃行。
- * 缺少某列的旧数据库会在打开时补上该列，并由 SQLite 从已存储的 JSON 行填充。
+ * 打开数据库时按这里的定义补齐列与索引，由 SQLite 从已存储的 JSON 行填充。
  */
 const SETS: Record<string, Record<string, string>> = {
   ticket: {
@@ -53,18 +52,22 @@ const SETS: Record<string, Record<string, string>> = {
         || COALESCE(value ->> '$.itemKey', '#' || (value ->> '$.item')) END)`,
   },
 }
-export { SCHEMA_VERSION }
+/** 当前数据库模式版本；只有这一版本的数据库可以被打开，其他版本必须重置。 */
+export const SCHEMA_VERSION = 14
+/** 拒绝打开其他模式版本的错误消息：本版本不做迁移，只能备份后用 `reset` 从空基线重新开始。 */
+const unsupported = (version: number): string =>
+  `Unsupported orchestrator database version ${version}: this build opens schema ${SCHEMA_VERSION} only; back it up and start from an empty baseline with reset (the panel's Reset action, \`reset\` command, or the resetState setting)`
 /**
  * 实现领域 `Repositories`、视图读取查询、带版本的设置、发件箱回执和键值状态的 SQLite 支撑存储。
- * 运行时在锁定状态目录后打开它，并在启动时自动迁移受支持的旧模式。
+ * 运行时在锁定状态目录后打开它；空库在打开时按当前基线建表，其他模式的库直接拒绝。
  * 引擎在 `atomic` 事务内修改领域聚合，而来源、视图和发件箱读取状态或更新各自的记录。
  */
 export class Store implements Repositories {
   readonly db: DatabaseSync
   /**
-   * 在 `path` 处打开或创建 SQLite 数据库，并在单个事务中将模式 10、11、12 或 13 迁移到模式 14。
+   * 在 `path` 处打开或创建 SQLite 数据库：空库建当前基线并写入 `SCHEMA_VERSION`。
    * @param report - 接收 `afterCommit` 回调抛出的错误，且不会使已提交的事务失败。
-   * @throws 当数据库模式早于 `OLDEST_SCHEMA`（10）、晚于 `SCHEMA_VERSION`（14），或迁移失败时抛出；无论哪种情况，数据库文件都保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
+   * @throws 当数据库模式不是 `SCHEMA_VERSION`（14）时抛出，提示备份并用 `reset` 从空基线重新开始；此时数据库文件保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
    */
   constructor(path: string, private readonly report: (error: unknown) => void = () => {}) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
@@ -74,52 +77,43 @@ export class Store implements Repositories {
       chmodSync(path, 0o600)
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
       const version = this.get(KV.store.schema)
-      if (version !== undefined && version > SCHEMA_VERSION) throw new Error(`Unsupported orchestrator database version ${version}`)
-      if (version !== undefined && version < OLDEST_SCHEMA) throw new Error(tooOld(version))
-      const migrating = version !== undefined && version < SCHEMA_VERSION
-      try {
-        this.atomic(() => {
-          this.db.exec(`
-            CREATE TABLE IF NOT EXISTS trigger (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS disposition (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS thread (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS ticket (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS decision (id TEXT PRIMARY KEY, thread TEXT NOT NULL, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS trigger_thread (thread TEXT NOT NULL, id TEXT NOT NULL, at TEXT NOT NULL, human INTEGER NOT NULL,
-              PRIMARY KEY (thread, id));
-            CREATE TABLE IF NOT EXISTS effect (kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL,
-              generation INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL,
-              since TEXT NOT NULL, PRIMARY KEY (kind, key));
-            CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, value TEXT NOT NULL, seq INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS git_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS feishu_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS trigger_at ON trigger(at);
-            CREATE INDEX IF NOT EXISTS trigger_thread_at ON trigger_thread(thread, at);
-            CREATE INDEX IF NOT EXISTS decision_thread ON decision(thread);
-            CREATE INDEX IF NOT EXISTS effect_due ON effect(kind, due, seq);
-            CREATE INDEX IF NOT EXISTS queue_seq ON queue(seq);
-          `)
-          this.addColumns()
-          // 活动态唯一：旧库若有重复活动条目，保留最早入队的一条，避免唯一索引创建失败。
-          this.db.exec(`DELETE FROM queue WHERE uniqueKey IS NOT NULL AND rowid NOT IN
-            (SELECT MIN(rowid) FROM queue WHERE uniqueKey IS NOT NULL GROUP BY uniqueKey)`)
-          this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS queue_unique_active ON queue(uniqueKey) WHERE uniqueKey IS NOT NULL')
-          if (version !== undefined && version < 11) migrateTo11(this)
-          if (version !== undefined && version < 12) migrateTo12(this)
-          if (version !== SCHEMA_VERSION) this.set(KV.store.schema, SCHEMA_VERSION)
-        })
-      } catch (error) {
-        if (!migrating) throw error
-        const reason = error instanceof Error ? error.message : String(error)
-        throw new Error(`The orchestrator database is unchanged at schema ${version}: its migration to schema ${SCHEMA_VERSION} failed: ${reason}`, { cause: error })
-      }
+      if (version !== undefined && version !== SCHEMA_VERSION) throw new Error(unsupported(version))
+      this.atomic(() => {
+        this.createTables()
+        this.addColumns()
+        this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS queue_unique_active ON queue(uniqueKey) WHERE uniqueKey IS NOT NULL')
+        if (version === undefined) this.set(KV.store.schema, SCHEMA_VERSION)
+      })
     } catch (error) {
       this.db.close()
       throw error
     }
   }
-  /** 打开由早期版本创建的数据库时，协调生成的工作集列和索引。 */
+  /** 建立当前基线的表与普通索引；空库和已有当前模式库都走这里，重复执行没有副作用。 */
+  private createTables(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS trigger (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS disposition (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS thread (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS ticket (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS decision (id TEXT PRIMARY KEY, thread TEXT NOT NULL, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS trigger_thread (thread TEXT NOT NULL, id TEXT NOT NULL, at TEXT NOT NULL, human INTEGER NOT NULL,
+        PRIMARY KEY (thread, id));
+      CREATE TABLE IF NOT EXISTS effect (kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL,
+        generation INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL,
+        since TEXT NOT NULL, PRIMARY KEY (kind, key));
+      CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, value TEXT NOT NULL, seq INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS git_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS feishu_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS trigger_at ON trigger(at);
+      CREATE INDEX IF NOT EXISTS trigger_thread_at ON trigger_thread(thread, at);
+      CREATE INDEX IF NOT EXISTS decision_thread ON decision(thread);
+      CREATE INDEX IF NOT EXISTS effect_due ON effect(kind, due, seq);
+      CREATE INDEX IF NOT EXISTS queue_seq ON queue(seq);
+    `)
+  }
+  /** 确保工作集列与索引和当前构建一致；定义变化的生成列会被重建。 */
   private addColumns(): void {
     const columns = (table: string) => new Set(this.db.prepare('SELECT name FROM pragma_table_xinfo(?)').all(table).map(row => String(row.name)))
     for (const [table, definitions] of Object.entries(SETS)) {
@@ -136,7 +130,6 @@ export class Store implements Repositories {
         this.db.exec(`CREATE INDEX IF NOT EXISTS ${table}_${name} ON ${table}(${name}) WHERE ${name} IS NOT NULL`)
       }
     }
-    if (!columns('effect').has('generation')) this.db.exec('ALTER TABLE effect ADD COLUMN generation INTEGER NOT NULL DEFAULT 0')
   }
   /** 关闭底层 SQLite 数据库连接。 */
   close(): void { this.db.close() }

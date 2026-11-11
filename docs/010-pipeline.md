@@ -281,8 +281,8 @@ interface EngineForPipeline {
 | 候选旧实现 | 结论 | 仓库内证据 |
 | --- | --- | --- |
 | `github-watch` / `gitlab-watch` / `feishu-watch` 独立插件条目 | 早已删除，不在本次范围 | 全仓搜索仅命中 `docs/009`、`docs/010`、`verification/` 与 `.trae/` 历史方案，`src/` 无命中 |
-| 单来源迁移与旧配置读取 | 早已删除 | `tests/migration.spec.ts` 只覆盖 schema 11 的存储迁移，与来源配置无关 |
-| `src/app/migration.ts` | 保留 | 被 `src/app/store.ts` 引用，并有迁移测试覆盖；删除会破坏已发布状态库的升级路径 |
+| 单来源迁移与旧配置读取 | 早已删除 | 全仓无单来源迁移代码，来源配置只按当前记录读取 |
+| 架构迁移与旧库兼容 | 已删除 | 本版本只接受当前架构；空库建基线，其他架构启动即报错并提示 `reset`，不做任何升级转换 |
 | 现有 GitHub/GitLab/飞书适配器 | 保留 | `src/sources/adapters.ts` 仍注册三者，`tests/sources.spec.ts`、`tests/gitlab.spec.ts` 覆盖 |
 | 现有工单/执行器/渠道 | 保留 | `src/core/tickets.ts`、`src/executor/dsh.ts`、`src/app/outbox.ts` 均被流水线直接调用 |
 | 旧的「每种类型只能一条记录」假设 | 不需要删除 | 009 已完成记录化；`firstSource` 仍用于部署摘要与飞书面板开关，删除会改变现有面板行为 |

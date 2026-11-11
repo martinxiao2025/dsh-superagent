@@ -1274,8 +1274,8 @@ it('keeps replies and acknowledgements to an IM conversation within the IM limit
   await expect(runTool(sessionId, 'orchestrator_ack', { trigger_id: follow.id, text: long })).rejects.toThrow(`at most ${IM_WORDS} words`)
 })
 
-it('refuses a second process on the same state directory before it opens the database, so it migrates nothing', () => {
-  // 运行中的构建会以 schema 10 读取的数据库保持原样。
+it('refuses a second process on the same state directory before it opens the database', () => {
+  // 第二个进程不打开数据库，因此其中的记录保持原样。
   const db = new DatabaseSync(join(directory, 'orchestrator.sqlite'))
   db.prepare("UPDATE kv SET value='10' WHERE key='schema'").run()
   db.close()

@@ -11,7 +11,7 @@
 ## 0. 结论摘要
 
 1. 现在四个分区不是四类并列对象，而是「一条配置链被拆成四段」：消息来源（飞书）→ 代码仓库 → 任务来源 → 项目。拆开后又用记录 ID 互相引用，于是同一个概念在 2–3 个地方各存一份，靠保存时的一致性校验兜底；认证材料则完全埋在代码仓库或飞书来源记录里，无法独立管理。
-2. 「来源」现在只剩飞书一种记录（[adapters.ts:1-5](../src/sources/adapters.ts#L1-L5)），GitHub / GitLab 已在模式 11→12 迁移中并入 `codeRepos`（[migration.ts:91-134](../src/app/migration.ts#L91-L134)）。继续把「来源」作为与「代码仓库」「任务来源」并列的一级分区，语义已经名不副实。
+2. 「来源」现在只剩飞书一种记录（[adapters.ts:1-5](../src/sources/adapters.ts#L1-L5)），GitHub / GitLab 已并入 `codeRepos`（当前只保留这一基线，旧库需 `reset`）。继续把「来源」作为与「代码仓库」「任务来源」并列的一级分区，语义已经名不副实。
 3. 布局问题的根因是「设置」同时承担了导航、配置、运行状态三种职责：顶部已有「来源」「项目」页签，设置里又各有一份；列表与编辑是同一张卡片的内联展开；保存、验证、启停、删除四种动作分散在卡片的不同位置；任务来源甚至没有编辑入口。
 4. 推荐 **方案 B：项目内联为主 + 双凭据独立 + 高级复用库**。
    - 代码仓库与任务来源默认内联进项目表单，不再作为主设置分区。
@@ -57,7 +57,7 @@
 
 ### 1.4 迁移留下的历史痕迹
 
-- 模式 12 迁移把 GitHub / GitLab 从 `sources` 搬到 `codeRepos`，pipeline 记录直接删除（[migration.ts:91-134](../src/app/migration.ts#L91-L134)）。所以「来源」分区的类型目录现在只剩飞书，但导航名称仍是宽泛的「来源」。
+- 历史上 GitHub / GitLab 已从 `sources` 搬到 `codeRepos`，pipeline 记录直接删除（该迁移随基线收敛移除，旧库需 `reset`）。所以「来源」分区的类型目录现在只剩飞书，但导航名称仍是宽泛的「来源」。
 - `CodeRepoRecordSchema` 只约束外壳，配置由类型 schema 决定（[code-repos/kind.ts:8-18](../src/code-repos/kind.ts#L8-L18)）；代码仓库没有分支字段，分支只能落在项目上。
 - 任务来源记录有 `enabled`，但面板既不显示也不能改，只有新增与删除。
 
@@ -603,5 +603,5 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 - 目标新增（未实现，仅设计）：`src/git-credentials/`、`src/feishu-credentials/`、`src/client/git-credentials.tsx`、`src/client/feishu-credentials.tsx`；`src/secrets/` 只放加密与掩码工具，两个凭据模块不共用业务代码。
 - 项目：[projects.tsx](../src/client/projects.tsx)、[projects/kind.ts](../src/projects/kind.ts)
 - 设置保存与一致性校验：[app/settings.ts](../src/app/settings.ts)
-- 迁移：[app/migration.ts](../src/app/migration.ts)
+- 数据库基线：[app/store.ts](../src/app/store.ts)
 - 预检与验证接口：[app/setup.ts](../src/app/setup.ts)、[app/http.ts:216-260](../src/app/http.ts#L216-L260)

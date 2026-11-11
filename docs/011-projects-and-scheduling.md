@@ -327,6 +327,8 @@ queued → starting → running → succeeded
 
 ### 7.1 迁移步骤（一次性，schema 11 → 12）
 
+> 已完成，并随后随基线收敛删除：当前版本只落最终 schema，旧库需 `reset`。以下保留为当时的设计记录。
+
 `src/app/migration.ts` 增加 `migrateTo12(store)`，在单个事务里完成：
 
 1. 遍历 `settings.sources`：
@@ -398,7 +400,7 @@ queued → starting → running → succeeded
 | 文件 | 改动 |
 | --- | --- |
 | `src/policy.ts` | `SettingsSchema` 拆为 `sources / codeRepos / taskSources / projects`；名称必填；删除 `projectWorkers` |
-| `src/app/migration.ts` | `SCHEMA_VERSION` 11 → 12；新增 `migrateTo12` 与清理逻辑 |
+| `src/app/migration.ts` | 当时：`SCHEMA_VERSION` 11 → 12 与 `migrateTo12`；现已删除，基线建表在 `src/app/store.ts` |
 | `src/app/store.ts`、`src/app/store-read.ts` | 新增项目 / 代码仓库 / 任务来源 / 队列表与读取 |
 | `src/app/settings.ts`、`src/app/settings-history.ts` | 新 block 类型、CRUD 与变更历史 |
 | `src/app/setup.ts`、`src/setup.ts` | 名称必填校验；代码仓库 / 任务来源预检字段 |
