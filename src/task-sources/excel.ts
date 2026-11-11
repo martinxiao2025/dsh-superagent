@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import type { SourceCheck } from '../setup.ts'
+import { commitWorkCopy } from '../code-repos/work.ts'
 import { readTaskTable } from './table.ts'
 import { importTasks, TaskListError, type RawTask } from './tasks.ts'
 import { writeTaskStatusAt } from './writeback.ts'
@@ -41,11 +42,12 @@ const fields: TaskSourceDriver['fields'] = [
 export async function taskFilePath(
   config: ExcelTaskSourceConfig,
   syncRepo?: (repo: string) => Promise<string>,
+  directory?: string,
 ): Promise<string> {
   if (config.repo) {
     if (isAbsolute(config.file)) throw new TaskRepoError('repoNotReady', `任务清单路径必须是代码仓库内的相对路径：${config.file}`)
-    if (!syncRepo) throw new TaskRepoError('repoNotReady', `代码仓库 ${config.repo} 尚未接入同步能力`)
-    return join(await syncRepo(config.repo), config.file)
+    if (!directory && !syncRepo) throw new TaskRepoError('repoNotReady', `代码仓库 ${config.repo} 尚未接入同步能力`)
+    return join(directory ?? await syncRepo!(config.repo), config.file)
   }
   if (!isAbsolute(config.file)) {
     throw new TaskRepoError('repoUnset', `任务清单路径不是绝对路径，且未选择代码仓库：${config.file}`)
@@ -108,9 +110,14 @@ export const excelTaskSource: TaskSourceDriver<ExcelTaskSourceConfig> = {
     ctx.signal.throwIfAborted()
     return tasks
   },
-  /** 回写状态列；与读取共用同一个工作副本解析。 */
+  /** 回写状态列；与读取共用同一个工作副本解析，写完后提交该文件使工作副本保持干净。 */
   async writeback(config: ExcelTaskSourceConfig, target, status, ctx: TaskSourceWriteContext): Promise<void> {
-    const file = await taskFilePath(config, ctx.syncRepo)
+    const directory = config.repo && ctx.syncRepo ? await ctx.syncRepo(config.repo) : undefined
+    const file = await taskFilePath(config, ctx.syncRepo, directory)
     await writeTaskStatusAt(file, config.sheet, taskColumnsOf(config), target, status)
+    if (directory && ctx.commands) {
+      await commitWorkCopy((args, cwd) => ctx.commands!.git(args, cwd), directory, file,
+        `chore: record task ${target.taskId} as ${status}`)
+    }
   },
 }

@@ -18,6 +18,10 @@ export interface WorkItem {
   taskTitle: string
   title: string
   text: string
+  /** 由工作项文本派生的稳定键；任务内列表重排后仍能对应同一项。 */
+  itemKey: string
+  /** 标题与正文的摘要；变化表示工作项内容被修改。 */
+  contentHash: string
 }
 
 /** 清单中的一行：行号用于把导入问题定位回原表，`values` 已按表头映射。 */
@@ -99,8 +103,22 @@ export function splitTask(task: RawTask): WorkItem[] {
   const boxes = lines.flatMap(line => { const match = CHECKBOX.exec(line); return match ? [match[1]!.trim()] : [] })
   const numbered = lines.flatMap(line => { const match = NUMBERED.exec(line); return match ? [match[1]!.trim()] : [] })
   const parts = boxes.length ? boxes : numbered.length >= 2 ? numbered : []
-  if (!parts.length) return [{ taskId: task.id, taskTitle: task.title, title: task.title, text: compose(task) }]
-  return parts.map(part => ({ taskId: task.id, taskTitle: task.title, title: `${task.title} / ${part}`, text: compose(task, part) }))
+  const seen = new Map<string, number>()
+  // 工作项身份取文本摘要与重复序号：列表增删或重排不会把旧内容当成新项，也不会把不同项混为一谈。
+  const identity = (text: string): { itemKey: string; contentHash: string } => {
+    const base = simpleHash(text)
+    const occurrence = seen.get(base) ?? 0
+    seen.set(base, occurrence + 1)
+    return { itemKey: `${base}-${occurrence}`, contentHash: simpleHash(`${text}\u0000${task.id}`) }
+  }
+  if (!parts.length) {
+    const text = compose(task)
+    return [{ taskId: task.id, taskTitle: task.title, title: task.title, text, ...identity(`${task.title}\u0000${text}`) }]
+  }
+  return parts.map(part => {
+    const text = compose(task, part)
+    return { taskId: task.id, taskTitle: task.title, title: `${task.title} / ${part}`, text, ...identity(`item\u0000${part}`) }
+  })
 }
 
 /** 组装工作项交给执行器的正文：子项、任务标题与完整描述。 */

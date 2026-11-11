@@ -147,7 +147,7 @@ export class Runtime extends Service implements SourceHost {
       const stopTicket: EngineForSettings['stopTicket'] = (id, reason) => this.engine.stopTicket(id, reason)
       this.settings = new Settings({ store, sources, engine: { policyChanged, stopTicket }, health: board, context: ctx, lifetime: this.lifetime, sessions,
         sourceHost: this, setup, requestPass: () => { this.passes.request() } })
-      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, health: board.claim('worker'), machine,
+      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, commands, health: board.claim('worker'), machine,
         lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
         repliedTo: trigger => repliedTo({ store, sources }, trigger) })
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
@@ -172,7 +172,9 @@ export class Runtime extends Service implements SourceHost {
       this.scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
         engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
         executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
-        commands, stateDir: machine.stateDir, lifetime: this.lifetime })
+        effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime })
+      // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
+      effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
       // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
       const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
       const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
@@ -277,6 +279,7 @@ export class Runtime extends Service implements SourceHost {
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
       queue: () => this.scheduler.snapshot(),
+      forgetProject: id => this.scheduler.forget(id),
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get sourceProblems() { return setup.sourceProblems }, get sourceProblem() { return runtime.sourceProblem },
       get feishuProblem() { return runtime.feishuProblem },

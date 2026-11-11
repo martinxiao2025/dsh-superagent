@@ -1,10 +1,13 @@
 /** 任务来源驱动：Excel / 飞书读取、字段级预检与注册表扩展。 */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { Commands } from '../src/infra/commands.ts'
+import { commitWorkCopy } from '../src/code-repos/work.ts'
+import { gitEnv } from './fixtures/git.ts'
 import { readTaskTable } from '../src/task-sources/table.ts'
 import { TASK_SOURCE_DRIVERS, TaskSourceRegistry, taskSources } from '../src/task-sources/index.ts'
 import { excelTaskSource } from '../src/task-sources/excel.ts'
@@ -58,6 +61,41 @@ describe('excel task source', () => {
     await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成', { syncRepo: async () => root })
     await expect(excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: async () => root }))
       .resolves.toEqual([{ id: '1', title: '登录', description: '修复', status: '已完成' }])
+  })
+
+  it('keeps the original BOM and CRLF line endings when writing back', async () => {
+    const root = temporary()
+    mkdirSync(join(root, 'tasks'))
+    const file = join(root, 'tasks', 'backlog.csv')
+    writeFileSync(file, '\uFEFFid,title,description,status\r\n1,登录,修复,待处理\r\n2,注册,新建,待处理\r\n', 'utf8')
+    const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
+    await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成', { syncRepo: async () => root })
+    const bytes = readFileSync(file)
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+    const text = bytes.toString('utf8').replace(/^\uFEFF/, '')
+    expect(text).toBe('id,title,description,status\r\n1,登录,修复,已完成\r\n2,注册,新建,待处理\r\n')
+    expect(text.replaceAll('\r\n', '')).not.toContain('\n')
+  })
+
+  it('commits the writeback so the working copy is not left dirty', async () => {
+    const root = temporary()
+    const run = (args: string[], cwd: string): string => execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' })
+    run(['init', '-q'], root)
+    run(['config', 'user.email', 'test@example.com'], root)
+    run(['config', 'user.name', 'Test'], root)
+    mkdirSync(join(root, 'tasks'))
+    const file = join(root, 'tasks', 'backlog.csv')
+    writeFileSync(file, 'id,title,description,status\n1,登录,修复,待处理\n', 'utf8')
+    run(['add', '.'], root)
+    run(['commit', '-qm', 'initial'], root)
+    const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
+    const git = async (args: string[], cwd: string): Promise<string> => execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' })
+    await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成',
+      { syncRepo: async () => root, commands: { git, scope: () => ({ git }) } as unknown as Commands })
+    expect(run(['status', '--porcelain'], root).trim()).toBe('')
+    expect(run(['show', 'HEAD:tasks/backlog.csv'], root)).toContain('已完成')
+    // 工作副本干净，后续快进同步不会被脏文件阻塞。
+    expect(run(['merge', '--ff-only', 'HEAD'], root)).toBeDefined()
   })
 })
 

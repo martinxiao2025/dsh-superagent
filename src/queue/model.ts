@@ -14,6 +14,10 @@ export const QueueEntrySchema = z.object({
   task: z.string().min(1),
   /** 任务内的工作项序号；单工作项任务为 0。 */
   item: z.number().int().nonnegative(),
+  /** 工作项的稳定键：由内容派生，任务内列表增删或重排时仍能对应。旧记录没有该字段时按序号匹配。 */
+  itemKey: z.string().min(1).optional(),
+  /** 工作项内容的摘要；变化时旧条目被取代，新内容重新入队。 */
+  contentHash: z.string().min(1).optional(),
   /** 工作项标题，用作工单标题。 */
   title: z.string(),
   /** 交给工作单元的正文。 */
@@ -69,6 +73,10 @@ export const queueActive = (entry: Pick<QueueEntry, 'state'>): boolean =>
 export const queueInFlight = (entry: Pick<QueueEntry, 'state'>): boolean =>
   entry.state === 'starting' || entry.state === 'running'
 
-/** 队列条目 ID：同一任务的工作项按出现次数区分，让取消后重新出现的工作项保留上一段记录。 */
-export const queueId = (project: string, task: string, item: number, appearance: number): string =>
-  key('queue', project, task, String(item), String(appearance))
+/** 队列条目 ID：同一任务的工作项按稳定键与出现次数区分，让取消后重新出现的工作项保留上一段记录。 */
+export const queueId = (project: string, task: string, itemKey: string, appearance: number): string =>
+  key('queue', project, task, itemKey, String(appearance))
+
+/** 条目对应的稳定工作项键；旧记录没有 `itemKey` 时退回序号。 */
+export const queueItemKey = (entry: Pick<QueueEntry, 'item' | 'itemKey'>): string => entry.itemKey ?? `#${entry.item}`
+

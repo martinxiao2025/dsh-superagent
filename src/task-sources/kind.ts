@@ -81,6 +81,8 @@ export interface TaskSourceRunContext {
 export interface TaskSourceWriteContext {
   signal?: AbortSignal
   syncRepo?(repo: string): Promise<string>
+  /** 绑定到代码仓库记录的命令入口；用于在回写后把工作副本恢复干净。 */
+  commands?: Commands
 }
 
 /** 预检结果构造：通过。 */

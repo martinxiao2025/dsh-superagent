@@ -59,6 +59,8 @@ export interface HttpHost {
   configured(): boolean
   /** 项目调度队列的只读快照；P5 面板与外部集成读取。 */
   queue(): QueueSnapshot
+  /** 项目被删除后清理它的队列记录并停止在跑的工单。 */
+  forgetProject(projectId: string): void
   links(): LinkTarget
   ticketEnvironment(ticket: Ticket): Variable[]
   checkSetup(): void
@@ -242,7 +244,12 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       const { id, ...value } = CreateProjectRequest.parse(await body())
       return runtime.settings.createProject(id, value, 'panel')
     },
-    'DELETE projects/:id': ({ params }) => runtime.settings.removeProject(params.id, 'panel'),
+    'DELETE projects/:id': async ({ params }) => {
+      const removed = await runtime.settings.removeProject(params.id, 'panel')
+      // 设置删除成功后再清理队列，避免设置写入失败时丢失排队任务。
+      runtime.forgetProject(params.id)
+      return removed
+    },
     // 项目详情页读取该项目在队列中的任务与全局运行时占用；项目不存在时 404。
     'GET projects/:id/tasks': ({ params }) => {
       const settings = store.settings()

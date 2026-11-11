@@ -34,7 +34,10 @@ const memory = (): MemorySource => {
 /** 一台内存宿主：真实调度器，队列、工单与执行器状态由测试控制。 */
 function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   const entries = new Map<string, QueueEntry>()
-  const tickets = new Map<string, { id: string; ended?: { outcome: string; by: string; at: string } }>()
+  const tickets = new Map<string, { id: string; assignments: unknown[]; undelivered: unknown[]; ended?: { outcome: string; by: string; at: string } }>()
+  /** 与真实引擎一致：同一触发器只创建一个工单，重复投递拿回已存在的工单。 */
+  const byTrigger = new Map<string, string>()
+  const effects: { kind: string; key: string; payload: unknown }[] = []
   let clock = Date.parse('2026-01-01T00:00:00.000Z')
   let created = 0
   const settings = {
@@ -51,6 +54,8 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
       active: () => [...entries.values()].filter(entry => entry.state === 'queued' || entry.state === 'starting' || entry.state === 'running')
         .sort((left, right) => left.seq - right.seq),
       maxSeq: () => Math.max(0, ...[...entries.values()].map(entry => entry.seq)),
+      remove: (project: string) => { for (const [id, entry] of entries) if (entry.project === project) entries.delete(id) },
+      prune: () => 0,
     },
     tickets: { get: (id: string) => tickets.get(id) },
     atomic: <T>(work: () => T): T => work(),
@@ -59,8 +64,11 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   const scheduler = new ProjectScheduler({ store, settings: () => settings, registry: new TaskSourceRegistry([driver]),
     engine: {
       schedule: input => {
+        const existing = byTrigger.get(input.trigger.id)
+        if (existing) return { ticketId: existing, created: false }
         const ticketId = `ticket-${++created}`
-        tickets.set(ticketId, { id: ticketId })
+        byTrigger.set(input.trigger.id, ticketId)
+        tickets.set(ticketId, { id: ticketId, assignments: [], undelivered: [] })
         expect(input.projectName).toBeTruthy()
         return { ticketId, created: true }
       },
@@ -70,10 +78,22 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
         return ticket as never
       },
     },
+    effects: {
+      enqueue: (kind: string, key: string, payload: unknown) => { effects.push({ kind, key, payload }) },
+      cancel: (kind: string, key: string) => {
+        for (let index = effects.length - 1; index >= 0; index--) if (effects[index]!.kind === kind && effects[index]!.key === key) effects.splice(index, 1)
+      },
+    },
     executor: { slotsInUse: () => 0, projectsInUse: () => [] },
     commands: { scope: () => ({}) } as never, stateDir: 'C:/tmp', lifetime: new AbortController().signal,
     syncRepo: async () => 'C:/tmp/repo', now: () => clock })
-  return { scheduler, driver, entries, tickets, advance: (ms: number) => { clock += ms }, settings }
+  /** 执行排队的回写副作用；真实实现由 Effects 在工作线程外调用同一个处理器。 */
+  const flush = async () => {
+    for (const effect of effects.splice(0)) {
+      if (effect.kind === 'writeback') await scheduler.writeBackNow(effect.payload as never)
+    }
+  }
+  return { scheduler, driver, entries, tickets, effects, flush, advance: (ms: number) => { clock += ms }, settings }
 }
 
 /** 项目记录：两个项目共用同一套默认策略，只有名称不同。 */
@@ -138,7 +158,9 @@ it('失败按项目退避重排，超过重试次数后最终失败并回写失�
   const failed = h.entries.get(first.id)!
   expect(failed).toMatchObject({ state: 'failed', attempt: 3, reason: expect.stringContaining('dropped') })
   expect(failed.tickets).toHaveLength(3)
-  await Promise.resolve()
+  // 每次重试都是新的触发器与工单，而不是复用已经结束的工单。
+  expect(new Set(failed.tickets).size).toBe(3)
+  await h.flush()
   expect(h.driver.written.at(-1)).toMatchObject({ taskId: 'a1', status: 'failed' })
 })
 
@@ -150,7 +172,9 @@ it('成功结束后回写完成状态，并保留队列记录', async () => {
   const entry = [...h.entries.values()][0]!
   h.tickets.get(entry.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
   h.scheduler.observe(entry.ticketId!)
-  await Promise.resolve()
+  // 回写进入持久化副作用队列（带尝试次数的键），而不是发起即忘。
+  expect(h.effects.at(-1)).toMatchObject({ kind: 'writeback', payload: { project: 'a', task: 'a1', status: 'done' } })
+  await h.flush()
   expect(h.entries.get(entry.id)).toMatchObject({ state: 'succeeded', ticketId: entry.ticketId })
   expect(h.driver.written.at(-1)).toMatchObject({ taskId: 'a1', status: 'done' })
   // 已经成功的任务即使仍在来源中，也不会重复入队。
@@ -167,6 +191,100 @@ it('重启后从持久化队列恢复：启动中没有工单的条目重新排�
   h.entries.set(entry.id, { ...entry, state: 'starting', ticketId: undefined })
   await h.scheduler.scan()
   expect(h.entries.get(entry.id)).toMatchObject({ state: 'queued', attempt: 1, reason: expect.stringContaining('never created') })
+})
+
+it('任务内工作项删除或改写只影响对应条目', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [{ id: 'a1', title: 'A 一', description: '- [ ] 一\n- [ ] 二', status: 'todo' }]
+  await h.scheduler.poll('a')
+  const [first, second] = [...h.entries.values()].sort((left, right) => left.item - right.item)
+  expect(first).toMatchObject({ state: 'queued', itemKey: expect.any(String), contentHash: expect.any(String) })
+  expect(second).toMatchObject({ state: 'queued', itemKey: expect.any(String) })
+  // 删除第二项：只取消它，第一项保持排队。
+  h.driver.tasks = [{ id: 'a1', title: 'A 一', description: '- [ ] 一', status: 'todo' }]
+  await h.scheduler.poll('a')
+  expect(h.entries.get(first!.id)).toMatchObject({ state: 'queued', present: true })
+  expect(h.entries.get(second!.id)).toMatchObject({ state: 'cancelled', present: false })
+  // 改写第一项：旧版本取消，新版本入队，而不是把旧内容当成同一项。
+  h.driver.tasks = [{ id: 'a1', title: 'A 一', description: '- [ ] 一（改）', status: 'todo' }]
+  await h.scheduler.poll('a')
+  expect(h.entries.get(first!.id)).toMatchObject({ state: 'cancelled', present: false })
+  expect([...h.entries.values()].filter(entry => entry.state === 'queued')).toHaveLength(1)
+  expect([...h.entries.values()].filter(entry => entry.state === 'queued')[0]!.itemKey).not.toBe(first!.itemKey)
+})
+
+it('已完成任务的内容发生变化时会重新入队', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const entry = [...h.entries.values()][0]!
+  h.tickets.get(entry.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  h.scheduler.observe(entry.ticketId!)
+  await h.flush()
+  expect(h.entries.get(entry.id)!.state).toBe('succeeded')
+  h.driver.tasks = [{ id: 'a1', title: 'A 一', description: '改成新的说明', status: 'todo' }]
+  await h.scheduler.poll('a')
+  const queued = [...h.entries.values()].filter(item => item.state === 'queued')
+  expect(queued).toHaveLength(1)
+  expect(queued[0]!.text).toContain('新的说明')
+})
+
+it('停用的项目不再领取排队项，删除项目后队列记录被清理', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  h.settings.projects.a!.enabled = false
+  h.scheduler.pump()
+  expect([...h.entries.values()][0]!.state).toBe('queued')
+  h.scheduler.forget('a')
+  expect(h.entries.size).toBe(0)
+})
+
+it('runOnStart 决定启动时是否立即轮询', async () => {
+  const h = setup({
+    a: { ...project('a'), schedule: { intervalMinutes: 5, runOnStart: false } },
+    b: { ...project('b'), schedule: { intervalMinutes: 5, runOnStart: true } },
+  })
+  h.driver.tasks = [task('a1', '共享')]
+  h.scheduler.start()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  h.scheduler.stop()
+  const projects = [...h.entries.values()].map(entry => entry.project)
+  expect(projects).toEqual(['b'])
+  // 间隔到期后，未在启动时轮询的项目仍会按周期轮询。
+  h.advance(5 * 60_000)
+  await (h.scheduler as unknown as { tick(startup?: boolean): Promise<void> }).tick()
+  expect([...h.entries.values()].map(entry => entry.project).sort()).toEqual(['a', 'b'])
+})
+
+it('队列在数据库层保证活动条目唯一，并清理过期终态', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'orchestrator-queue-unique-'))
+  const path = join(directory, 'state.db')
+  const base = { project: 'a', task: 't1', item: 0, itemKey: 'k', title: '一', text: '一', taskTitle: '一', attempt: 0,
+    enqueuedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', dueAt: 0, tickets: [], present: true }
+  try {
+    const store = new Store(path)
+    try {
+      store.queue.save({ ...base, id: 'q1', state: 'queued', seq: 1 })
+      expect(() => store.queue.save({ ...base, id: 'q2', state: 'starting', seq: 2 })).toThrow()
+      store.queue.save({ ...base, id: 'q1', state: 'succeeded', seq: 1, endedAt: '2025-01-01T00:00:00.000Z' })
+      store.queue.save({ ...base, id: 'q3', state: 'failed', seq: 2, endedAt: '2026-01-01T00:00:00.000Z' })
+      expect(store.queue.prune('a', '2025-06-01T00:00:00.000Z')).toBe(1)
+      expect(store.queue.list().map(entry => entry.id)).toEqual(['q3'])
+      // 实体读取做运行时校验：损坏或字段缺失的记录会明确失败，而不是被当作合法对象。
+      store.db.prepare('INSERT INTO ticket VALUES (?,?)').run('t1', '{"id":1}')
+      expect(() => store.tickets.get('t1')).toThrow(/invalid: missing id/)
+      store.db.prepare('INSERT INTO trigger VALUES (?,?,?)').run('t2', '{', '2026-01-01T00:00:00.000Z')
+      expect(() => store.triggers.get('t2')).toThrow(/corrupt/)
+      store.db.prepare('INSERT INTO queue VALUES (?,?,?)').run('bad', '{"id":"bad"}', 99)
+      expect(() => store.queue.list()).toThrow()
+    } finally {
+      store.close()
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 it('队列写入 SQLite，重新打开后顺序与状态不变', () => {

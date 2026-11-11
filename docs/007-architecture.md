@@ -298,7 +298,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验；`SettingsSchema` 校验项目对代码仓库与任务来源的引用完整性 |
 | `src/projects/kind.ts` | `ProjectSchema`：项目名称、启停、一对一的 `codeRepo` / `taskSource` 引用、执行目录与分支、调度、重试和任务状态口径 |
 | `src/code-repos/kind.ts` | `CodeRepoRecordSchema` 与 `CodeRepoKindSchema`：代码仓库记录的类型、名称、启停与配置，以及代码仓库类型描述 `CodeRepoType` |
-| `src/code-repos/work.ts` | 代码仓库工作副本：按记录 ID 固定目录，首次 clone、后续同步 |
+| `src/code-repos/work.ts` | 代码仓库工作副本：按记录 ID 固定目录，首次 clone、后续同步，以及把回写的单个文件提交为干净工作树 |
+| `src/code-repos/workspace.ts` | 工单执行工作区：从轮询工作副本创建独立 git worktree，重试时复用，准备失败时移除 |
 | `src/code-repos/sync.ts` | 代码仓库同步：按记录解析远端地址、注册目录凭据、初始化/快进合并并返回提交，不覆盖本地改动 |
 | `src/code-repos/read.ts` | 代码仓库文件读取：只读访问默认分支中的非隐藏文件或目录 |
 | `src/task-sources/kind.ts` | 任务来源记录、字段映射与 `TaskSourceDriver` 契约：类型、名称、schema、字段、预检、读取、可选回写与仓库绑定 |
@@ -440,7 +441,6 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/passes.spec.ts` | 轮次：一次一个，轮次期间请求的在轮次结束后作为一个运行，以及失败轮次报告的运行时健康 |
 | `tests/outbox.spec.ts` | 运行中 Runtime 上的 Outbox：处理暂停或来源未安装时消息等待 |
 | `tests/cache.spec.ts` | `TextCache` |
-| `tests/queue.spec.ts` | Runtime 通过副作用队列进行的工作，以及较早版本存储的内容 |
 | `tests/followups.spec.ts` | 人在工单线程上的跟进：发给主会话的通知、处理它的工具、一次突发的成本；执行器的交回和上下文关注，以及主会话的备注 |
 | `tests/health.spec.ts` | 每个部分一个健康条目，各由其下一次成功清除 |
 | `tests/delivery.spec.ts` | `AgentDelivery` |
@@ -460,8 +460,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
-| `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、飞书文档读取、字段级预检文案与注册表扩展 |
-| `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败、回写与重启恢复 |
+| `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、字段级预检文案与注册表扩展 |
+| `tests/workspace.spec.ts` | 工单执行工作区：从轮询工作副本创建独立 worktree、重试复用、拒绝覆盖与未同步仓库报错 |
+| `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败（每次重试都是新工单）、工作项级增删改、`runOnStart`、停用/删除项目、活动条目唯一索引与终态清理、回写副作用与重启恢复 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |
 | `tests/panel-settings.spec.tsx`、`panel-prompts.spec.tsx`、`panel-deployment.spec.tsx`、`panel-panel.spec.tsx`、`panel-projects.spec.tsx` | 设置分组、草稿和历史、提示词、部署页面、面板的搜索、术语表和路由记忆，以及项目列表、详情与设置 |

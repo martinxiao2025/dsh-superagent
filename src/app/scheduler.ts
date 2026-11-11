@@ -11,7 +11,16 @@ import { syncRepoWorkCopy } from '../code-repos/work.ts'
 import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
 import type { Store } from './store.ts'
-import { queueActive, queueId, queueInFlight, type QueueEntry, type QueueSnapshot } from '../queue/model.ts'
+import type { Effects } from './effects.ts'
+import { queueActive, queueId, queueInFlight, queueItemKey, type QueueEntry, type QueueSnapshot } from '../queue/model.ts'
+
+/** 写入外部清单的持久化副作用载荷；键由队列条目与尝试次数决定，重复投递幂等。 */
+export interface WritebackPayload {
+  project: string
+  task: string
+  taskTitle: string
+  status: string
+}
 
 /** 调度器需要的宿主能力；测试可以替换任务来源注册表与代码仓库同步。 */
 export interface SchedulerHost {
@@ -20,6 +29,8 @@ export interface SchedulerHost {
   readonly engine: Pick<Engine, 'schedule' | 'stopTicket'>
   /** 执行器当前的槽位占用与项目占用。 */
   readonly executor: { slotsInUse(): number; projectsInUse(): string[] }
+  /** 持久化副作用队列：回写经由它重试与观测。 */
+  readonly effects: Pick<Effects, 'enqueue' | 'cancel'>
   readonly commands: Commands
   readonly stateDir: string
   readonly lifetime: AbortSignal
@@ -34,6 +45,8 @@ export interface SchedulerHost {
 
 /** 检查轮询与创建工单之间的最短间隔。 */
 const TICK_MS = 15_000
+/** 终态条目在队列中的保留时长；更早的记录在轮询时清理。 */
+const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000
 
 /** 项目调度器：轮询任务来源、维护持久化队列、在容量允许时建单并跟踪工单终态。 */
 export class ProjectScheduler {
@@ -49,7 +62,7 @@ export class ProjectScheduler {
     this.syncRepo = host.syncRepo ?? (repo => this.defaultSync(repo))
   }
 
-  /** 启动周期检查，并按 `runOnStart` 立即轮询一次。 */
+  /** 启动周期检查；`runOnStart` 的项目立即轮询一次，其余项目等首个间隔到期。 */
   start(): void {
     if (this.timer) return
     this.timer = setInterval(() => void this.tick(), TICK_MS)
@@ -73,6 +86,7 @@ export class ProjectScheduler {
     for (const [id, project] of Object.entries(this.host.settings().projects)) {
       if (project.enabled) await this.poll(id)
     }
+    this.retire()
     this.pump()
   }
 
@@ -99,7 +113,11 @@ export class ProjectScheduler {
       return this.fail(projectId, String(error instanceof Error ? error.message : error))
     }
     this.errors.delete(projectId)
-    this.host.store.atomic(() => this.reconcile(projectId, project, tasks))
+    this.host.store.atomic(() => {
+      this.reconcile(projectId, project, tasks)
+      // 终态只保留有限窗口：活动条目才是队列事实来源，历史记录过期后清理。
+      this.host.store.queue.prune(projectId, new Date(this.now() - TERMINAL_RETENTION_MS).toISOString())
+    })
     this.changed()
   }
 
@@ -111,6 +129,8 @@ export class ProjectScheduler {
     const entries = this.host.store.queue.list()
     for (const entry of entries) {
       if (entry.state !== 'queued' || entry.dueAt > this.now()) continue
+      // 停用或删除的项目不再领取排队项；条目保留供恢复后继续。
+      if (!settings.projects[entry.project]?.enabled) continue
       if (used >= settings.executor.maxWorkers) break
       // 同项目同一时刻只跑一个任务：跳过时保留在原位，由后面的其他项目轮转。
       if (busy.has(entry.project)) continue
@@ -153,10 +173,12 @@ export class ProjectScheduler {
       for (const [id, project] of Object.entries(projects)) {
         if (!project.enabled) continue
         const due = this.nextPoll.get(id)
-        if (startup ? !project.schedule.runOnStart && due === undefined : due !== undefined && due > now) continue
+        // 启动时只轮询 `runOnStart` 的项目；之后按各自的下次轮询时间到期执行。
+        if (startup ? !project.schedule.runOnStart : due !== undefined && due > now) continue
         await this.poll(id)
       }
       for (const entry of this.host.store.queue.active().filter(queueInFlight)) this.settle(entry, this.ticketOf(entry))
+      this.retire()
       this.pump()
     } catch (error) {
       // 单次检查失败不终止周期任务；具体项目的错误已记录在 `errors` 中。
@@ -195,47 +217,58 @@ export class ProjectScheduler {
     }
   }
 
-  /** 项目轮询结果合并进队列：消失的任务取消，新工作项入队，已完成的同项不重复。 */
+  /**
+   * 项目轮询结果合并进队列：按「任务 + 工作项稳定键」核对，消失的工作项取消、
+   * 内容变化的旧条目被取代、新工作项入队；已完成且内容未变的同项不重复。
+   */
   private reconcile(projectId: string, project: Settings['projects'][string], tasks: readonly RawTask[]): void {
     const pending = new Set(project.taskPolicy.pendingStatuses.map(status => status.toLowerCase()))
     const present = new Map<string, RawTask>()
     for (const task of tasks) if (pending.has(task.status.trim().toLowerCase())) present.set(task.id, task)
     const entries = this.host.store.queue.list().filter(entry => entry.project === projectId)
     const latest = new Map<string, QueueEntry>()
-    for (const entry of entries) latest.set(`${entry.task}\u0000${entry.item}`, entry)
-    // 先处理消失：活动条目取消并留痕，其他条目记为不在来源中，等重新出现时再入队。
+    for (const entry of entries) latest.set(`${entry.task}\u0000${queueItemKey(entry)}`, entry)
+    // 先处理整条任务消失：活动条目取消并留痕，其他条目记为不在来源中，等重新出现时再入队。
     for (const entry of entries) {
-      if (present.has(entry.task)) {
-        if (!entry.present) this.save({ ...entry, present: true, updatedAt: this.stamp() })
-        continue
-      }
+      if (present.has(entry.task)) continue
       const absent = entry.present ? { ...entry, present: false, updatedAt: this.stamp() } : entry
       if (entry.present) this.save(absent)
       if (queueActive(absent)) this.cancel(absent, 'The task disappeared from its source')
     }
     for (const task of present.values()) {
       const items = splitTask(task)
+      const keys = new Set(items.map(item => item.itemKey))
+      const owned = entries.filter(entry => entry.task === task.id)
+      // 任务仍在，但某个工作项被删除、重排或改写：已排队的不再执行旧内容；执行中的先跑完再结算。
+      for (const entry of owned) {
+        if (keys.has(queueItemKey(entry))) continue
+        const absent = entry.present ? { ...entry, present: false, updatedAt: this.stamp() } : entry
+        if (entry.present) this.save(absent)
+        if (absent.state === 'queued') this.cancel(absent, 'The work item changed or disappeared; its newer version is queued')
+      }
       items.forEach((item, index) => {
-        const id = `${task.id}\u0000${index}`
-        const previous = latest.get(id)
-        if (previous && !this.enqueueable(previous)) return
-        const appearance = entries.filter(entry => entry.task === task.id && entry.item === index).length
+        const previous = latest.get(`${task.id}\u0000${item.itemKey}`)
+        if (previous) {
+          const changed = previous.contentHash !== undefined && previous.contentHash !== item.contentHash
+          if (queueInFlight(previous)) return
+          if (previous.state === 'queued' && changed) this.cancel({ ...previous, present: false }, 'The work item changed; its newer version is queued')
+          else if (queueActive(previous)) {
+            if (!previous.present) this.save({ ...previous, present: true, updatedAt: this.stamp() })
+            return
+          } else if (previous.state === 'succeeded' && !changed) return
+          else if (previous.present && !changed) return
+        }
+        const appearance = owned.filter(entry => queueItemKey(entry) === item.itemKey).length
         const entry: QueueEntry = {
-          id: queueId(projectId, task.id, index, appearance),
-          project: projectId, task: task.id, item: index, title: item.title, text: item.text, taskTitle: task.title,
+          id: queueId(projectId, task.id, item.itemKey, appearance),
+          project: projectId, task: task.id, item: index, itemKey: item.itemKey, contentHash: item.contentHash,
+          title: item.title, text: item.text, taskTitle: task.title,
           state: 'queued', attempt: 0, seq: this.nextSeq(), enqueuedAt: this.stamp(), updatedAt: this.stamp(), dueAt: this.now(),
           tickets: [], present: true,
         }
         this.save(entry)
       })
     }
-  }
-
-  /** 上一条记录是否允许再入队：进行中的不重复；成功的不重跑；最终失败与取消仅在重新出现后允许。 */
-  private enqueueable(entry: QueueEntry): boolean {
-    if (queueActive(entry)) return false
-    if (entry.state === 'succeeded') return false
-    return !entry.present
   }
 
   /** 把变更写回队列；调用方已持有事务。 */
@@ -250,7 +283,8 @@ export class ProjectScheduler {
     if (!project?.enabled) return false
     const starting: QueueEntry = { ...entry, state: 'starting', startedAt: this.stamp(), updatedAt: this.stamp(), dueAt: this.now() }
     this.host.store.atomic(() => this.host.store.queue.save(starting))
-    const triggerId = key('trigger', 'schedule', entry.project, entry.id)
+    // 每次尝试都必须是一个新的触发器与工单：复用已结束工单的触发器只会拿回旧工单，重试不会真正执行。
+    const triggerId = key('trigger', 'schedule', entry.id, String(entry.attempt))
     const input: ScheduledTicket = {
       trigger: {
         id: triggerId, source: project.codeRepo, threads: [{ source: project.codeRepo, id: `schedule/${entry.project}` }],
@@ -282,7 +316,7 @@ export class ProjectScheduler {
     const project = this.host.settings().projects[entry.project]
     const attempt = entry.attempt + 1
     if (!project || attempt > project.retry.maxRetries) {
-      this.writeBack(entry, 'failed')
+      this.writeBack({ ...entry, attempt }, 'failed')
       return this.finish({ ...entry, attempt }, 'failed', reason)
     }
     const due = this.now() + project.retry.retryBackoffSeconds * 1000
@@ -302,6 +336,31 @@ export class ProjectScheduler {
     this.save({ ...entry, state, endedAt: this.stamp(), updatedAt: this.stamp(), ...(reason ? { reason } : {}) })
   }
 
+  /** 停用的项目保留排队项但不派工（`pump` 跳过）；项目记录已不存在的条目取消，避免成为永久孤儿。 */
+  private retire(): void {
+    const projects = this.host.settings().projects
+    for (const entry of this.host.store.queue.list()) {
+      if (entry.state !== 'queued') continue
+      if (projects[entry.project]) continue
+      this.finish(entry, 'cancelled', 'The project was removed')
+    }
+  }
+
+  /** 项目被删除后清理它的全部队列记录，并停止仍在执行的工单；由设置删除入口调用。 */
+  forget(projectId: string): void {
+    const entries = this.host.store.queue.list().filter(entry => entry.project === projectId)
+    for (const entry of entries) {
+      if (queueInFlight(entry) && entry.ticketId) {
+        try { this.host.store.atomic(() => this.host.engine.stopTicket(entry.ticketId!, 'The project was removed')) }
+        catch { /* 工单已结束或不存在：仍然清理队列记录。 */ }
+      }
+      this.host.effects.cancel('writeback', key('writeback', entry.id, 'done', String(entry.attempt)))
+      this.host.effects.cancel('writeback', key('writeback', entry.id, 'failed', String(entry.attempt)))
+    }
+    this.host.store.atomic(() => this.host.store.queue.remove(projectId))
+    this.changed()
+  }
+
   /** 成功后回写任务状态；失败只记录在队列条目上，不改变工单结果。 */
   private writeBack(entry: QueueEntry, kind: 'done' | 'failed'): void {
     const settings = this.host.settings()
@@ -309,15 +368,23 @@ export class ProjectScheduler {
     const record = project && settings.taskSources[project.taskSource]
     const driver = record && this.registry.kind(record.kind)
     if (!project || !record?.enabled || !driver?.writeback) return
-    const parsed = driver.schema.safeParse(record.config)
-    if (!parsed.success) return
     const status = kind === 'done' ? project.taskPolicy.doneStatus : project.taskPolicy.failedStatus
-    const context = { signal: this.host.lifetime, syncRepo: this.syncRepo }
-    void driver.writeback(parsed.data, { taskId: entry.task, taskTitle: entry.taskTitle }, status, context)
-      .catch(error => {
-        this.errors.set(entry.project, `Writeback failed: ${error instanceof Error ? error.message : String(error)}`)
-        this.changed()
-      })
+    // 持久化副作用：进程重启后仍会重试；键含尝试次数，重复投递不会改变结果。
+    this.host.effects.enqueue('writeback', key('writeback', entry.id, kind, String(entry.attempt)),
+      { project: entry.project, task: entry.task, taskTitle: entry.taskTitle, status })
+  }
+
+  /** 副作用处理器：把状态写回任务来源；失败抛出，由 `Effects` 退避重试并上报健康度。 */
+  async writeBackNow(payload: WritebackPayload): Promise<void> {
+    const settings = this.host.settings()
+    const project = settings.projects[payload.project]
+    const record = project && settings.taskSources[project.taskSource]
+    const driver = record && this.registry.kind(record.kind)
+    if (!project || !record?.enabled || !driver?.writeback) throw new Error(`The task source for ${payload.project} is unavailable`)
+    const parsed = driver.schema.safeParse(record.config)
+    if (!parsed.success) throw new Error(`Invalid task source configuration: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
+    await driver.writeback(parsed.data, { taskId: payload.task, taskTitle: payload.taskTitle }, payload.status,
+      { signal: this.host.lifetime, syncRepo: this.syncRepo, commands: this.boundCommands(parsed.data, project.codeRepo) })
   }
 
   private ticketOf(entry: QueueEntry): Ticket | undefined {

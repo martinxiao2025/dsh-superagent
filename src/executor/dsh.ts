@@ -8,8 +8,10 @@ import { key, latestAssignment, latestReport, liveTicket, runningAssignment, thr
 import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
   from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
+import type { Commands } from '../infra/commands.ts'
 import { runAsWorker, shellArgv, verifyDirectory } from '../infra/environment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
+import { materializeWorkspace, removeWorkspace } from '../code-repos/workspace.ts'
 import type { Settings } from '../policy.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
@@ -67,6 +69,8 @@ export interface ExecutorHost {
   readonly engine: Pick<EngineForExecutor, 'assignmentStarted' | 'inputsDelivered' | 'inputsRead' | 'turnEnded' | 'deliveryFailed' | 'report'
     | 'assignmentInterrupted'>
   readonly store: Pick<Store, 'tickets' | 'triggers' | 'set' | 'settings' | 'atomic' | 'afterCommit'>
+  /** 绑定到代码仓库记录的 git 入口；用于把项目仓库检出到工单目录。 */
+  readonly commands: Pick<Commands, 'scope'>
   /** 持久的效果队列，启动和输入投递经由它运行。 */
   readonly effects: Pick<Effects, 'enqueue' | 'handle'>
   /** `worker` 健康条目，报告后台工作单元事件处理是否失败。 */
@@ -269,22 +273,33 @@ export class DshExecutor implements Executor {
       sourceTrigger(this.host, ticket)) }
   }
   /**
-   * 以工单的执行环境变量，在其父目录中为新工单工作区运行配置的 `executor.prepare` 命令，
-   * 然后按工作单元的视角校验该目录。
-   * 准备命令失败会抛出 `PrepareFailed`，不会自动重试；它留下的空目录会被删除，非空目录则保留。
-   * @throws 当准备命令失败时抛出带命令输出的 PrepareFailed。
+   * 以工单的执行环境变量，在工单工作区中运行配置的 `executor.prepare` 命令，然后按工作单元的视角校验该目录。
+   * 项目工单会先把项目代码仓库检出到工单目录：worker 必须在真实仓库副本上工作，而不是一个空目录。
+   * 准备命令失败会抛出 `PrepareFailed`，不会自动重试；本次创建的工作区会被移除。
+   * @throws 当工作区无法创建或准备命令失败时抛出带原因的错误。
    */
   private async prepareDirectory(ticket: Ticket): Promise<void> {
     const directory = ticket.execution?.directory ?? ''
+    const settings = this.host.store.settings()
+    const basis = ticket.mandate.basis
+    const projectId = basis.via === 'scheduled' ? basis.project : undefined
+    const project = projectId ? settings.projects[projectId] : undefined
+    const repo = project?.codeRepo
+    const checkout = (args: string[], cwd: string) => this.host.commands.scope(repo!).git(args, cwd)
     await mkdir(dirname(directory), { recursive: true })
-    const command = this.host.store.settings().executor.prepare.trim()
+    const workspace = repo
+      ? await materializeWorkspace({ git: checkout, stateDir: this.host.machine.stateDir, repo, directory,
+        branch: project.execution.branch, signal: this.host.lifetime })
+      : undefined
+    const command = settings.executor.prepare.trim()
     const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
     // 强制超时，使挂起的准备命令（例如在凭据提示上）让工单失败，而不是无限占用工作单元槽位。
     const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
-    if (command) await runAsWorker(this.host.context.subprocess, shellArgv(command), dirname(directory), signal, env)
+    if (command) await runAsWorker(this.host.context.subprocess, shellArgv(command), repo ? directory : dirname(directory), signal, env)
       .catch(async (error: unknown) => {
-        // 删除失败的准备命令留下的空目录，以免后续重试把它当作已准备。
-        await rmdir(directory).catch(() => { /* 目录不存在，或保留了命令写入的内容，输出中会说明。 */ })
+        // 删除失败的准备命令留下的工作区，以免后续重试把它当作已准备。
+        await (workspace === 'created' && repo ? removeWorkspace(checkout, this.host.machine.stateDir, repo, directory) : rmdir(directory))
+          .catch(() => { /* 目录不存在，或保留了命令写入的内容，输出中会说明。 */ })
         throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     await mkdir(directory, { recursive: true })

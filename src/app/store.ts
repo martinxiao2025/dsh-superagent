@@ -5,7 +5,7 @@ import { dirname } from 'node:path'
 import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, type ReplyStatus, type Repositories, type Thread, type ThreadFact,
   type ThreadFacts, type Ticket, type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { KV, type Family, type Key } from '../kv.ts'
-import type { QueueEntry } from '../queue/model.ts'
+import { QueueEntrySchema, type QueueEntry } from '../queue/model.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
 import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, migrateTo12, tooOld } from './migration.ts'
 import { Versions } from './versions.ts'
@@ -45,6 +45,10 @@ const SETS: Record<string, Record<string, string>> = {
   queue: {
     active: `TEXT AS (CASE WHEN value ->> '$.state' IN ('queued','starting','running') THEN value ->> '$.project' END)`,
     inflight: `TEXT AS (CASE WHEN value ->> '$.state' IN ('starting','running') THEN value ->> '$.project' END)`,
+    // 同一项目 + 任务 + 工作项在活动态只能有一条，唯一索引把去重放到数据库层。
+    uniqueKey: `TEXT AS (CASE WHEN value ->> '$.state' IN ('queued','starting','running')
+      THEN (value ->> '$.project') || char(31) || (value ->> '$.task') || char(31)
+        || COALESCE(value ->> '$.itemKey', '#' || (value ->> '$.item')) END)`,
   },
 }
 export { SCHEMA_VERSION }
@@ -93,6 +97,10 @@ export class Store implements Repositories {
             CREATE INDEX IF NOT EXISTS queue_seq ON queue(seq);
           `)
           this.addColumns()
+          // 活动态唯一：旧库若有重复活动条目，保留最早入队的一条，避免唯一索引创建失败。
+          this.db.exec(`DELETE FROM queue WHERE uniqueKey IS NOT NULL AND rowid NOT IN
+            (SELECT MIN(rowid) FROM queue WHERE uniqueKey IS NOT NULL GROUP BY uniqueKey)`)
+          this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS queue_unique_active ON queue(uniqueKey) WHERE uniqueKey IS NOT NULL')
           if (version !== undefined && version < 11) migrateTo11(this)
           if (version !== undefined && version < 12) migrateTo12(this)
           if (version !== SCHEMA_VERSION) this.set(KV.store.schema, SCHEMA_VERSION)
@@ -206,17 +214,31 @@ export class Store implements Repositories {
   /** 已保存的设置修订，最新的在前；早于设置历史的修订不包含在内。 */
   settingsHistory(limit = 20): SettingsVersion[] { return this.settingsVersions.list(limit) }
 
+  /** 解析单条实体记录；缺字段或 JSON 损坏时明确报错，而不是把 `undefined` 继续传下去。 */
+  private entity<T>(json: string, label: string, field: string, id: string): T {
+    let value: unknown
+    try {
+      value = JSON.parse(json)
+    } catch (error) {
+      throw new Error(`The ${label} record ${id} is corrupt: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || (field !== '' && typeof (value as Record<string, unknown>)[field] !== 'string')) {
+      throw new Error(`The ${label} record ${id} is invalid${field ? `: missing ${field}` : ''}`)
+    }
+    return value as T
+  }
   readonly triggers = {
-    get: (id: string): Trigger | undefined => { const row = this.db.prepare('SELECT value FROM trigger WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as Trigger : undefined },
+    get: (id: string): Trigger | undefined => { const row = this.db.prepare('SELECT value FROM trigger WHERE id=?').get(id); return row ? this.entity<Trigger>(String(row.value), 'trigger', 'id', id) : undefined },
     save: (trigger: Trigger): void => this.atomic(() => {
       this.db.prepare('INSERT INTO trigger VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, at=excluded.at').run(trigger.id, JSON.stringify(trigger), trigger.at)
       this.indexThreads(trigger)
     }),
-    disposition: (id: string): TriggerDisposition | undefined => { const row = this.db.prepare('SELECT value FROM disposition WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as TriggerDisposition : undefined },
+    disposition: (id: string): TriggerDisposition | undefined => { const row = this.db.prepare('SELECT value FROM disposition WHERE id=?').get(id); return row ? this.entity<TriggerDisposition>(String(row.value), 'disposition', '', id) : undefined },
     saveDisposition: (id: string, value: TriggerDisposition): void => { this.db.prepare('INSERT INTO disposition VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(id, JSON.stringify(value)) },
   }
   readonly threads = {
-    get: (keyValue: string): Thread | undefined => { const row = this.db.prepare('SELECT value FROM thread WHERE key=?').get(keyValue); return row ? JSON.parse(String(row.value)) as Thread : undefined },
+    get: (keyValue: string): Thread | undefined => { const row = this.db.prepare('SELECT value FROM thread WHERE key=?').get(keyValue); return row ? this.entity<Thread>(String(row.value), 'thread', 'key', keyValue) : undefined },
     save: (thread: Thread): void => { this.db.prepare('INSERT INTO thread VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(thread.key, JSON.stringify(thread)) },
     list: (): Thread[] => this.db.prepare('SELECT value FROM thread ORDER BY rowid').all().map(row => JSON.parse(String(row.value)) as Thread),
     active: (): Thread[] => this.values('SELECT value FROM thread WHERE active = 1 ORDER BY rowid'),
@@ -239,7 +261,7 @@ export class Store implements Repositories {
     }),
   }
   readonly tickets = {
-    get: (id: string): Ticket | undefined => { const row = this.db.prepare('SELECT value FROM ticket WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as Ticket : undefined },
+    get: (id: string): Ticket | undefined => { const row = this.db.prepare('SELECT value FROM ticket WHERE id=?').get(id); return row ? this.entity<Ticket>(String(row.value), 'ticket', 'id', id) : undefined },
     save: (ticket: Ticket): void => { this.db.prepare('INSERT INTO ticket VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(ticket.id, JSON.stringify(ticket)) },
     /** 最新的在前。 */
     list: (): Ticket[] => this.values('SELECT value FROM ticket ORDER BY rowid DESC'),
@@ -249,21 +271,34 @@ export class Store implements Repositories {
     active: (): Ticket[] => this.values('SELECT value FROM ticket WHERE active = 1 ORDER BY rowid DESC'),
   }
   readonly decisions = {
-    get: (id: string): Decision | undefined => { const row = this.db.prepare('SELECT value FROM decision WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as Decision : undefined },
+    get: (id: string): Decision | undefined => { const row = this.db.prepare('SELECT value FROM decision WHERE id=?').get(id); return row ? this.entity<Decision>(String(row.value), 'decision', 'id', id) : undefined },
     save: (decision: Decision): void => { this.db.prepare('INSERT INTO decision VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, thread=excluded.thread').run(decision.id, decision.threadKey, JSON.stringify(decision)) },
     byThread: (threadKeyValue: string): Decision[] => this.db.prepare('SELECT value FROM decision WHERE thread=? ORDER BY rowid').all(threadKeyValue).map(row => JSON.parse(String(row.value)) as Decision),
   }
-  /** 持久化调度队列；`seq` 决定全局 FIFO 顺序，状态列只索引活动条目。 */
+  /** 持久化调度队列；`seq` 决定全局 FIFO 顺序，状态列只索引活动条目。读取时按 schema 校验，避免字段漂移被静默接受。 */
   readonly queue = {
-    get: (id: string): QueueEntry | undefined => { const row = this.db.prepare('SELECT value FROM queue WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as QueueEntry : undefined },
+    get: (id: string): QueueEntry | undefined => {
+      const row = this.db.prepare('SELECT value FROM queue WHERE id=?').get(id)
+      return row ? QueueEntrySchema.parse(JSON.parse(String(row.value))) : undefined
+    },
     save: (entry: QueueEntry): void => { this.db.prepare('INSERT INTO queue VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, seq=excluded.seq').run(entry.id, JSON.stringify(entry), entry.seq) },
     /** 全部条目，按全局入队顺序。 */
-    list: (): QueueEntry[] => this.values('SELECT value FROM queue ORDER BY seq'),
+    list: (): QueueEntry[] => this.queueValues('SELECT value FROM queue ORDER BY seq'),
     /** 仍在队列或执行中的条目，按全局入队顺序。 */
-    active: (): QueueEntry[] => this.values('SELECT value FROM queue WHERE active IS NOT NULL ORDER BY seq'),
+    active: (): QueueEntry[] => this.queueValues('SELECT value FROM queue WHERE active IS NOT NULL ORDER BY seq'),
     /** 项目当前占用的执行位置（正在建单或执行），按项目记录 ID 去重。 */
     inflight: (): string[] => this.db.prepare('SELECT DISTINCT inflight FROM queue WHERE inflight IS NOT NULL').all().map(row => String(row.inflight)),
     maxSeq: (): number => Number((this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM queue').get() as { seq: number }).seq),
+    /** 删除项目的全部条目；用于删除项目后的收尾。 */
+    remove: (project: string): void => { this.db.prepare(`DELETE FROM queue WHERE value ->> '$.project' = ?`).run(project) },
+    /** 清理某项目在 `before` 之前结束的终态条目，返回删除条数。 */
+    prune: (project: string, before: string): number => Number(this.db.prepare(`DELETE FROM queue WHERE value ->> '$.project' = ?
+      AND value ->> '$.state' IN ('succeeded','failed','cancelled') AND value ->> '$.endedAt' IS NOT NULL
+      AND value ->> '$.endedAt' < ?`).run(project, before).changes),
+  }
+  /** 队列读取统一按 schema 解析，字段缺失或类型变化会明确失败而不是变成 `undefined`。 */
+  private queueValues(sql: string): QueueEntry[] {
+    return this.db.prepare(sql).all().map(row => QueueEntrySchema.parse(JSON.parse(String(row.value))))
   }
   /** 管理视图、编排工具和来源轮询的只读查询（见 `storeReads`）。 */
   readonly read: ReturnType<typeof storeReads>

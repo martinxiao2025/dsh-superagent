@@ -27,7 +27,7 @@ it('words a reason by its code with its values, each of a batch, and words a per
 it('names every health entry of dsh-superagent itself, which the overview shows when it fails', () => {
   // 每一项按写入者列出：dsh-superagent、模型预算重试、效果队列的每种类型、渠道消息、执行器，以及最近一小时不可用的评估。
   const entries = { runtime: 0, models: 0, reply: 0, worker: 0, assessment: 0, launch: 0, delivery: 0, relay: 0,
-    notice: 0, evals: 0 } satisfies Record<EffectKind | 'runtime' | 'models' | 'reply' | 'worker' | 'evals', 0>
+    notice: 0, writeback: 0, evals: 0 } satisfies Record<EffectKind | 'runtime' | 'models' | 'reply' | 'worker' | 'evals', 0>
   expect(Object.keys(entries).filter(name => !(`health.${name}` in zh))).toEqual([])
 })
 

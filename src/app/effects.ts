@@ -21,6 +21,8 @@ export interface EffectPayloads {
   notice: { value: Record<string, unknown>; summary: string }
   /** 通过渠道的来源发送消息；键为消息 ID，其回执由发件箱保存。 */
   reply: Record<string, never>
+  /** 把任务结果写回外部清单；键由队列条目、状态与尝试次数决定，重复投递幂等。 */
+  writeback: { project: string; task: string; taskTitle: string; status: string }
 }
 export type EffectKind = keyof EffectPayloads
 interface Handler<K extends EffectKind> {
