@@ -24,6 +24,7 @@ import type { LinkTarget, ViewHost } from './views/records.ts'
 import type { Variable } from './execution-environment.ts'
 import { policyHistory } from './settings-history.ts'
 import { overview } from './views/overview.ts'
+import { projectTasksView } from './views/projects.ts'
 import { settingsView } from './views/settings.ts'
 import { sourceHealth, sourceState, sourcesStatus, type SetupState } from './views/sources.ts'
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
@@ -242,6 +243,13 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       return runtime.settings.createProject(id, value, 'panel')
     },
     'DELETE projects/:id': ({ params }) => runtime.settings.removeProject(params.id, 'panel'),
+    // 项目详情页读取该项目在队列中的任务与全局运行时占用；项目不存在时 404。
+    'GET projects/:id/tasks': ({ params }) => {
+      const settings = store.settings()
+      const project = settings.projects[params.id]
+      if (!project) throw new RouteError(404, 'Project not found')
+      return projectTasksView(params.id, project, settings, runtime.queue())
+    },
     // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。
     'GET health': () => healthView(runtime, listen(), startup),
     'GET queue': () => runtime.queue(),

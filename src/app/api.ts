@@ -4,6 +4,7 @@ import type { PromptConfig, Prompts } from './prompts.ts'
 import type { HealthView, PromptsView, StateView, TicketPageView } from './http.ts'
 import type { HistoryView } from './settings-history.ts'
 import type { OverviewView } from './views/overview.ts'
+import type { ProjectTasksView } from './views/projects.ts'
 import type { SettingsView } from './views/settings.ts'
 import type { SourceStatusView } from './views/sources.ts'
 import type { SourceCheck } from '../setup.ts'
@@ -43,6 +44,7 @@ export interface Api {
   'POST projects': { body: { id?: string; name: string; codeRepo: string; taskSource: string };
     response: { id: string; revision: number; restarting: false } }
   'DELETE projects/:id': { response: { removed: true; restarting: false } }
+  'GET projects/:id/tasks': { response: ProjectTasksView }
   'GET health': { response: HealthView }
   'GET queue': { response: QueueSnapshot }
   'GET settings': { response: SettingsView }

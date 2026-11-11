@@ -74,6 +74,23 @@ it('serves the scheduling queue snapshot for the panel', async () => {
   expect(await call('GET', 'queue')).toEqual({ status: 200, body: snapshot })
 })
 
+it('serves a Project\'s Tasks and queue state for the panel', async () => {
+  const settings = SettingsSchema.parse({ projects: { a: { name: 'A', codeRepo: 'github', taskSource: 'sheet' } },
+    codeRepos: { github: { kind: 'github', name: 'GitHub', config: { repository: 'acme/widgets' } } },
+    taskSources: { sheet: { kind: 'excel', name: '清单' } } })
+  const item = { id: 'q1', project: 'a', projectName: 'A', task: 't1', item: 0, title: '一', state: 'running' as const, attempt: 0,
+    dueAt: 0, ticketId: 'ticket-1', enqueuedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }
+  const call = serve({ configured: () => true, store: { settings: () => settings },
+    queue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item] }) })
+  expect(await call('GET', 'projects/a/tasks')).toEqual({ status: 200, body: {
+    project: { id: 'a', name: 'A', enabled: true, codeRepo: { id: 'github', name: 'GitHub' },
+      taskSource: { id: 'sheet', name: '清单' }, execution: settings.projects.a!.execution,
+      schedule: settings.projects.a!.schedule, retry: settings.projects.a!.retry, taskPolicy: settings.projects.a!.taskPolicy },
+    at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, queued: 0, running: 1, items: [item] } })
+  expect(await call('GET', 'projects/missing/tasks')).toEqual({ status: 404, body: { error: 'Project not found' } })
+})
+
+
 it('answers a Source deletion that still has unfinished Tickets with 409 and its error code', async () => {
   const call = serve({
     store: { settings: () => SettingsSchema.parse({}) },

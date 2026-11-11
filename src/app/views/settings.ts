@@ -2,11 +2,17 @@
 import { SETUP_FIELDS } from '../../deployment.ts'
 import { KV } from '../../kv.ts'
 import { policyVersion } from '../../policy.ts'
+import { githubType } from '../../sources/github.ts'
+import { gitlabType } from '../../sources/gitlab.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
 import { taskSources } from '../../task-sources/index.ts'
 import { declaredVariables, executionRoot } from '../execution-environment.ts'
 import type { Store } from '../store.ts'
 import { problemOf, sourceHealth, type HealthMap, type SetupState } from './sources.ts'
+
+/** 代码仓库类型目录：只用于克隆与同步，面板据此渲染新增表单与已保存记录的字段。 */
+const CODE_REPO_TYPES = [githubType, gitlabType]
+const codeRepoType = (kind: string) => CODE_REPO_TYPES.find(type => type.kind === kind)
 
 function policyOf(sources: SourceRegistry, id: string, health: HealthMap) {
   const policy = sources.kindOf(id)?.policy
@@ -44,9 +50,14 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
         labels: store.get(KV.sources.labels(instance.id)) ?? {}, openTickets: openTicketCount(store, instance.id),
         ...problem ? { problem } : {}, ...policyOf(sources, instance.id, health) }
     }),
-    // 代码仓库、任务来源与项目在 P1 只提供记录与版本；任务来源的字段目录与预检在 P2 接入。
-    codeRepos: Object.entries(settings.codeRepos).map(([id, record]) => ({ id, kind: record.kind, name: record.name, enabled: record.enabled,
-      value: { name: record.name, enabled: record.enabled, config: record.config }, revision: store.blockRevision(`codeRepo:${id}`) })),
+    // 代码仓库、任务来源与项目各自维护记录与版本；代码仓库的类型目录与字段来自类型描述。
+    codeRepoKinds: CODE_REPO_TYPES.map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
+    codeRepos: Object.entries(settings.codeRepos).map(([id, record]) => {
+      const type = codeRepoType(record.kind)
+      return { id, kind: record.kind, name: record.name, enabled: record.enabled,
+        title: type?.title, fields: type?.fields ?? [],
+        value: { name: record.name, enabled: record.enabled, config: record.config }, revision: store.blockRevision(`codeRepo:${id}`) }
+    }),
     // 任务来源类型目录由驱动注册表生成：新增一个驱动后，面板下拉自动出现。
     taskSourceKinds: taskSources.kinds().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
     taskSources: Object.entries(settings.taskSources).map(([id, record]) => {

@@ -8,12 +8,14 @@ import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-
 import type { Api, ApiResponse, RouteParams } from '../../src/app/api.ts'
 import { SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInPart, builtInParts, composePrompt, composeSkill, defaultPrompts,
   environmentSection, policySection, promptParts } from '../../src/app/prompts.ts'
-import type { DroppedReply, HistoryView, Problem, PromptsView, SetupView, SourceStatusRow, SourceView, StateView, ThreadPageView,
+import type { DroppedReply, HistoryView, Problem, ProjectTasksView, PromptsView, SetupView, SourceStatusRow, SourceView, StateView,
+  ThreadPageView,
   ThreadRow, TicketPageView,
   TicketRow, TicketStage,
   TriggerRow } from '../../src/client/api.ts'
 import { SETUP_FIELDS } from '../../src/deployment.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema } from '../../src/policy.ts'
+import { ProjectSchema } from '../../src/projects/kind.ts'
 import { SetupError, type SetupCode } from '../../src/setup.ts'
 import { feishuChannel } from '../../src/sources/feishu-trigger.ts'
 import { feishuKind } from '../../src/sources/feishu.ts'
@@ -99,6 +101,8 @@ export interface PanelServer {
   /** 带未声明查询参数或无效请求体存在性的请求；每个测试后断言为空。 */
   misuse: string[]
   queued: Set<string>
+  /** 伪队列条目；项目页与概览按项目过滤后展示。 */
+  queueItems: ProjectTasksView['items']
   searching?: (query: string) => Promise<void>
   setup: SetupView
   health: Record<string, Health>
@@ -181,9 +185,18 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
     executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 } },
   sources: sourceSettings(),
   codeRepos: Object.entries(server.settings.codeRepos).sort(([a], [b]) => a.localeCompare(b)).map(([id, record]) => ({ id, kind: record.kind,
-    name: record.name, enabled: record.enabled, value: { name: record.name, enabled: record.enabled, config: record.config },
+    name: record.name, enabled: record.enabled, title: { zh: record.kind === 'github' ? 'GitHub' : 'GitLab', en: record.kind === 'github'
+      ? 'GitHub' : 'GitLab' }, fields: [],
+    value: { name: record.name, enabled: record.enabled, config: record.config },
     revision: server.revisions[`codeRepo:${id}`] ?? 0 })),
-  taskSources: [], projects: [],
+  codeRepoKinds: [{ kind: 'github', title: { zh: 'GitHub', en: 'GitHub' }, description: { zh: 'GitHub 仓库', en: 'GitHub repository' },
+    fields: [] }, { kind: 'gitlab', title: { zh: 'GitLab', en: 'GitLab' }, description: { zh: 'GitLab 仓库', en: 'GitLab repository' },
+    fields: [] }],
+  taskSources: Object.entries(server.settings.taskSources).map(([id, record]) => ({ id, kind: record.kind, name: record.name,
+    enabled: record.enabled, title: { zh: record.name, en: record.name }, fields: [],
+    value: { name: record.name, enabled: record.enabled, config: record.config }, revision: server.revisions[`taskSource:${id}`] ?? 0 })),
+  projects: Object.entries(server.settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
+    codeRepo: project.codeRepo, taskSource: project.taskSource, value: project, revision: server.revisions[`project:${id}`] ?? 0 })),
   taskSourceKinds: [
     { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, fields: [] },
     { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, fields: [] },
@@ -265,7 +278,8 @@ function initial(): PanelServer {
     en: 'Feishu message' } }
   const defaults = { revision: 0, previousRevision: null, savedAt: '', source: 'defaults' }
   return {
-    health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [], openTickets: {},
+    health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), queueItems: [], dropped: [], failing: [],
+    openTickets: {},
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
         name: 'Widgets Bot' }, gitlab: null } },
@@ -317,7 +331,20 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     return { tickets: [], threads: server.search.threads, items: server.search.items.filter(item => item.preview.includes(q)) }
   } },
   'GET sources': { answer: sourceStatuses },
-  'GET queue': { answer: () => ({ at: '', maxWorkers: 0, used: 0, items: [] }) },
+  'GET queue': { answer: () => ({ at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
+    items: server.queueItems }) },
+  'GET projects/:id/tasks': { answer: ({ params }) => {
+    const project = server.settings.projects[params.id]
+    if (!project) return refuse(404, 'Project not found')
+    const items = server.queueItems.filter(item => item.project === params.id)
+    return { project: { id: params.id, name: project.name, enabled: project.enabled,
+      codeRepo: { id: project.codeRepo, name: server.settings.codeRepos[project.codeRepo]?.name ?? project.codeRepo },
+      taskSource: { id: project.taskSource, name: server.settings.taskSources[project.taskSource]?.name ?? project.taskSource },
+      execution: project.execution, schedule: project.schedule, retry: project.retry, taskPolicy: project.taskPolicy },
+      at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
+      queued: items.filter(item => item.state === 'queued').length,
+      running: items.filter(item => item.state === 'running' || item.state === 'starting').length, items }
+  } },
   'POST sources': { body: true, answer: ({ body }) => {
     const kind = KINDS.find(item => item.kind === body.kind)
     if (!kind) return refuse(404, `Unknown Source kind: ${body.kind}`, { code: 'sourceKindUnknown', values: { kind: body.kind } })
@@ -461,14 +488,31 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'PUT settings/:block': { body: true, answer: ({ params: { block }, body }) => {
     const record = block.startsWith('source:') ? server.settings.sources[block.slice('source:'.length)] : undefined
     const source = record ? KINDS.find(kind => kind.kind === record.kind) : undefined
-    if (!['policy', 'eval', 'executor'].includes(block) && !record) return block.startsWith('source:') ? refuse(404, 'Source not found')
-      : refuse(400, 'Invalid settings: block')
+    const codeRepoId = block.startsWith('codeRepo:') ? block.slice('codeRepo:'.length) : undefined
+    const codeRepo = codeRepoId ? server.settings.codeRepos[codeRepoId] : undefined
+    const taskSourceId = block.startsWith('taskSource:') ? block.slice('taskSource:'.length) : undefined
+    const taskSource = taskSourceId ? server.settings.taskSources[taskSourceId] : undefined
+    const projectId = block.startsWith('project:') ? block.slice('project:'.length) : undefined
+    const project = projectId ? server.settings.projects[projectId] : undefined
+    if (!['policy', 'eval', 'executor'].includes(block) && !record && !codeRepo && !taskSource && !project) {
+      return block.includes(':') ? refuse(404, 'Record not found') : refuse(400, 'Invalid settings: block')
+    }
     if (body.revision !== (server.revisions[block] ?? 0)) return refuse(409, 'Settings changed. Reload before saving.')
     let restarting = false
     if (block === 'policy') server.settings = { ...server.settings, policy: PolicyConfigSchema.parse(body.value) }
     else if (block === 'executor') server.settings = { ...server.settings, executor: ExecutorConfigSchema.parse(body.value) }
     else if (block === 'eval') server.settings = { ...server.settings, eval: EvalConfigSchema.parse(body.value) }
-    else if (record && source) {
+    else if (codeRepo && codeRepoId) {
+      const { name, enabled, config } = SourceSave.parse(body.value)
+      server.settings = { ...server.settings, codeRepos: { ...server.settings.codeRepos,
+        [codeRepoId]: { ...codeRepo, name, enabled, config: config as Record<string, unknown> } } }
+    } else if (taskSource && taskSourceId) {
+      const { name, enabled, config } = SourceSave.parse(body.value)
+      server.settings = { ...server.settings, taskSources: { ...server.settings.taskSources,
+        [taskSourceId]: { ...taskSource, name, enabled, config: config as Record<string, unknown> } } }
+    } else if (project && projectId) {
+      server.settings = { ...server.settings, projects: { ...server.settings.projects, [projectId]: ProjectSchema.parse(body.value) } }
+    } else if (record && source) {
       const { name, enabled, config: value } = SourceSave.parse(body.value)
       const config = source.schema.parse(value)
       // 与服务器上一样，更改后的 CLI 若未通过检查，会以设置问题拒绝保存。
