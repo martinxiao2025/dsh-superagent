@@ -14,7 +14,7 @@ export const testMachine = (overrides: Partial<Machine> = {}): Machine => ({
 })
 export const testGithub = (overrides: Partial<ResolvedGithubSource> = {}): ResolvedGithubSource => ({
   id: 'github', kind: 'github', instanceUrl: '', cli: '/bin/false', repository: 'acme/widgets',
-  login: 'agent-bot', noreply: '7+agent-bot@users.noreply.github.com', ...overrides,
+  login: 'agent-bot', noreply: '7+agent-bot@users.noreply.github.com', auth: 'https', remote: '', sshKey: '', ...overrides,
 })
 export const testFeishu = (overrides: Partial<ResolvedFeishuSource> = {}): ResolvedFeishuSource => ({
   id: 'feishu', kind: 'feishu', instanceUrl: '', cli: '/bin/false', botId: 'ou_bot', appId: 'cli_bot', brand: 'feishu',
@@ -22,7 +22,7 @@ export const testFeishu = (overrides: Partial<ResolvedFeishuSource> = {}): Resol
 })
 export const testGitlab = (overrides: Partial<ResolvedGitlabSource> = {}): ResolvedGitlabSource => ({
   id: 'gitlab', kind: 'gitlab', instanceUrl: '', cli: '/bin/false', project: 'acme/widgets', projectId: 42, login: 'agent-bot',
-  userId: 7, ...overrides,
+  userId: 7, auth: 'https', remote: '', sshKey: '', ...overrides,
 })
 export interface TestDeploymentOptions extends Partial<Machine> {
   github?: ResolvedGithubSource | undefined

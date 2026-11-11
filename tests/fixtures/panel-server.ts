@@ -14,8 +14,12 @@ import type { DroppedReply, HistoryView, Problem, ProjectTasksView, PromptsView,
   TicketRow, TicketStage,
   TriggerRow } from '../../src/client/api.ts'
 import { SETUP_FIELDS } from '../../src/deployment.ts'
+import { CODE_REPO_TYPES, codeRepoType } from '../../src/code-repos/types.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema } from '../../src/policy.ts'
 import { ProjectSchema } from '../../src/projects/kind.ts'
+import type { GitCredentialInput, GitCredentialView } from '../../src/git-credentials/kind.ts'
+import type { FeishuCredentialInput, FeishuCredentialView } from '../../src/feishu-credentials/kind.ts'
+import type { CredentialCheck } from '../../src/secrets/check.ts'
 import { SetupError, type SetupCode } from '../../src/setup.ts'
 import { feishuChannel } from '../../src/sources/feishu-trigger.ts'
 import { feishuKind } from '../../src/sources/feishu.ts'
@@ -103,6 +107,9 @@ export interface PanelServer {
   queued: Set<string>
   /** 伪队列条目；项目页与概览按项目过滤后展示。 */
   queueItems: ProjectTasksView['items']
+  /** 凭据与设置快照分开存放，模拟宿主的独立凭据表。 */
+  gitCredentials: GitCredentialView[]
+  feishuCredentials: FeishuCredentialView[]
   searching?: (query: string) => Promise<void>
   setup: SetupView
   health: Record<string, Health>
@@ -185,13 +192,10 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
     executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 } },
   sources: sourceSettings(),
   codeRepos: Object.entries(server.settings.codeRepos).sort(([a], [b]) => a.localeCompare(b)).map(([id, record]) => ({ id, kind: record.kind,
-    name: record.name, enabled: record.enabled, title: { zh: record.kind === 'github' ? 'GitHub' : 'GitLab', en: record.kind === 'github'
-      ? 'GitHub' : 'GitLab' }, fields: [],
+    name: record.name, enabled: record.enabled, title: codeRepoType(record.kind)?.title, fields: codeRepoType(record.kind)?.fields ?? [],
     value: { name: record.name, enabled: record.enabled, config: record.config },
     revision: server.revisions[`codeRepo:${id}`] ?? 0 })),
-  codeRepoKinds: [{ kind: 'github', title: { zh: 'GitHub', en: 'GitHub' }, description: { zh: 'GitHub 仓库', en: 'GitHub repository' },
-    fields: [] }, { kind: 'gitlab', title: { zh: 'GitLab', en: 'GitLab' }, description: { zh: 'GitLab 仓库', en: 'GitLab repository' },
-    fields: [] }],
+  codeRepoKinds: CODE_REPO_TYPES.map(type => ({ kind: type.kind, title: type.title, description: type.description, fields: type.fields })),
   taskSources: Object.entries(server.settings.taskSources).map(([id, record]) => ({ id, kind: record.kind, name: record.name,
     enabled: record.enabled, title: { zh: record.name, en: record.name }, fields: [],
     value: { name: record.name, enabled: record.enabled, config: record.config }, revision: server.revisions[`taskSource:${id}`] ?? 0 })),
@@ -279,6 +283,7 @@ function initial(): PanelServer {
   const defaults = { revision: 0, previousRevision: null, savedAt: '', source: 'defaults' }
   return {
     health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), queueItems: [], dropped: [], failing: [],
+    gitCredentials: [], feishuCredentials: [],
     openTickets: {},
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
@@ -318,6 +323,19 @@ type Answer<K extends keyof Api> = ApiResponse<K> | Refusal
 type Route<K extends keyof Api> = { query?: readonly Query<K>[]; answer: (request: Request<K>) => Answer<K> | Promise<Answer<K>> }
   & (Api[K] extends { body: unknown } ? { body: true } : { body?: never })
 const page = <T>(items: T[]) => ({ items, total: items.length, next_offset: null })
+const credentialSlug = (name: string) => name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'credential'
+const gitCredentialView = (id: string, value: GitCredentialInput, revision = 1): GitCredentialView => ({
+  id, name: value.name, kind: value.kind, provider: value.provider, username: value.username ?? '', note: value.note ?? '',
+  origin: value.keyPath ? 'file' : 'pasted', keyPath: value.keyPath ?? '', revision, updatedAt: '2026-09-23T00:00:00Z',
+  lastVerifiedAt: '', configured: value.kind === 'ssh' ? Boolean(value.privateKey || value.keyPath) : Boolean(value.token),
+  fingerprint: 'sha256:abcdef0123456789', hint: value.kind === 'ssh' ? 'private key' : '••••abcd',
+})
+const feishuCredentialView = (id: string, value: FeishuCredentialInput, revision = 1): FeishuCredentialView => ({
+  id, name: value.name, mode: value.mode, appId: value.appId ?? '', cli: value.cli ?? '', note: value.note ?? '', revision,
+  updatedAt: '2026-09-23T00:00:00Z', lastVerifiedAt: '',
+  configured: value.mode === 'app' ? Boolean(value.appId && value.appSecret) : Boolean(value.cli),
+  fingerprint: value.mode === 'app' ? 'sha256:fedcba9876543210' : '', hint: value.mode === 'app' ? '••••wxyz' : '',
+})
 const ticketOf = (id: string) =>
   [...server.tickets.open, ...server.person, ...server.tickets.ended].find(ticket => ticket.id === id) ?? server.ticketDetails[id]
 const SourceSave = z.object({ name: z.string().trim().min(1), enabled: z.boolean(), config: z.unknown() })
@@ -367,6 +385,28 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       [id]: { kind: body.kind, name: body.name, enabled: true, config: (body.config ?? {}) as Record<string, unknown> } } }
     return { id, revision: 0, restarting: false as const }
   } },
+  // 代码仓库预检：测试里返回可预期的结果；真实探测（含空仓库）由宿主实现。
+  'POST code-repos/verify': { body: true, answer: ({ body }) => {
+    const field = body.field ?? 'all'
+    const config = (body.config ?? {}) as Record<string, unknown>
+    const auth = config.auth === 'ssh' ? 'ssh' : 'https'
+    if ((field === 'repository' || field === 'project') && !config[field]) {
+      return { checks: [{ field, ok: false, scope: 'check' as const, code: 'sourceConfigInvalid',
+        values: { detail: `${field}: required` } }] }
+    }
+    const codes: Record<string, string> = { name: 'sourceNameOk', id: 'sourceIdOk', kind: 'sourceKindOk',
+      auth: auth === 'ssh' ? 'codeRepoAuthSsh' : 'codeRepoAuthHttps', instanceUrl: 'codeRepoInstanceOk',
+      repository: 'githubRepositoryOk', project: 'gitlabProjectOk', remote: 'codeRepoRemoteAuto',
+      sshKey: 'codeRepoKeyDefault', cli: auth === 'ssh' ? 'codeRepoCliOptional' : 'githubAccountOk' }
+    const values: Record<string, Record<string, string>> = { name: { name: String(body.name ?? '') },
+      id: { id: String(body.id ?? '') }, auth: {}, instanceUrl: { host: 'github.com' },
+      repository: { repository: 'acme/widgets', login: 'agent-bot' }, project: { project: 'acme/widgets', login: 'agent-bot' },
+      remote: { remote: 'git@github.com:acme/widgets.git' }, sshKey: {}, cli: { login: 'agent-bot' } }
+    const ok = (name: string) => ({ field: name, ok: true, scope: 'check' as const, code: codes[name] ?? 'sourceKindOk',
+      values: values[name] ?? {} })
+    const keyFields = body.kind === 'gitlab' ? ['auth', 'project', 'remote', 'sshKey', 'cli'] : ['auth', 'repository', 'remote', 'sshKey', 'cli']
+    return { checks: field === 'all' ? ['name', 'kind', 'id', ...keyFields].map(ok) : [ok(field)] }
+  } },
   'DELETE code-repos/:id': { answer: ({ params }) => {
     const { [params.id]: _record, ...codeRepos } = server.settings.codeRepos
     server.settings = { ...server.settings, codeRepos }
@@ -391,10 +431,12 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     return { checks: [{ field, ok: true, scope: 'check' as const, code: field === 'name' ? 'sourceNameOk' : 'sourceKindOk',
       values: { kind: String(body.kind ?? ''), name: String(body.name ?? '') } }] }
   } },
+  'GET task-format/template': { answer: () => ({ filename: 'tasks-template.xlsx', content: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==' }) },
   'POST projects': { body: true, answer: ({ body }) => {
     const id = body.id ?? 'project'
     server.settings = { ...server.settings, projects: { ...server.settings.projects, [id]: { name: body.name, enabled: true,
-      codeRepo: body.codeRepo, taskSource: body.taskSource, execution: { directory: '', branch: '' },
+      codeRepo: body.codeRepo, taskSource: body.taskSource, gitCredential: '',
+      execution: { directory: '', branch: '' },
       schedule: { intervalMinutes: 30, runOnStart: true }, retry: { maxRetries: 2, retryBackoffSeconds: 60 },
       taskPolicy: { pendingStatuses: ['待处理', 'todo', 'pending', 'open'], doneStatus: '已完成', failedStatus: '失败' } } } }
     return { id, revision: 0, restarting: false as const }
@@ -403,6 +445,100 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     const { [params.id]: _record, ...projects } = server.settings.projects
     server.settings = { ...server.settings, projects }
     return { removed: true as const, restarting: false as const }
+  } },
+  // 凭据与设置快照分开存放：伪实现只保留视图，不保留任何材料。
+  'GET git-credentials': { answer: () => ({ credentials: server.gitCredentials }) },
+  'GET git-credentials/:id': { answer: ({ params }) => server.gitCredentials.find(item => item.id === params.id)
+    ?? refuse(404, 'Git credential not found') },
+  'POST git-credentials': { body: true, answer: ({ body }) => {
+    const id = body.id ?? credentialSlug(body.value.name)
+    if (server.gitCredentials.some(item => item.id === id)) return refuse(409,
+      `A Git credential with the record ID ${id} already exists`, { code: 'gitCredentialExists', values: { credential: id } })
+    server.gitCredentials = [...server.gitCredentials, gitCredentialView(id, body.value)]
+    return { id, revision: 1 }
+  } },
+  'PUT git-credentials/:id': { body: true, answer: ({ params, body }) => {
+    const current = server.gitCredentials.find(item => item.id === params.id)
+    if (!current) return refuse(404, 'Git credential not found')
+    if (current.revision !== body.revision) return refuse(409, 'The credential changed since it was loaded',
+      { code: 'credentialRevisionStale', values: {} })
+    const next = gitCredentialView(current.id, body.value, current.revision + 1)
+    server.gitCredentials = server.gitCredentials.map(item => item.id === current.id ? next : item)
+    return { revision: next.revision }
+  } },
+  'POST git-credentials/:id/rotate': { body: true, answer: ({ params }) => {
+    const current = server.gitCredentials.find(item => item.id === params.id)
+    if (!current) return refuse(404, 'Git credential not found')
+    const next = { ...current, revision: current.revision + 1 }
+    server.gitCredentials = server.gitCredentials.map(item => item.id === current.id ? next : item)
+    return { revision: next.revision }
+  } },
+  'POST git-credentials/verify': { body: true, answer: ({ body }) => {
+    const value = body.value ?? {}
+    const known = body.id ? server.gitCredentials.find(item => item.id === body.id) : undefined
+    if (body.id && !known) return refuse(404, 'Git credential not found')
+    const kind = value.kind ?? known?.kind ?? 'ssh'
+    const hasMaterial = Boolean(value.privateKey || value.token || value.keyPath || known)
+    const checks: CredentialCheck[] = hasMaterial
+      ? [{ field: 'material', ok: true, scope: 'check', code: 'gitCredentialMaterialOk',
+        values: { hint: kind === 'ssh' ? 'private key' : '••••abcd' } }]
+      : [{ field: 'material', ok: false, scope: 'check', code: 'gitCredentialMaterialMissing', values: {} }]
+    if (hasMaterial && kind === 'ssh' && !/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value.privateKey ?? '')
+      && !known) checks.push({ field: 'key', ok: false, scope: 'check', code: 'gitCredentialKeyInvalid', values: {} })
+    if (body.repository) checks.push({ field: 'repository', ok: true, scope: 'check', code: 'gitCredentialRemoteOk',
+      values: { branches: '3' } })
+    return { checks }
+  } },
+  'DELETE git-credentials/:id': { answer: ({ params }) => {
+    const used = Object.values(server.settings.projects).filter(project => project.gitCredential === params.id).length
+    if (used) return refuse(409, `The ${params.id} Git credential is still used by ${used} Projects`,
+      { code: 'gitCredentialInUse', values: { credential: params.id, count: String(used) } })
+    server.gitCredentials = server.gitCredentials.filter(item => item.id !== params.id)
+    return { removed: true as const }
+  } },
+  'GET feishu-credentials': { answer: () => ({ credentials: server.feishuCredentials }) },
+  'GET feishu-credentials/:id': { answer: ({ params }) => server.feishuCredentials.find(item => item.id === params.id)
+    ?? refuse(404, 'Feishu credential not found') },
+  'POST feishu-credentials': { body: true, answer: ({ body }) => {
+    const id = body.id ?? credentialSlug(body.value.name)
+    if (server.feishuCredentials.some(item => item.id === id)) return refuse(409,
+      `A Feishu credential with the record ID ${id} already exists`, { code: 'feishuCredentialExists', values: { credential: id } })
+    server.feishuCredentials = [...server.feishuCredentials, feishuCredentialView(id, body.value)]
+    return { id, revision: 1 }
+  } },
+  'PUT feishu-credentials/:id': { body: true, answer: ({ params, body }) => {
+    const current = server.feishuCredentials.find(item => item.id === params.id)
+    if (!current) return refuse(404, 'Feishu credential not found')
+    if (current.revision !== body.revision) return refuse(409, 'The credential changed since it was loaded',
+      { code: 'credentialRevisionStale', values: {} })
+    const next = feishuCredentialView(current.id, body.value, current.revision + 1)
+    server.feishuCredentials = server.feishuCredentials.map(item => item.id === current.id ? next : item)
+    return { revision: next.revision }
+  } },
+  'POST feishu-credentials/:id/rotate': { body: true, answer: ({ params }) => {
+    const current = server.feishuCredentials.find(item => item.id === params.id)
+    if (!current) return refuse(404, 'Feishu credential not found')
+    const next = { ...current, revision: current.revision + 1 }
+    server.feishuCredentials = server.feishuCredentials.map(item => item.id === current.id ? next : item)
+    return { revision: next.revision }
+  } },
+  'POST feishu-credentials/verify': { body: true, answer: ({ body }) => {
+    const value = body.value ?? {}
+    const known = body.id ? server.feishuCredentials.find(item => item.id === body.id) : undefined
+    if (body.id && !known) return refuse(404, 'Feishu credential not found')
+    const mode = value.mode ?? known?.mode ?? 'app'
+    const configured = known ? known.configured : mode === 'app' ? Boolean(value.appId && value.appSecret) : Boolean(value.cli)
+    const checks: CredentialCheck[] = configured
+      ? [{ field: 'identity', ok: true, scope: 'check', code: mode === 'app' ? 'feishuCredentialAppOk' : 'feishuCredentialCliOk',
+        values: mode === 'app' ? { appId: value.appId ?? known?.appId ?? '', secret: '••••wxyz' } : { cli: value.cli ?? known?.cli ?? '' } }]
+      : [{ field: 'identity', ok: false, scope: 'check', code: 'feishuCredentialMaterialMissing', values: {} }]
+    if (body.spaceId) checks.push({ field: 'space', ok: true, scope: 'check', code: 'feishuCredentialSpaceOk',
+      values: { spaceId: body.spaceId } })
+    return { checks }
+  } },
+  'DELETE feishu-credentials/:id': { answer: ({ params }) => {
+    server.feishuCredentials = server.feishuCredentials.filter(item => item.id !== params.id)
+    return { removed: true as const }
   } },
   // 预检在测试脚本里按字段返回可预期的成功结果；真实探测由宿主实现。
   'POST sources/verify': { body: true, answer: ({ body }) => {

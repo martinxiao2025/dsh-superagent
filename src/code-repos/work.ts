@@ -31,6 +31,7 @@ export async function syncRepoWorkCopy(input: RepoSyncInput): Promise<CodeSyncRe
 /**
  * 在工作副本里提交单个文件的改动，使其不再以「未提交修改」的形式存在。
  * 下一轮同步的 `merge --ff-only` 只会在远端另有提交时失败，而不是因为本地脏文件被拒绝。
+ * 只提交本地工作副本，不推送远端；推送是后续能力（见 `TaskSourceDriver.push`）。
  * 不在 git 仓库中或没有改动时静默返回 `false`。
  * @throws 当 git 无法完成提交时；调用方（持久化副作用）会退避重试。
  */

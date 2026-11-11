@@ -88,3 +88,11 @@ export function taskSourceRepo(record: TaskSourceRecord): string {
   const parsed = driver.schema.safeParse(record.config)
   return parsed.success ? driver.repo(parsed.data) : ''
 }
+
+/** 任务来源独占的知识库范围（飞书 `spaceId`）；驱动未声明或配置无效时返回空串。 */
+export function taskSourceKnowledgeBase(record: TaskSourceRecord): string {
+  const driver = taskSources.kind(record.kind)
+  if (!driver?.knowledgeBase) return ''
+  const parsed = driver.schema.safeParse(record.config)
+  return parsed.success ? driver.knowledgeBase(parsed.data) : ''
+}

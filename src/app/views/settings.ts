@@ -2,18 +2,14 @@
 import { SETUP_FIELDS } from '../../deployment.ts'
 import { KV } from '../../kv.ts'
 import { policyVersion } from '../../policy.ts'
-import { githubType } from '../../sources/github.ts'
-import { gitlabType } from '../../sources/gitlab.ts'
+import { CODE_REPO_TYPES, codeRepoType } from '../../code-repos/types.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
 import { taskSources } from '../../task-sources/index.ts'
 import { declaredVariables, executionRoot } from '../execution-environment.ts'
 import type { Store } from '../store.ts'
 import { problemOf, sourceHealth, type HealthMap, type SetupState } from './sources.ts'
 
-/** 代码仓库类型目录：只用于克隆与同步，面板据此渲染新增表单与已保存记录的字段。 */
-const CODE_REPO_TYPES = [githubType, gitlabType]
-const codeRepoType = (kind: string) => CODE_REPO_TYPES.find(type => type.kind === kind)
-
+/** 代码仓库类型目录由 code-repos/types.ts 提供，面板与字段预检共用。 */
 function policyOf(sources: SourceRegistry, id: string, health: HealthMap) {
   const policy = sources.kindOf(id)?.policy
   if (!policy) return {}

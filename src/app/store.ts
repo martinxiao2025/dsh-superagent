@@ -7,6 +7,8 @@ import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, t
 import { KV, type Family, type Key } from '../kv.ts'
 import { QueueEntrySchema, type QueueEntry } from '../queue/model.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
+import type { GitCredential } from '../git-credentials/kind.ts'
+import type { FeishuCredential } from '../feishu-credentials/kind.ts'
 import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, migrateTo12, tooOld } from './migration.ts'
 import { Versions } from './versions.ts'
 import { storeReads } from './store-read.ts'
@@ -60,9 +62,9 @@ export { SCHEMA_VERSION }
 export class Store implements Repositories {
   readonly db: DatabaseSync
   /**
-   * 在 `path` 处打开或创建 SQLite 数据库，并在单个事务中将模式 10、11 或 12 迁移到模式 13。
+   * 在 `path` 处打开或创建 SQLite 数据库，并在单个事务中将模式 10、11、12 或 13 迁移到模式 14。
    * @param report - 接收 `afterCommit` 回调抛出的错误，且不会使已提交的事务失败。
-   * @throws 当数据库模式早于 `OLDEST_SCHEMA`（10）、晚于 `SCHEMA_VERSION`（13），或迁移失败时抛出；无论哪种情况，数据库文件都保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
+   * @throws 当数据库模式早于 `OLDEST_SCHEMA`（10）、晚于 `SCHEMA_VERSION`（14），或迁移失败时抛出；无论哪种情况，数据库文件都保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
    */
   constructor(path: string, private readonly report: (error: unknown) => void = () => {}) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
@@ -90,6 +92,8 @@ export class Store implements Repositories {
               generation INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL,
               since TEXT NOT NULL, PRIMARY KEY (kind, key));
             CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, value TEXT NOT NULL, seq INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS git_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS feishu_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS trigger_at ON trigger(at);
             CREATE INDEX IF NOT EXISTS trigger_thread_at ON trigger_thread(thread, at);
             CREATE INDEX IF NOT EXISTS decision_thread ON decision(thread);
@@ -236,6 +240,20 @@ export class Store implements Repositories {
     }),
     disposition: (id: string): TriggerDisposition | undefined => { const row = this.db.prepare('SELECT value FROM disposition WHERE id=?').get(id); return row ? this.entity<TriggerDisposition>(String(row.value), 'disposition', '', id) : undefined },
     saveDisposition: (id: string, value: TriggerDisposition): void => { this.db.prepare('INSERT INTO disposition VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(id, JSON.stringify(value)) },
+  }
+  /** Git 凭据记录：只含展示与用途信息，材料在 `<stateDir>/secrets/git` 加密保存。 */
+  readonly gitCredentials = {
+    get: (id: string): GitCredential | undefined => { const row = this.db.prepare('SELECT value FROM git_credential WHERE id=?').get(id); return row ? this.entity<GitCredential>(String(row.value), 'git credential', 'id', id) : undefined },
+    list: (): GitCredential[] => this.values('SELECT value FROM git_credential ORDER BY rowid'),
+    save: (value: GitCredential): void => { this.db.prepare('INSERT INTO git_credential VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, at=excluded.at').run(value.id, JSON.stringify(value), value.updatedAt) },
+    remove: (id: string): void => { this.db.prepare('DELETE FROM git_credential WHERE id=?').run(id) },
+  }
+  /** 飞书凭据记录：应用密钥同样只保存在 `secrets/feishu`。 */
+  readonly feishuCredentials = {
+    get: (id: string): FeishuCredential | undefined => { const row = this.db.prepare('SELECT value FROM feishu_credential WHERE id=?').get(id); return row ? this.entity<FeishuCredential>(String(row.value), 'Feishu credential', 'id', id) : undefined },
+    list: (): FeishuCredential[] => this.values('SELECT value FROM feishu_credential ORDER BY rowid'),
+    save: (value: FeishuCredential): void => { this.db.prepare('INSERT INTO feishu_credential VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, at=excluded.at').run(value.id, JSON.stringify(value), value.updatedAt) },
+    remove: (id: string): void => { this.db.prepare('DELETE FROM feishu_credential WHERE id=?').run(id) },
   }
   readonly threads = {
     get: (keyValue: string): Thread | undefined => { const row = this.db.prepare('SELECT value FROM thread WHERE key=?').get(keyValue); return row ? this.entity<Thread>(String(row.value), 'thread', 'key', keyValue) : undefined },

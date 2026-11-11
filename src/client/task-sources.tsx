@@ -34,6 +34,7 @@ function AddTaskSource() {
   const [config, setConfig] = useState<Record<string, unknown>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
   const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
+  const [downloading, setDownloading] = useState(false)
   const create = useAction(async () => {
     const body: { kind: string; id?: string; name: string; config?: unknown } = { kind: selected, name: name.trim() }
     if (id.trim()) body.id = id.trim()
@@ -59,6 +60,21 @@ function AddTaskSource() {
         return next
       })
     } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
+  }
+  /** 下载 016 标准工作簿模板；文件在浏览器侧生成，不经过状态目录。 */
+  const downloadTemplate = async () => {
+    setDownloading(true)
+    try {
+      const { filename, content } = await call('GET task-format/template')
+      const bytes = Uint8Array.from(atob(content), char => char.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes],
+        { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (failure) { notify(errorText(failure)) } finally { setDownloading(false) }
   }
   return <div className="dt-source-add" role="group" aria-label={t('taskSourceAddTitle')}>
     <div className="dt-row-main">
@@ -94,6 +110,8 @@ function AddTaskSource() {
         records={records} onChange={next => edit(field, next)} />
     </VerifyRow>)}
     <div className="dt-row-buttons">
+      {selected === 'excel' && <Button variant="outline" disabled={downloading}
+        onClick={() => { void downloadTemplate() }}>{t('taskTemplateDownload')}</Button>}
       <Button variant="outline" disabled={checking.all === true} aria-busy={checking.all === true}
         onClick={() => { void runVerify('all') }}>{checking.all ? t('verifyBusy') : t('verifyAll')}</Button>
       <Button variant="primary" disabled={create.busy || !selected || !name.trim()}

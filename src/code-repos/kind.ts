@@ -25,6 +25,8 @@ export interface CodeRepoType<C extends Record<string, unknown> = Record<string,
   /** 校验已存储和提交的配置并填充默认值。 */
   schema: z.ZodType<C>
   fields: FieldSpec[]
+  /** 「全部验证」按这个顺序检查的字段；名称、ID 与类型由服务端单独检查。 */
+  checkFields: string[]
   /** 由记录解析出的仓库派生的只读状态事实（记录尚未解析时为 undefined），按字段键索引。 */
   facts?(source: ResolvedSource | undefined): Record<string, Localized | string>
 }

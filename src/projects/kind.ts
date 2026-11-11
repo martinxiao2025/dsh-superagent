@@ -13,6 +13,8 @@ export const ProjectSchema = z.object({
   codeRepo: z.string().trim().min(1),
   /** 任务来源记录 ID。 */
   taskSource: z.string().trim().min(1),
+  /** Git 凭据记录 ID；凭据材料不在设置快照里，这里只保存引用。 */
+  gitCredential: z.string().trim().max(60).default(''),
   execution: z.object({
     directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
     branch: z.string().trim().max(200).default(''),

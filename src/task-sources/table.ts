@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { inflateRawSync, deflateRawSync } from 'node:zlib'
+import { META_SHEET, TASK_SHEET, checkFormatVersion } from './excel-format.ts'
 
 /** 读取一行之后的最小错误类型，调用方据此把记录标为异常而不中断其他来源。 */
 export class TaskFileError extends Error {}
@@ -39,6 +40,89 @@ export async function readTaskTable(file: string, sheet: string): Promise<TaskTa
 export async function readTaskRows(file: string, sheet: string): Promise<Record<string, string>[]> {
   const table = await readTaskTable(file, sheet)
   return table.rows.map(row => row.values)
+}
+
+/** 标准工作簿读取结果：任务表、`_meta` 中的版本与读取警告。 */
+export interface StandardTable {
+  table: TaskTable
+  version: number
+  /** 回退工作表、忽略其他表、缺少 `schema_version` 等提示。 */
+  warnings: string[]
+}
+
+/**
+ * 按 016 读取标准工作簿：优先 `tasks` 工作表，`_meta` 只读版本，其他表忽略并记录警告。
+ * CSV / TSV 等价于只有 `tasks` 一张表，同样要求 UTF-8。
+ * @throws TaskFileError 文件不可读、非 UTF-8、找不到工作表或版本高于当前支持。
+ */
+export async function readStandardTable(file: string, sheet: string): Promise<StandardTable> {
+  const extension = extname(file).toLowerCase()
+  const buffer = await readFile(file).catch(error => { throw new TaskFileError(`无法读取任务清单：${messageOf(error)}`) })
+  if (extension === '.csv' || extension === '.tsv') {
+    const delimiter = extension === '.tsv' ? '\t' : ','
+    return { table: tableOf(numbered(parseDelimited(decodeUtf8(buffer), delimiter))), version: 1, warnings: [] }
+  }
+  if (extension !== '.xlsx') throw new TaskFileError(`不支持的任务清单格式：${extension || '(无扩展名)'}`)
+  const entries = zipEntries(buffer)
+  const sharedEntry = entries.find(item => item.name === 'xl/sharedStrings.xml')
+  const shared = sharedStrings(sharedEntry ? zipRead(buffer, sharedEntry).toString('utf8') : '')
+  const sheets = workbookSheets(buffer, entries)
+  const chosen = pickSheet(sheets, sheet)
+  const warnings: string[] = []
+  if (!sheet && chosen.name.toLowerCase() !== TASK_SHEET) {
+    warnings.push(`没有找到 ${TASK_SHEET} 工作表，已回退到“${chosen.name}”`)
+  }
+  const ignored = sheets.filter(item => item !== chosen && item.name !== META_SHEET)
+  if (ignored.length) warnings.push(`已忽略 ${ignored.length} 张表：${ignored.map(item => item.name).join('、')}`)
+  let version = 1
+  const meta = sheets.find(item => item.name === META_SHEET)
+  if (meta) {
+    const values = Object.fromEntries(tableOf(xmlRows(meta.xml, shared)).rows
+      .map(row => [row.values.key?.trim() ?? '', row.values.value?.trim() ?? '']))
+    const raw = values.schema_version ?? ''
+    if (!raw) warnings.push(`${META_SHEET} 缺少 schema_version，按版本 1 读取`)
+    else if (!/^\d+$/.test(raw)) throw new TaskFileError(`${META_SHEET} 的 schema_version 不是整数：${raw}`)
+    else version = Number(raw)
+  }
+  checkFormatVersion(version)
+  return { table: tableOf(xmlRows(chosen.xml, shared)), version, warnings }
+}
+
+/** 标准工作簿按名称取表：显式指定时精确匹配，否则优先 `tasks`，再回退到第一张表。 */
+function pickSheet(sheets: readonly { name: string; path: string; xml: string }[], sheet: string):
+{ name: string; path: string; xml: string } {
+  if (sheet) {
+    const found = sheets.find(item => item.name === sheet)
+    if (!found) throw new TaskFileError(`找不到工作表：${sheet}`)
+    return found
+  }
+  const found = sheets.find(item => item.name.toLowerCase() === TASK_SHEET) ?? sheets[0]
+  if (!found) throw new TaskFileError('工作簿没有工作表')
+  return found
+}
+
+/** 解析工作簿中的工作表名称、路径与 XML。 */
+function workbookSheets(buffer: Buffer, entries: readonly ZipEntry[]): { name: string; path: string; xml: string }[] {
+  const text = (name: string): string => {
+    const found = entries.find(item => item.name === name)
+    return found ? zipRead(buffer, found).toString('utf8') : ''
+  }
+  const relations = new Map([...text('xl/_rels/workbook.xml.rels').matchAll(/<Relationship\b([^>]*)\/?>/g)]
+    .map(match => { const attrs = attributes(match[1]!); return [attrs.Id ?? '', attrs.Target ?? ''] }))
+  return [...text('xl/workbook.xml').matchAll(/<sheet\b([^>]*)\/?>/g)]
+    .map(match => attributes(match[1]!))
+    .flatMap(sheet => {
+      const target = relations.get(sheet['r:id'] ?? '') ?? ''
+      if (!target) return []
+      const path = (target.startsWith('/') ? target.slice(1) : `xl/${target}`).replace(/^xl\/xl\//, 'xl/')
+      return [{ name: sheet.name ?? '', path, xml: text(path) }]
+    })
+}
+
+/** CSV / TSV 必须是 UTF-8（含 BOM），否则给出转码提示。 */
+function decodeUtf8(buffer: Buffer): string {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buffer).replace(/^\uFEFF/, '') }
+  catch { throw new TaskFileError('任务清单不是有效的 UTF-8，请另存为 UTF-8 后重试') }
 }
 
 /** 给 CSV/TSV 的记录补上物理行号；序号包含表头，与表格软件的行号一致。 */
@@ -280,10 +364,73 @@ function textsOf(xml: string): string {
   return [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(match => decodeXml(match[1]!)).join('')
 }
 
+/** 由若干文件组装一个最小 xlsx（ZIP）：全部用 deflate 条目，不写数据描述符。 */
+export function createZip(files: readonly { name: string; data: Buffer }[]): Buffer {
+  const locals: Buffer[] = []
+  const centrals: Buffer[] = []
+  const offsets: number[] = []
+  let offset = 0
+  for (const file of files) {
+    const name = Buffer.from(file.name, 'utf8')
+    const payload = deflateRawSync(file.data)
+    const crc = crc32(file.data)
+    offsets.push(offset)
+    const local = Buffer.alloc(30 + name.length)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0x0800, 6)
+    local.writeUInt16LE(8, 8)
+    local.writeUInt16LE(0, 10)
+    local.writeUInt16LE(0x21, 12)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(payload.length, 18)
+    local.writeUInt32LE(file.data.length, 22)
+    local.writeUInt16LE(name.length, 26)
+    local.writeUInt16LE(0, 28)
+    name.copy(local, 30)
+    locals.push(local, payload)
+    offset += local.length + payload.length
+  }
+  let size = 0
+  for (const [index, file] of files.entries()) {
+    const name = Buffer.from(file.name, 'utf8')
+    const payload = deflateRawSync(file.data)
+    const central = Buffer.alloc(46 + name.length)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0x0800, 8)
+    central.writeUInt16LE(8, 10)
+    central.writeUInt16LE(0, 12)
+    central.writeUInt16LE(0x21, 14)
+    central.writeUInt32LE(crc32(file.data), 16)
+    central.writeUInt32LE(payload.length, 20)
+    central.writeUInt32LE(file.data.length, 24)
+    central.writeUInt16LE(name.length, 28)
+    central.writeUInt16LE(0, 30)
+    central.writeUInt16LE(0, 32)
+    central.writeUInt16LE(0, 34)
+    central.writeUInt16LE(0, 36)
+    central.writeUInt32LE(0, 38)
+    central.writeUInt32LE(offsets[index]!, 42)
+    name.copy(central, 46)
+    centrals.push(central)
+    size += central.length
+  }
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(files.length, 8)
+  end.writeUInt16LE(files.length, 10)
+  end.writeUInt32LE(size, 12)
+  end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...locals, ...centrals, end])
+}
+
 /** 由工作簿与关系文件得到工作表 XML 的路径。 */
 function sheetPath(workbook: string, rels: string, sheet: string): string {
   const sheets = [...workbook.matchAll(/<sheet\b([^>]*)\/?>/g)].map(match => attributes(match[1]!))
-  const picked = sheet ? sheets.find(item => item.name === sheet) : sheets[0]
+  const picked = sheet ? sheets.find(item => item.name === sheet)
+    : sheets.find(item => (item.name ?? '').toLowerCase() === TASK_SHEET) ?? sheets[0]
   if (!picked) throw new TaskFileError(`找不到工作表：${sheet}`)
   const id = picked['r:id'] ?? ''
   const relation = [...rels.matchAll(/<Relationship\b([^>]*)\/?>/g)].map(match => attributes(match[1]!))

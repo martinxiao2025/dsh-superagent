@@ -164,18 +164,18 @@ it('prechecks candidate Source fields with real probes without writing settings'
   // 任务来源属于任务侧：Excel/CSV 必须真实可读，且必须是绝对路径。
   const dir = mkdtempSync(join(tmpdir(), 'check-source-'))
   const file = join(dir, 'tasks.csv')
-  writeFileSync(file, 'id,title,description,status\n1,登录,,待处理\n', 'utf8')
+  writeFileSync(file, 'task_id,title,description,status\n1,登录,,todo\n', 'utf8')
   // 任务来源驱动走同一条预检通道：名称必填优先，Excel 真实读清单，飞书缺来源时明确报错。
   expect(await setup.checkTaskSource('excel', { file }, 'name', store.settings(), { name: '' }))
     .toMatchObject([{ ok: false, code: 'sourceNameRequired' }])
   expect(await setup.checkTaskSource('excel', { file }, 'file', store.settings()))
-    .toMatchObject([{ ok: true, code: 'taskFileOk', values: { rows: '1' } }])
+    .toMatchObject([{ ok: true, code: 'taskFileStandardOk', values: { rows: '1', version: '1', warnings: '' } }])
   expect(await setup.checkTaskSource('excel', { file: join(dir, 'missing.csv') }, 'file', store.settings()))
     .toMatchObject([{ ok: false, code: 'taskFileMissing' }])
   expect(await setup.checkTaskSource('excel', { file: 'tasks.csv' }, 'file', store.settings()))
     .toMatchObject([{ ok: false, code: 'taskFileRelative' }])
-  expect(await setup.checkTaskSource('feishu-wiki', { url: 'https://x.feishu.cn/wiki/wikcn1' }, 'url', store.settings()))
-    .toMatchObject([{ ok: false, code: 'feishuSourceUnset' }])
+  expect(await setup.checkTaskSource('feishu-wiki', { spaceId: 'space-1' }, 'feishuCredential', store.settings()))
+    .toMatchObject([{ ok: false, code: 'feishuCredentialUnset' }])
   // 预检不写设置、不重启。
   expect(JSON.stringify(store.settings())).toBe(before)
 })
@@ -250,4 +250,19 @@ it('refuses a task source save whose repo no longer matches a project that reads
   await expect(settings.save('taskSource:tasks', { ...value, config: { ...value.config, repo: 'other' } }, block.revision, 'panel'))
     .rejects.toThrow(new UserError('taskSourceRepoMismatch', { project: 'p1', source: 'tasks', repo: 'main', taskRepo: 'other' }))
   expect(store.settings().taskSources.tasks!.config).toMatchObject({ repo: 'main' })
+})
+
+it('refuses two TaskSources that claim the same wiki space, on create and on save', async () => {
+  h = await startRuntime()
+  const { settings, store } = h.runtime
+  await settings.createTaskSource('feishu-wiki', 'wiki-a', { spaceId: 'space-1' }, 'panel', '知识库 A')
+  await expect(settings.createTaskSource('feishu-wiki', 'wiki-b', { spaceId: 'space-1' }, 'panel', '知识库 B'))
+    .rejects.toThrow(new UserError('knowledgeBaseInUse', { source: 'wiki-a', space: 'space-1' }))
+  expect(store.settings().taskSources['wiki-b']).toBeUndefined()
+  await settings.createTaskSource('feishu-wiki', 'wiki-c', { spaceId: 'space-2' }, 'panel', '知识库 C')
+  const block = settings.block('taskSource:wiki-c')
+  const value = block.value as { enabled: boolean; config: Record<string, unknown> }
+  await expect(settings.save('taskSource:wiki-c', { ...value, config: { ...value.config, spaceId: 'space-1' } }, block.revision, 'panel'))
+    .rejects.toThrow(new UserError('knowledgeBaseInUse', { source: 'wiki-a', space: 'space-1' }))
+  expect(store.settings().taskSources['wiki-c']!.config).toMatchObject({ spaceId: 'space-2' })
 })

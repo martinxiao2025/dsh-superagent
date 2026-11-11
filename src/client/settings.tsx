@@ -4,6 +4,8 @@ import { CodeRepoSettings } from './code-repos.tsx'
 import { DeploymentPage, type DeploymentForm } from './deployment.tsx'
 import { EvalSettings } from './eval.tsx'
 import { ExecutionSettings } from './execution.tsx'
+import { FeishuCredentialSettings } from './feishu-credentials.tsx'
+import { GitCredentialSettings } from './git-credentials.tsx'
 import { ProjectSettings } from './projects.tsx'
 import { PromptsPage } from './prompts.tsx'
 import { usePanel } from './provider.tsx'
@@ -12,7 +14,8 @@ import { SettingsProvider } from './settings-kit.tsx'
 import { SourceSettings } from './source.tsx'
 import { TaskSourceSettings } from './task-sources.tsx'
 
-const STAGE_GROUPS: readonly SettingsGroup[] = ['source', 'codeRepos', 'taskSources', 'projects', 'eval', 'execution']
+const STAGE_GROUPS: readonly SettingsGroup[] = ['source', 'codeRepos', 'gitCredentials', 'taskSources', 'feishuCredentials',
+  'projects', 'eval', 'execution']
 export function SettingsPage({ group, query, state, deploymentForm }: {
   group: SettingsGroup; query: { source?: string; version?: string }; state: StateView; deploymentForm: DeploymentForm
 }) {
@@ -21,7 +24,9 @@ export function SettingsPage({ group, query, state, deploymentForm }: {
     switch (group) {
       case 'source': return <SettingsProvider><SourceSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>
       case 'codeRepos': return <SettingsProvider><CodeRepoSettings /></SettingsProvider>
+      case 'gitCredentials': return <SettingsProvider><GitCredentialSettings /></SettingsProvider>
       case 'taskSources': return <SettingsProvider><TaskSourceSettings /></SettingsProvider>
+      case 'feishuCredentials': return <SettingsProvider><FeishuCredentialSettings /></SettingsProvider>
       case 'projects': return <SettingsProvider><ProjectSettings /></SettingsProvider>
       case 'eval': return <SettingsProvider><EvalSettings version={query.version} /></SettingsProvider>
       case 'execution': return <SettingsProvider><ExecutionSettings /></SettingsProvider>

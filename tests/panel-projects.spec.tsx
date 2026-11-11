@@ -8,7 +8,7 @@ import { server } from './fixtures/panel-server.ts'
 usePanel()
 
 const project = {
-  name: '内容运营', enabled: true, codeRepo: 'github', taskSource: 'sheet',
+  name: '内容运营', enabled: true, codeRepo: 'github', taskSource: 'sheet', gitCredential: '',
   execution: { directory: '', branch: '' },
   schedule: { intervalMinutes: 30, runOnStart: true },
   retry: { maxRetries: 2, retryBackoffSeconds: 60 },

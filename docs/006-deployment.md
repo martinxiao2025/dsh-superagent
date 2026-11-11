@@ -269,12 +269,12 @@ curl -s -X PUT -H 'x-orchestrator-request: 1' -H 'content-type: application/json
 
 安装使用 DeepSeek Harness 的子进程服务，与执行器 shell 相同。它会移除名称包含 KEY、PASSWORD、SECRET 或 TOKEN 的环境变量。
 
-安装会逐条记录验证 CLI、账号和目标（GitHub 仓库与推送权限、GitLab 项目权限、飞书机器人身份），写入执行器环境，并检查 git 对 github.com 只使用智能体凭据。某条记录检查失败只给该记录标记 `problem` 并暂停它的轮询，不影响其他记录，也不改写已保存的启用状态。
+安装会逐条记录验证 CLI、账号和目标（GitHub 仓库与推送权限、GitLab 项目权限、飞书机器人身份），写入执行器环境，并检查 git 对 github.com 只使用智能体凭据。选择 SSH 认证的代码仓库记录不运行 `gh`/`glab`，只按记录里的私钥探测远端是否可访问。某条记录检查失败只给该记录标记 `problem` 并暂停它的轮询，不影响其他记录，也不改写已保存的启用状态。
 
 安装写入的进程环境：
 
 - **命令垫片** 位于 `<stateDir>/worker-bin`，在 `PATH` 最前面：`gh`、`glab` 和 `lark-cli` 按工单的来源记录选择该记录的 CLI 与账号；被阻止的命令会失败。垫片在运行目标之前会从 `PATH` 中移除自己的目录。
-- **git 配置** 位于 `<stateDir>/worker-gitconfig`：替换操作者的全局和系统 git 配置。它选择智能体 CLI 作为 github.com 的凭据助手，把 GitHub SSH 地址改写为 HTTPS，并定义 Git LFS 过滤器。HTTP 代理等个人 git 设置不生效。这里不设置提交身份，git 从不提示凭据，并会移除 `GH_TOKEN` 和 `GITHUB_TOKEN`。
+- **git 配置** 位于 `<stateDir>/worker-gitconfig`：替换操作者的全局和系统 git 配置。它选择智能体 CLI 作为 github.com 的凭据助手，并定义 Git LFS 过滤器。没有代码仓库记录使用 SSH 认证时，它还会把 GitHub SSH 地址改写为 HTTPS；一旦某条记录选择 SSH，该主机就不再改写，由记录自己的 SSH key 访问。HTTP 代理等个人 git 设置不生效。这里不设置提交身份，git 从不提示凭据，并会移除 `GH_TOKEN` 和 `GITHUB_TOKEN`。
 
 `worker-bin` 或 `worker-gitconfig` 中不是由 dsh-superagent 写入的文件会阻止安装。位于 git 仓库内、且该仓库自身配置添加了凭据的工单目录会使工单失败。
 

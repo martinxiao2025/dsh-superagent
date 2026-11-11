@@ -32,6 +32,11 @@ import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 import type { StartupStatus } from './startup.ts'
 import type { QueueSnapshot } from '../queue/model.ts'
 import type { ResetReport } from './reset.ts'
+import type { GitCredentials } from '../git-credentials/service.ts'
+import type { FeishuCredentials } from '../feishu-credentials/service.ts'
+import { GitCredentialInputSchema } from '../git-credentials/kind.ts'
+import { FeishuCredentialInputSchema } from '../feishu-credentials/kind.ts'
+import { TASK_TEMPLATE_FILENAME, taskTemplate } from '../task-sources/excel-template.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -42,6 +47,10 @@ export interface HttpHost {
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'>
   readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels' | 'createSource' | 'removeSource'
     | 'createCodeRepo' | 'removeCodeRepo' | 'createTaskSource' | 'removeTaskSource' | 'createProject' | 'removeProject'>
+  /** Git 凭据：材料只存在于加密存储，面板拿到的是掩码与指纹。 */
+  readonly gitCredentials: Pick<GitCredentials, 'list' | 'get' | 'create' | 'update' | 'rotate' | 'remove' | 'verify'>
+  /** 飞书凭据：与 Git 凭据完全独立，互不读取对方的材料。 */
+  readonly feishuCredentials: Pick<FeishuCredentials, 'list' | 'get' | 'create' | 'update' | 'rotate' | 'remove' | 'verify'>
   readonly engine: EngineForPeople
   readonly executor: Pick<DshExecutor, 'activeCount'>
   readonly health: Record<string, Health>
@@ -67,6 +76,8 @@ export interface HttpHost {
   checkSetup(): void
   /** 对新增来源的候选配置做真实预检；不写设置、不重启。 */
   checkSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
+  /** 对代码仓库候选配置做真实预检；SSH 模式不运行 CLI，按本机 key 探测远端。 */
+  checkCodeRepo(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
   /** 对新增任务来源的候选配置做真实预检；驱动负责读取清单或文档，同样不写设置、不重启。 */
   checkTaskSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
   requestPass(): void
@@ -205,6 +216,16 @@ const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional
   name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
 const VerifySourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
   name: z.string().trim().max(LIMITS.sourceName).optional(), config: z.unknown().optional(), field: z.string().max(40).optional() })
+const CreateGitCredentialRequest = z.object({ id: ResourceId.optional(), value: GitCredentialInputSchema })
+const UpdateGitCredentialRequest = z.object({ value: GitCredentialInputSchema, revision: z.number().int().nonnegative() })
+const RotateGitCredentialRequest = GitCredentialInputSchema.partial()
+const VerifyGitCredentialRequest = z.object({ id: ResourceId.optional(), value: GitCredentialInputSchema.partial().optional(),
+  repository: z.string().trim().max(2000).optional() })
+const CreateFeishuCredentialRequest = z.object({ id: ResourceId.optional(), value: FeishuCredentialInputSchema })
+const UpdateFeishuCredentialRequest = z.object({ value: FeishuCredentialInputSchema, revision: z.number().int().nonnegative() })
+const RotateFeishuCredentialRequest = FeishuCredentialInputSchema.partial()
+const VerifyFeishuCredentialRequest = z.object({ id: ResourceId.optional(), value: FeishuCredentialInputSchema.partial().optional(),
+  spaceId: z.string().trim().max(80).optional() })
 
 function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupStatus): Routes {
   const { store } = runtime
@@ -231,6 +252,12 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       const request = CreateCodeRepoRequest.parse(await body())
       return runtime.settings.createCodeRepo(request.kind, request.id, request.config, 'panel', request.name)
     },
+    // 与来源预检同构：字段级检查按认证方式真实探测，但不持久化候选配置。
+    'POST code-repos/verify': async ({ body }) => {
+      const request = VerifySourceRequest.parse(await body())
+      return { checks: await runtime.checkCodeRepo(request.kind, request.config, request.field ?? 'all',
+        { id: request.id, name: request.name }) }
+    },
     'DELETE code-repos/:id': ({ params }) => runtime.settings.removeCodeRepo(params.id, 'panel'),
     'POST task-sources': async ({ body }) => {
       const request = CreateTaskSourceRequest.parse(await body())
@@ -243,6 +270,8 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
         { id: request.id, name: request.name }) }
     },
     'DELETE task-sources/:id': ({ params }) => runtime.settings.removeTaskSource(params.id, 'panel'),
+    // 标准任务清单模板：面板直接下载为 xlsx，不写入任何状态目录。
+    'GET task-format/template': () => ({ filename: TASK_TEMPLATE_FILENAME, content: taskTemplate().toString('base64') }),
     'POST projects': async ({ body }) => {
       const { id, ...value } = CreateProjectRequest.parse(await body())
       return runtime.settings.createProject(id, value, 'panel')
@@ -260,6 +289,42 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       if (!project) throw new RouteError(404, 'Project not found')
       return projectTasksView(params.id, project, settings, runtime.queue())
     },
+    // 凭据与来源、代码仓库记录相互独立：路由、校验端点与材料存储都不共用。
+    'GET git-credentials': () => ({ credentials: runtime.gitCredentials.list() }),
+    'GET git-credentials/:id': ({ params }) => runtime.gitCredentials.get(params.id),
+    'POST git-credentials': async ({ body }) => {
+      const request = CreateGitCredentialRequest.parse(await body())
+      return runtime.gitCredentials.create(request.value, request.id)
+    },
+    'PUT git-credentials/:id': async ({ params, body }) => {
+      const request = UpdateGitCredentialRequest.parse(await body())
+      return runtime.gitCredentials.update(params.id, request.value, request.revision)
+    },
+    'POST git-credentials/:id/rotate': async ({ params, body }) =>
+      runtime.gitCredentials.rotate(params.id, RotateGitCredentialRequest.parse(await body())),
+    // 用候选材料或已保存的材料做真实探测；不写设置、不落盘。
+    'POST git-credentials/verify': async ({ body }) => {
+      const request = VerifyGitCredentialRequest.parse(await body())
+      return { checks: await runtime.gitCredentials.verify({ id: request.id, input: request.value, repository: request.repository }) }
+    },
+    'DELETE git-credentials/:id': ({ params }) => runtime.gitCredentials.remove(params.id),
+    'GET feishu-credentials': () => ({ credentials: runtime.feishuCredentials.list() }),
+    'GET feishu-credentials/:id': ({ params }) => runtime.feishuCredentials.get(params.id),
+    'POST feishu-credentials': async ({ body }) => {
+      const request = CreateFeishuCredentialRequest.parse(await body())
+      return runtime.feishuCredentials.create(request.value, request.id)
+    },
+    'PUT feishu-credentials/:id': async ({ params, body }) => {
+      const request = UpdateFeishuCredentialRequest.parse(await body())
+      return runtime.feishuCredentials.update(params.id, request.value, request.revision)
+    },
+    'POST feishu-credentials/:id/rotate': async ({ params, body }) =>
+      runtime.feishuCredentials.rotate(params.id, RotateFeishuCredentialRequest.parse(await body())),
+    'POST feishu-credentials/verify': async ({ body }) => {
+      const request = VerifyFeishuCredentialRequest.parse(await body())
+      return { checks: await runtime.feishuCredentials.verify({ id: request.id, input: request.value, spaceId: request.spaceId }) }
+    },
+    'DELETE feishu-credentials/:id': ({ params }) => runtime.feishuCredentials.remove(params.id),
     // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。
     'GET health': () => healthView(runtime, listen(), startup),
     'GET queue': () => runtime.queue(),

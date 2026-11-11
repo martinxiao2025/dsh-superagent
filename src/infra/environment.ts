@@ -143,6 +143,9 @@ export async function writeEnvironment(deployment: Deployment, blockedCommands: 
   const hostOfSource = (source: ResolvedSource): string | undefined => source.kind === 'github' ? hostOf(source.instanceUrl, githubHost)
     : source.kind === 'gitlab' ? hostOf(source.instanceUrl, gitlabHost) : undefined
   const hosts = new Set(values.flatMap(source => hostOfSource(source) ?? []))
+  // 有 SSH 认证的代码仓库时不要把这些主机的 git@ 地址改写成 HTTPS，否则 SSH 工作副本永远拿不到本机 SSH key。
+  const sshHosts = new Set(values.filter(source => (source.kind === 'github' || source.kind === 'gitlab') && source.auth === 'ssh')
+    .flatMap(source => hostOfSource(source) ?? []))
   const helper = credentialHelper(stateDir)
   await own(workerGitConfig(stateDir), [
     MARKER,
@@ -150,7 +153,7 @@ export async function writeEnvironment(deployment: Deployment, blockedCommands: 
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
     ...[...hosts].map(host => `[credential "https://${host}"]\n\thelper = ${gitQuote(helper)}`),
-    ...hosts.has(githubHost) ? [`[url "https://${githubHost}/"]`, `\tinsteadOf = git@${githubHost}:`, `\tinsteadOf = ssh://git@${githubHost}:`] : [],
+    ...hosts.has(githubHost) && !sshHosts.has(githubHost) ? [`[url "https://${githubHost}/"]`, `\tinsteadOf = git@${githubHost}:`, `\tinsteadOf = ssh://git@${githubHost}:`] : [],
     // 包含 Git LFS 过滤器，因为运维者的全局 gitconfig（通常保存它们）被忽略。
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')

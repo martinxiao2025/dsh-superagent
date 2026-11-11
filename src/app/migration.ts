@@ -16,7 +16,7 @@ import { KV, record, type Key } from '../kv.ts'
 import type { SettingsVersion, Store } from './store.ts'
 import { Versions } from './versions.ts'
 
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 /** 此构建可直接打开并迁移的最旧数据库模式版本。 */
 export const OLDEST_SCHEMA = 10
 /** 返回说明为何无法打开 `version` 的错误消息：更旧的模式需要先备份并重置状态目录。 */

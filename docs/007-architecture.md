@@ -298,14 +298,24 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验；`SettingsSchema` 校验项目对代码仓库与任务来源的引用完整性 |
 | `src/projects/kind.ts` | `ProjectSchema`：项目名称、启停、一对一的 `codeRepo` / `taskSource` 引用、执行目录与分支、调度、重试和任务状态口径 |
 | `src/code-repos/kind.ts` | `CodeRepoRecordSchema` 与 `CodeRepoKindSchema`：代码仓库记录的类型、名称、启停与配置，以及代码仓库类型描述 `CodeRepoType` |
+| `src/code-repos/types.ts` | 代码仓库类型清单 `CODE_REPO_TYPES` 与按 `kind` 查找的 `codeRepoType`，供预检和面板共用 |
 | `src/code-repos/work.ts` | 代码仓库工作副本：按记录 ID 固定目录，首次 clone、后续同步，以及把回写的单个文件提交为干净工作树 |
 | `src/code-repos/workspace.ts` | 工单执行工作区：从轮询工作副本创建独立 git worktree，重试时复用，准备失败时移除 |
-| `src/code-repos/sync.ts` | 代码仓库同步：按记录解析远端地址、注册目录凭据、初始化/快进合并并返回提交，不覆盖本地改动 |
+| `src/code-repos/sync.ts` | 代码仓库同步：按记录的认证方式（HTTPS 或 SSH）与自定义远端解析地址、注册目录凭据、初始化/快进合并并返回提交；空仓库返回 `empty` 而不是失败，错误与日志中的凭据会被脱敏 |
 | `src/code-repos/read.ts` | 代码仓库文件读取：只读访问默认分支中的非隐藏文件或目录 |
 | `src/task-sources/kind.ts` | 任务来源记录、字段映射与 `TaskSourceDriver` 契约：类型、名称、schema、字段、预检、读取、可选回写与仓库绑定 |
-| `src/task-sources/index.ts` | 驱动注册表与字段级预检：类型目录、名称/ID 预检、`all` 依次验证；新增驱动只需登记 |
+| `src/task-sources/index.ts` | 驱动注册表与字段级预检：类型目录、名称/ID 预检、`all` 依次验证；驱动回写默认只提交本地工作副本，`push` 接口与健康度先留位 |
 | `src/task-sources/excel.ts` | Excel 驱动：先同步代码仓库工作副本，再读取 CSV / TSV / XLSX，支持回写 |
-| `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：复用文档读取，首批只读 |
+| `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：按 `spaceId` 唯一归属与根节点集合读取，目录递归、多文档与多维表格都转成任务；首批只读 |
+| `src/task-sources/feishu-api.ts` | 飞书知识库读取接口：节点、目录、docx 正文、多维表格与记录；应用身份走 HTTP，CLI 身份走 `lark api` |
+| `src/task-sources/feishu-wiki-read.ts` | 知识库遍历：根节点顺序 → 目录顺序 → 表出现顺序，稳定键、跳过类型、单文档隔离与严格编号冲突 |
+| `src/task-sources/excel-format.ts` | 016 标准任务格式：`tasks` 表头契约、状态与优先级枚举、行级校验、版本门禁与完成/失败状态映射 |
+| `src/task-sources/excel-template.ts` | 标准工作簿模板生成：`tasks` 表头 + `_meta`（版本与示例），面板下载入口 |
+| `src/secrets/vault.ts` | 凭据加密存储与掩码：AES-256-GCM、按区域（Git / 飞书）分目录、指纹与 `••••` 末四位提示 |
+| `src/secrets/check.ts` | 凭据预检结果 `CredentialCheck` 与构造函数，供两个凭据页共用 |
+| `src/secrets/id.ts` | 凭据记录 ID：按名称生成小写连字符 ID |
+| `src/git-credentials/kind.ts`、`service.ts`、`probe.ts` | Git 凭据：独立记录、独立路由与身份校验；私钥或令牌只进加密存储，项目只存引用 |
+| `src/feishu-credentials/kind.ts`、`service.ts`、`probe.ts` | 飞书凭据：独立记录、独立路由与身份校验；应用密钥只进加密存储，任务来源只存引用 |
 | `src/task-sources/table.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
 | `src/task-sources/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解与稳定键 |
 | `src/task-sources/writeback.ts` | 任务结果回写：仅更新 CSV/TSV 匹配行；`.xlsx` 与飞书明确报未支持 |
@@ -403,6 +413,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/overview.tsx` | 概览 |
 | `src/client/source.tsx`、`trigger.tsx`、`eval.tsx`、`execution.tsx` | 每个阶段一个文件：其状态，以及有设置时的设置 |
 | `src/client/task-sources.tsx` | 任务来源设置：类型下拉来自驱动注册表，新增前逐字段验证 |
+| `src/client/git-credentials.tsx`、`feishu-credentials.tsx` | Git 与飞书凭据设置页：两页各自独立增删改查，只显示掩码与指纹，绝不下发材料 |
 | `src/client/code-repos.tsx` | 代码仓库设置：类型目录与字段、启停与删除；只用于克隆与同步 |
 | `src/client/projects.tsx` | 项目标签页：项目列表与运行时概览、单项目的任务与队列详情，以及项目设置分区 |
 | `src/client/thread.tsx`、`ticket.tsx` | 记录页面：带时间线的线程，以及带授权、输入和派工的工单 |
@@ -455,7 +466,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/settings.spec.ts` | 与模型或账号检查竞争的设置保存、被保存越过的策略同步，以及暂停、同步和块的拒绝 |
 | `tests/views.spec.ts` | 管理视图从 Store 派生的内容，例如被丢弃消息所属的线程 |
 | `tests/timeline.spec.ts` | 线程的页面和按时间再按 id 排序的触发器邻居，每个收到的触发器时间只有一种形态 |
-| `tests/migration.spec.ts` | 架构 13 迁移：每条已存储记录都处于当前形态，以及拒绝更旧的架构 |
+| `tests/migration.spec.ts` | 架构 14 迁移：每条已存储记录都处于当前形态，以及拒绝更旧的架构 |
 | `tests/store.spec.ts` | 仓库及其工作集（SQLite 和内存中一致）、kv 区域（`KV` 的每个键只在 `src/kv.ts` 和迁移中拼写）、设置历史与查询 |
 | `tests/prompts.spec.ts` | 提示词校验、组装和版本 |
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
@@ -463,8 +474,13 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、字段级预检文案与注册表扩展 |
+| `tests/feishu-wiki.spec.ts` | 飞书知识库遍历：根节点顺序与目录递归、多文档与多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突 |
+| `tests/excel-format.spec.ts` | 016 标准格式：表头与枚举校验、版本门禁、完成/失败状态映射与模板往返读取 |
+| `tests/vault.spec.ts` | 凭据加密存储：往返、掩码与指纹、缺失密钥、不可解密与临时材料 |
+| `tests/git-credentials.spec.ts`、`tests/feishu-credentials.spec.ts` | Git 与飞书凭据：独立增删改查、材料替换、引用保护与探测失败分类 |
+| `tests/code-repos.spec.ts` | 代码仓库同步：HTTPS/SSH 远端推导、自定义远端与内嵌凭据拒绝、SSH 私钥命令、远端探测、空仓库结果与凭据脱敏，以及工单工作区从仓库检出为独立 worktree |
 | `tests/reset.spec.ts` | 状态目录重置：备份完整、只清插件拥有的条目、备份失败时不删除、可跳过备份 |
-| `tests/workspace.spec.ts` | 工单执行工作区：从轮询工作副本创建独立 worktree、重试复用、拒绝覆盖与未同步仓库报错 |
+| `tests/workspace.spec.ts` | 工单执行工作区：从轮询工作副本检出独立 worktree、复用、拒绝覆盖与移除 |
 | `tests/workspace-gc.spec.ts` | 执行工作区回收：保留期、运行中与未知目录、禁用回收与删除失败 |
 | `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败（每次重试都是新工单）、工作项级增删改、`runOnStart`、停用/删除项目、活动条目唯一索引与终态清理、回写副作用与重启恢复 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |

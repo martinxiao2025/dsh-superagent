@@ -16,19 +16,19 @@ import { TaskRepoError, type TaskSourceDriver, type TaskSourceVerifyDeps } from 
 
 const temporary = (): string => mkdtempSync(join(tmpdir(), 'dsh-task-source-'))
 const deps = (syncRepo: TaskSourceVerifyDeps['syncRepo'] = async () => temporary()): TaskSourceVerifyDeps => ({
-  lark: async () => undefined, syncRepo,
+  feishu: async () => undefined, syncRepo,
 })
 
 describe('excel task source', () => {
   it('lists tasks from the repository working copy after syncing it', async () => {
     const root = temporary()
     mkdirSync(join(root, 'tasks'))
-    writeFileSync(join(root, 'tasks', 'backlog.csv'), 'id,title,description,status\n1,登录,修复,待处理\n', 'utf8')
+    writeFileSync(join(root, 'tasks', 'backlog.csv'), 'task_id,title,description,status\n1,登录,修复,todo\n', 'utf8')
     const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
     const sync = vi.fn(async () => root)
     const tasks = await excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: sync })
     expect(sync).toHaveBeenCalledWith('repo-1')
-    expect(tasks).toEqual([{ id: '1', title: '登录', description: '修复', status: '待处理' }])
+    expect(tasks).toEqual([{ id: '1', title: '登录', description: '修复', status: 'todo' }])
   })
 
   it('reports a missing file, a missing repository and a successful sync as distinct checks', async () => {
@@ -49,6 +49,10 @@ describe('excel task source', () => {
       throw new TaskRepoError('syncFailed', '鉴权失败') }))
     expect(syncFailed[0]).toMatchObject({ field: 'repo', ok: false, code: 'taskRepoSyncFailed', values: { output: '鉴权失败' } })
 
+    const empty = await excelTaskSource.verify(missing, 'repo', deps(async () => {
+      throw new TaskRepoError('repoEmpty', '代码仓库为空，没有分支或提交：repo-1') }))
+    expect(empty[0]).toMatchObject({ field: 'repo', ok: false, code: 'taskRepoEmpty', values: { output: '代码仓库为空，没有分支或提交：repo-1' } })
+
     const syncCheck = await excelTaskSource.verify(missing, 'repo', deps(async () => root))
     expect(syncCheck[0]).toMatchObject({ field: 'repo', ok: true, code: 'taskRepoOk', values: { directory: root } })
   })
@@ -56,24 +60,24 @@ describe('excel task source', () => {
   it('writes a status back into the repository working copy and lists it again', async () => {
     const root = temporary()
     mkdirSync(join(root, 'tasks'))
-    writeFileSync(join(root, 'tasks', 'backlog.csv'), 'id,title,description,status\n1,登录,修复,待处理\n', 'utf8')
+    writeFileSync(join(root, 'tasks', 'backlog.csv'), 'task_id,title,description,status\n1,登录,修复,todo\n', 'utf8')
     const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
     await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成', { syncRepo: async () => root })
     await expect(excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: async () => root }))
-      .resolves.toEqual([{ id: '1', title: '登录', description: '修复', status: '已完成' }])
+      .resolves.toEqual([{ id: '1', title: '登录', description: '修复', status: 'done' }])
   })
 
   it('keeps the original BOM and CRLF line endings when writing back', async () => {
     const root = temporary()
     mkdirSync(join(root, 'tasks'))
     const file = join(root, 'tasks', 'backlog.csv')
-    writeFileSync(file, '\uFEFFid,title,description,status\r\n1,登录,修复,待处理\r\n2,注册,新建,待处理\r\n', 'utf8')
+    writeFileSync(file, '\uFEFFtask_id,title,description,status\r\n1,登录,修复,todo\r\n2,注册,新建,todo\r\n', 'utf8')
     const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
     await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成', { syncRepo: async () => root })
     const bytes = readFileSync(file)
     expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
     const text = bytes.toString('utf8').replace(/^\uFEFF/, '')
-    expect(text).toBe('id,title,description,status\r\n1,登录,修复,已完成\r\n2,注册,新建,待处理\r\n')
+    expect(text).toBe('task_id,title,description,status\r\n1,登录,修复,done\r\n2,注册,新建,todo\r\n')
     expect(text.replaceAll('\r\n', '')).not.toContain('\n')
   })
 
@@ -85,37 +89,50 @@ describe('excel task source', () => {
     run(['config', 'user.name', 'Test'], root)
     mkdirSync(join(root, 'tasks'))
     const file = join(root, 'tasks', 'backlog.csv')
-    writeFileSync(file, 'id,title,description,status\n1,登录,修复,待处理\n', 'utf8')
+    writeFileSync(file, 'task_id,title,description,status\n1,登录,修复,todo\n', 'utf8')
     run(['add', '.'], root)
     run(['commit', '-qm', 'initial'], root)
     const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
-    const git = async (args: string[], cwd: string): Promise<string> => execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' })
+    const calls: string[][] = []
+    const git = async (args: string[], cwd: string): Promise<string> => {
+      calls.push(args)
+      return execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' })
+    }
     await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成',
       { syncRepo: async () => root, commands: { git, scope: () => ({ git }) } as unknown as Commands })
+    expect(calls.some(args => args.includes('push'))).toBe(false)
     expect(run(['status', '--porcelain'], root).trim()).toBe('')
-    expect(run(['show', 'HEAD:tasks/backlog.csv'], root)).toContain('已完成')
+    expect(run(['show', 'HEAD:tasks/backlog.csv'], root)).toContain('done')
     // 工作副本干净，后续快进同步不会被脏文件阻塞。
     expect(run(['merge', '--ff-only', 'HEAD'], root)).toBeDefined()
   })
 })
 
 describe('feishu wiki task source', () => {
-  it('lists tasks through the lark CLI bound to the selected source record', async () => {
-    const lark = vi.fn(async (args: string[]) => {
-      if (args.includes('/open-apis/wiki/v2/spaces/get_node')) return { node: { obj_type: 'docx', obj_token: 'doc-1' } }
-      return { content: '| id | title | description | status |\n| --- | --- | --- | --- |\n| 1 | 登录 | 修复 | 待处理 |\n' }
-    })
-    const config = feishuWikiTaskSource.schema.parse({ source: 'feishu', url: 'https://x.feishu.cn/wiki/wikcn1' })
-    const tasks = await feishuWikiTaskSource.list(config, {
-      signal: new AbortController().signal, commands: { lark } as unknown as Commands })
-    expect(tasks).toEqual([{ id: '1', title: '登录', description: '修复', status: '待处理' }])
-    expect(lark).toHaveBeenCalledWith(expect.arrayContaining(['/open-apis/wiki/v2/spaces/get_node']))
+  it('lists tasks from a space through the injected wiki API with node-scoped IDs', async () => {
+    const api = {
+      node: async (token: string) => ({ nodeToken: token, objToken: `obj-${token}`, objType: 'docx', title: token,
+        hasChild: false, spaceId: 'space-1' }),
+      children: async () => [{ nodeToken: 'n1', objToken: 'doc-1', objType: 'docx', title: '任务', hasChild: false, spaceId: 'space-1' }],
+      document: async () => '| task_id | title | description | status |\n| --- | --- | --- | --- |\n| 1 | 登录 | 修复 | 待处理 |\n',
+      tables: async () => [], records: async () => [],
+    }
+    const config = feishuWikiTaskSource.schema.parse({ feishuCredential: 'bot', spaceId: 'space-1' })
+    const tasks = await feishuWikiTaskSource.list(config, { signal: new AbortController().signal,
+      commands: {} as Commands, feishu: async () => api })
+    expect(tasks).toEqual([{ id: 'feishu:n1:1', title: '登录', description: '修复', status: '待处理' }])
   })
 
-  it('reports a missing Feishu source before reading the document', async () => {
-    const config = feishuWikiTaskSource.schema.parse({ source: 'feishu', url: 'https://x.feishu.cn/wiki/wikcn1' })
-    const checks = await feishuWikiTaskSource.verify(config, 'url', { lark: async () => undefined, syncRepo: async () => '' })
-    expect(checks[0]).toMatchObject({ field: 'url', ok: false, code: 'feishuSourceMissing' })
+  it('reports a missing credential and an unreadable space before reading documents', async () => {
+    const config = feishuWikiTaskSource.schema.parse({ feishuCredential: 'bot', spaceId: 'space-1' })
+    const missing = await feishuWikiTaskSource.verify(config, 'feishuCredential', deps())
+    expect(missing[0]).toMatchObject({ field: 'feishuCredential', ok: false, code: 'feishuCredentialMissing' })
+    const unset = await feishuWikiTaskSource.verify(feishuWikiTaskSource.schema.parse({}), 'feishuCredential', deps())
+    expect(unset[0]).toMatchObject({ field: 'feishuCredential', ok: false, code: 'feishuCredentialUnset' })
+    const unreadable = await feishuWikiTaskSource.verify(config, 'spaceId', { ...deps(), feishu: async () => ({
+      node: async () => { throw new Error('no') }, children: async () => { throw new Error('permission denied') },
+      document: async () => '', tables: async () => [], records: async () => [] }) })
+    expect(unreadable[0]).toMatchObject({ field: 'spaceId', ok: false, code: 'feishuWikiForbidden' })
   })
 })
 

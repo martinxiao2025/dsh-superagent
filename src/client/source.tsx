@@ -17,7 +17,7 @@ const ADD_FIELDS: Readonly<Record<string, readonly string[]>> = {
   feishu: ['instanceUrl', 'cli'],
 }
 /** 一行字段加一个独立的验证按钮，结果就地显示在字段下方。 */
-function VerifyRow({ label, busy, check, onVerify, children }: { label: string; busy: boolean; check?: SourceCheck
+export function VerifyRow({ label, busy, check, onVerify, children }: { label: string; busy: boolean; check?: SourceCheck
   onVerify: () => void; children: ReactElement<{ id?: string }> }) {
   const { t } = usePanel()
   return <div className="dt-verify-item">

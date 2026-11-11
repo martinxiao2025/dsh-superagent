@@ -82,9 +82,23 @@ describe('configuration schema', () => {
 describe('setup', () => {
   it('reads each GitHub record\'s repository and account from its CLI, skipping the worker shims', async () => {
     const deployment = await resolveGithubSource(machine(), 'github-main', { repository: 'acme/widgets', cli: 'gh' }, probe, path)
-    expect(deployment).toEqual({ id: 'github-main', kind: 'github', instanceUrl: '', cli: ghCli, repository: 'acme/widgets', login: 'Agent-Bot', noreply: '7+Agent-Bot@users.noreply.github.com' })
+    expect(deployment).toEqual({ id: 'github-main', kind: 'github', instanceUrl: '', cli: ghCli, repository: 'acme/widgets', login: 'Agent-Bot',
+      noreply: '7+Agent-Bot@users.noreply.github.com', auth: 'https', remote: '', sshKey: '' })
     // 重命名后的仓库仍可通过旧名解析；通知携带 GitHub 当前的全名（full_name）。
     expect((await resolveGithubSource(machine(), 'github-main', { repository: 'acme/gadgets', cli: 'gh' }, probe, path)).repository).toBe('acme/widgets')
+  })
+  it('resolves an SSH record from the local key without running gh', async () => {
+    const source = await resolveGithubSource(machine(), 'github-ssh', { auth: 'ssh', repository: 'acme/widgets' }, probe, path)
+    expect(source).toEqual({ id: 'github-ssh', kind: 'github', instanceUrl: '', cli: '', repository: 'acme/widgets', login: '', noreply: '',
+      auth: 'ssh', remote: '', sshKey: '' })
+    // 自定义远端可以替代仓库字段；两者都缺时给出明确错误，而不是交给 gh。
+    expect((await resolveGithubSource(machine(), 'github-ssh', { auth: 'ssh', remote: 'git@example.com:acme/widgets.git' }, probe, path)).remote)
+      .toBe('git@example.com:acme/widgets.git')
+    await expect(resolveGithubSource(machine(), 'github-ssh', { auth: 'ssh' }, probe, path))
+      .rejects.toEqual(setupError('github-ssh', 'repositoryUnset', {}))
+    // 内嵌账号密码的远端在保存时就被拒绝，凭据只能来自本机 SSH key。
+    await expect(resolveGithubSource(machine(), 'github-ssh', { auth: 'ssh', remote: 'https://user:pass@example.com/acme/widgets.git' }, probe, path))
+      .rejects.toThrow()
   })
   it('points a self-hosted GitHub Enterprise record at its instance with GH_HOST', async () => {
     const enterprise = program('gh-enterprise', `const args = argv.join(' ')
@@ -170,7 +184,13 @@ return 1`)
   it('reads the GitLab project and its Developer access from glab, and reports a record without a project', async () => {
     await expect(resolveGitlabSource(machine(), 'gitlab-main', {}, probe, path)).rejects.toEqual(setupError('gitlab-main', 'gitlabProjectUnset', {}))
     const cli = glab('glab')
-    expect(await resolveGitlabSource(machine(), 'gitlab-main', { project, cli: 'glab' }, probe, path)).toEqual({ id: 'gitlab-main', kind: 'gitlab', instanceUrl: '', cli, project, projectId: 42, login: 'Agent-Bot', userId: 7 })
+    expect(await resolveGitlabSource(machine(), 'gitlab-main', { project, cli: 'glab' }, probe, path)).toEqual({ id: 'gitlab-main', kind: 'gitlab',
+      instanceUrl: '', cli, project, projectId: 42, login: 'Agent-Bot', userId: 7, auth: 'https', remote: '', sshKey: '' })
+    // SSH 记录不运行 glab，项目与账号字段留空，访问权限留给同步探测。
+    expect(await resolveGitlabSource(machine(), 'gitlab-ssh', { auth: 'ssh', project }, probe, path)).toMatchObject({ auth: 'ssh', project,
+      projectId: 0, login: '', userId: 0 })
+    await expect(resolveGitlabSource(machine(), 'gitlab-ssh', { auth: 'ssh' }, probe, path))
+      .rejects.toEqual(setupError('gitlab-ssh', 'gitlabProjectUnset', {}))
     // 群组访问权限与项目访问权限等价，且使用重命名后的规范路径。
     expect(await resolveGitlabSource(machine(), 'gitlab-main', { project, cli: glab('glab-group', user, payload(null, 30, 'group/renamed')) }, probe, path))
       .toMatchObject({ project: 'group/renamed' })

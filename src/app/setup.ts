@@ -1,4 +1,6 @@
 /** 按来源记录探测仓库、项目与账户 CLI，配置执行器环境与命令 shim，并跟踪初始化就绪状态。 */
+import { existsSync, statSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError } from '../core/index.ts'
 import {
@@ -9,10 +11,12 @@ import {
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import { Commands } from '../infra/commands.ts'
 import { repoDirectory, syncRepoWorkCopy } from '../code-repos/work.ts'
+import { probeRemote, remoteOf, sshKeyFile } from '../code-repos/sync.ts'
+import { codeRepoType } from '../code-repos/types.ts'
 import { taskSources, type TaskSourceVerifyMeta } from '../task-sources/index.ts'
 import { TaskRepoError } from '../task-sources/kind.ts'
 import { LIMITS } from '../limits.ts'
-import type { LarkCall } from '../task-sources/feishu-doc.ts'
+import type { FeishuWikiApi } from '../task-sources/feishu-api.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import type { SourceInstance } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -22,6 +26,8 @@ export interface SetupHost {
   readonly context: Context
   readonly machine: Machine
   readonly lifetime: AbortSignal
+  /** 按飞书凭据 ID 取知识库读取能力；凭据未安装或材料不可用时返回 undefined。 */
+  feishuWiki?(credential: string): Promise<FeishuWikiApi | undefined>
   restart(): void
 }
 
@@ -54,7 +60,7 @@ const checkName = (name: string): SourceCheck => {
   if (/[\u0000-\u001f\u007f]/.test(value)) return checkFailed('name', 'sourceNameInvalid')
   return checkPassed('name', 'sourceNameOk', { name: value })
 }
-const checkId = (id: string, sources: SourceRegistry): SourceCheck => {
+const checkId = (id: string, sources: { record(id: string): unknown }): SourceCheck => {
   if (!id) return checkPassed('id', 'sourceIdAuto')
   if (!/^[a-z][a-z0-9-]*$/.test(id)) return checkFailed('id', 'sourceIdInvalid', { id })
   if (sources.record(id)) return checkFailed('id', 'sourceIdTaken', { id })
@@ -155,19 +161,102 @@ export class Setup {
   async checkTaskSource(kind: string, config: unknown, field: string, settings: Settings,
     meta: TaskSourceVerifyMeta = {}): Promise<SourceCheck[]> {
     return taskSources.verify(kind, config, field, { ...meta, taken: id => settings.taskSources[id] !== undefined }, {
-      lark: async source => this.taskSourceLark(source, settings),
+      feishu: async credential => this.host.feishuWiki?.(credential) ?? undefined,
       syncRepo: async repo => this.taskSourceRepo(repo, settings),
     })
   }
-  /** 任务来源选中的飞书记录必须存在且类型正确；解析失败同样视为不可用。 */
-  private async taskSourceLark(source: string, settings: Settings): Promise<LarkCall | undefined> {
-    const record = settings.sources[source]
-    if (!record || record.kind !== 'feishu') return undefined
+  /**
+   * 代码仓库记录的字段级预检：按所选认证方式真实运行 gh/glab 或 `git ls-remote`，不写设置、不重启。
+   * SSH 模式不依赖 CLI；可访问但没有分支的仓库返回 `codeRepoEmpty`，而不是笼统的不可访问。
+   */
+  async checkCodeRepo(kind: string, config: unknown, field: string, settings: Settings,
+    meta: { id?: string; name?: string } = {}): Promise<SourceCheck[]> {
+    const type = codeRepoType(kind)
+    if (!type) return [checkFailed(field === 'all' ? 'kind' : field, 'sourceKindUnknown', { kind })]
+    if (field === 'name') return [checkName(meta.name ?? '')]
+    if (field === 'id') return [checkId(meta.id ?? '', { record: id => settings.codeRepos[id] })]
+    const parsed = type.schema.safeParse(config ?? {})
+    if (!parsed.success) {
+      return [checkFailed(field === 'all' ? 'kind' : field, 'sourceConfigInvalid', {
+        detail: parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ') })]
+    }
+    if (field === 'kind') return [checkPassed('kind', 'sourceKindOk', { kind })]
+    const data = parsed.data as Record<string, unknown>
+    const fields = field === 'all'
+      ? ['name', ...(meta.id === undefined ? [] : ['id']), ...type.checkFields]
+      : [field]
     const probe = this.probe()
+    const checks: SourceCheck[] = []
+    for (const name of fields) {
+      if (name === 'name') { checks.push(checkName(meta.name ?? '')); continue }
+      if (name === 'id') { checks.push(checkId(meta.id ?? '', { record: id => settings.codeRepos[id] })); continue }
+      checks.push(await this.checkCodeRepoField(kind, name, data, probe))
+    }
+    return checks
+  }
+  /** 单个代码仓库字段：SSH 用本机 key 探测远端，HTTPS 沿用 gh/glab 的账户与仓库检查。 */
+  private async checkCodeRepoField(kind: string, field: string, config: Record<string, unknown>, probe: Probe): Promise<SourceCheck> {
     try {
-      const resolved = await this.resolveRecord(source, record, probe)
-      return resolved?.kind === 'feishu' ? this.larkCall(resolved, probe) : undefined
-    } catch { return undefined }
+      const auth = config.auth === 'ssh' ? 'ssh' as const : 'https' as const
+      const defaultHost = kind === 'gitlab' ? this.host.machine.gitlabHost.get() : this.host.machine.githubHost.get()
+      const host = hostOf(String(config.instanceUrl ?? ''), defaultHost)
+      const key = String(config.sshKey ?? '')
+      const source = kind === 'github'
+        ? { kind: 'github' as const, instanceUrl: String(config.instanceUrl ?? ''), repository: String(config.repository ?? ''),
+          auth, remote: String(config.remote ?? '') }
+        : { kind: 'gitlab' as const, instanceUrl: String(config.instanceUrl ?? ''), project: String(config.project ?? ''),
+          auth, remote: String(config.remote ?? '') }
+      const remote = () => remoteOf(source, '', { github: this.host.machine.githubHost.get(), gitlab: this.host.machine.gitlabHost.get() })
+      if (field === 'auth') return checkPassed(field, auth === 'ssh' ? 'codeRepoAuthSsh' : 'codeRepoAuthHttps')
+      if (field === 'instanceUrl') {
+        if (auth === 'ssh') return checkPassed(field, 'codeRepoInstanceOk', { host })
+        const account = kind === 'github'
+          ? await checkGithubAccount(this.host.machine, 'candidate', config, probe)
+          : await checkGitlabAccount(this.host.machine, 'candidate', config, probe)
+        return checkPassed(field, 'codeRepoInstanceOk', { host: hostOf(account.instanceUrl, defaultHost) })
+      }
+      if (field === 'sshKey') {
+        const file = sshKeyFile(key)
+        if (!file) return checkPassed(field, 'codeRepoKeyDefault')
+        if (!isAbsolute(file) || !existsSync(file) || !statSync(file).isFile()) return checkFailed(field, 'codeRepoKeyMissing', { key: file })
+        if (auth !== 'ssh') return checkPassed(field, 'codeRepoKeyIdle', { key: file })
+        try {
+          await probeRemote(probe, remote(), key)
+          return checkPassed(field, 'codeRepoKeyOk', { key: file })
+        } catch (error) {
+          return checkFailed(field, 'codeRepoKeyUnusable', { key: file, output: error instanceof Error ? error.message : String(error) })
+        }
+      }
+      if (field === 'remote') {
+        if (!String(config.remote ?? '').trim()) return checkPassed(field, 'codeRepoRemoteAuto', { remote: remote() })
+        const refs = await probeRemote(probe, remote(), key)
+        return refs.branches.length
+          ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
+          : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
+      }
+      if (field === 'repository' || field === 'project') {
+        if (auth === 'ssh') {
+          const refs = await probeRemote(probe, remote(), key)
+          return refs.branches.length
+            ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
+            : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
+        }
+        if (kind === 'github') {
+          const access = await checkGithubRepository(this.host.machine, 'candidate', config, probe)
+          return checkPassed(field, 'githubRepositoryOk', { repository: access.repository, login: access.account.login })
+        }
+        const access = await checkGitlabProject(this.host.machine, 'candidate', config, probe)
+        return checkPassed(field, 'gitlabProjectOk', { project: access.project, login: access.account.login })
+      }
+      if (field === 'cli') {
+        if (auth === 'ssh') return checkPassed(field, 'codeRepoCliOptional')
+        const account = kind === 'github'
+          ? await checkGithubAccount(this.host.machine, 'candidate', config, probe)
+          : await checkGitlabAccount(this.host.machine, 'candidate', config, probe)
+        return checkPassed(field, kind === 'github' ? 'githubAccountOk' : 'gitlabAccountOk', { login: account.login })
+      }
+      return checkFailed(field, 'checkUnsupported', { field })
+    } catch (error) { return checkThrown(field, error) }
   }
   /** 同步任务来源绑定的代码仓库并返回工作副本目录；失败按原因分类，供预检给出可读提示。 */
   private async taskSourceRepo(repo: string, settings: Settings): Promise<string> {
@@ -187,8 +276,11 @@ export class Setup {
     const deployment: Deployment = { ...this.host.machine, sources: { ...(this.resolved?.sources ?? {}), [repo]: resolved } }
     const commands = new Commands(() => deployment, this.commandEnvironment, this.host.lifetime).scope(repo)
     try {
-      await syncRepoWorkCopy({ commands, stateDir: this.host.machine.stateDir, repo, signal: this.host.lifetime })
+      const result = await syncRepoWorkCopy({ commands, stateDir: this.host.machine.stateDir, repo, signal: this.host.lifetime })
+      // 空仓库同步本身成功，但没有分支和提交；单独分类，避免提示成笼统的同步失败。
+      if (result.empty) throw new TaskRepoError('repoEmpty', `代码仓库为空，没有分支或提交：${repo}`)
     } catch (error) {
+      if (error instanceof TaskRepoError) throw error
       throw new TaskRepoError('syncFailed', `代码仓库同步失败：${error instanceof Error ? error.message : String(error)}`)
     }
     return repoDirectory(this.host.machine.stateDir, repo)
@@ -227,16 +319,6 @@ export class Setup {
     if (field === 'cli') return checkPassed(field, 'feishuAccountOk', { name: resolved.name })
     if (field === 'instanceUrl') return checkPassed(field, 'feishuInstanceOk', { host: hostOf(resolved.instanceUrl, 'feishu.cn') })
     return checkFailed(field, 'checkUnsupported', { field })
-  }
-  /** 用已解析飞书记录的 CLI 运行 OpenAPI 调用；返回 `data`，失败时带出 CLI 的错误消息。 */
-  private larkCall(resolved: Extract<ResolvedSource, { kind: 'feishu' }>, probe: Probe): LarkCall {
-    return async (args: string[]) => {
-      const output = await probe([resolved.cli, ...args, '--as', 'bot', '--format', 'json'],
-        { LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' })
-      const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
-      if (!result.ok) throw new Error(`${result.error?.message ?? '飞书命令失败'}${result.error?.code ? ` (${result.error.code})` : ''}`)
-      return result.data
-    }
   }
   async blockCommands(blocked: readonly string[]): Promise<void> {
     if (this.resolved) await writeEnvironment(this.resolved, blocked)

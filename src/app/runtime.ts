@@ -14,7 +14,8 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { lockSync } from 'proper-lockfile'
 import { Engine, key, reasonText, type EngineForSettings, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
-import { allowedSender, settingsPolicy } from '../policy.ts'
+import { allowedSender, settingsPolicy, type Settings as SettingsSnapshot } from '../policy.ts'
+import { FeishuWikiTaskSourceSchema } from '../task-sources/feishu-wiki.ts'
 import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
 import { firstSource, type Deployment, type Machine } from '../deployment.ts'
@@ -41,6 +42,12 @@ import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
 import { Setup } from './setup.ts'
+import { SecretVault } from '../secrets/vault.ts'
+import { GitCredentials } from '../git-credentials/service.ts'
+import { gitProbe } from '../git-credentials/probe.ts'
+import { FeishuCredentials } from '../feishu-credentials/service.ts'
+import { feishuProbe } from '../feishu-credentials/probe.ts'
+import { httpWikiApi, larkWikiApi, type FeishuWikiApi, type FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import { feishuSettings } from '../sources/feishu.ts'
 import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
 import type { SourceAdapter } from '../sources/kind.ts'
@@ -84,6 +91,12 @@ export class Runtime extends Service implements SourceHost {
   readonly engine: Engine
   readonly passes: Passes
   readonly scheduler: ProjectScheduler
+  /** 凭据材料只经过这个加密存储层，Git 与飞书各自一个区域。 */
+  readonly vault: SecretVault
+  readonly gitCredentials: GitCredentials
+  readonly feishuCredentials: FeishuCredentials
+  /** 按飞书凭据 ID 取知识库读取能力；预检与调度共用，凭据材料不经过任何视图。 */
+  private feishuWikiReader?: FeishuWikiReader
   readonly ready: Promise<void>
   private readonly board = new HealthBoard()
   private readonly runtimeHealth = this.board.claim('runtime', { state: 'starting', detail: '' })
@@ -122,7 +135,8 @@ export class Runtime extends Service implements SourceHost {
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
-      const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
+      const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart,
+        feishuWiki: credential => this.wikiOf(credential) })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')
@@ -130,6 +144,29 @@ export class Runtime extends Service implements SourceHost {
       const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
       store.set(KV.runtime.masterId, masterId)
       const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
+      // 凭据记录与项目引用相互独立：项目只保存记录 ID，材料永远不进入设置快照。
+      const vault = this.vault = new SecretVault(machine.stateDir)
+      const projects = () => store.settings().projects
+      this.gitCredentials = new GitCredentials({ credentials: store.gitCredentials, vault, projects, probe: gitProbe(commands, vault) })
+      this.feishuCredentials = new FeishuCredentials({ credentials: store.feishuCredentials, vault,
+        references: () => feishuCredentialReferences(store.settings()), probe: feishuProbe(commands) })
+      // 凭据材料只在读取知识库时短暂进入内存；CLI 身份用凭据自己的可执行文件，应用身份走 HTTP。
+      this.feishuWikiReader = async credential => {
+        const record = store.feishuCredentials.get(credential)
+        if (!record) return undefined
+        if (record.mode === 'cli') {
+          const cli = record.cli.trim() || 'lark'
+          return larkWikiApi(async args => {
+            const output = await commands.run(cli, [...args, '--as', 'bot', '--format', 'json'], machine.stateDir)
+            const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
+            if (!result.ok) throw new Error(`${result.error?.message ?? 'Feishu command failed'}${result.error?.code ? ` (${result.error.code})` : ''}`)
+            return result.data
+          })
+        }
+        const secret = this.feishuCredentials.material(credential)?.appSecret
+        if (!record.appId || !secret) return undefined
+        return httpWikiApi(record.appId, secret, this.lifetime)
+      }
       const board = this.board
       const effects = this.effects = new Effects(store, board)
       const sources = this.sources = new SourceRegistry(() => store.settings(), board, kind => {
@@ -179,7 +216,7 @@ export class Runtime extends Service implements SourceHost {
       this.scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
         engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
         executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
-        effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime,
+        effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime, feishuWiki: credential => this.wikiOf(credential),
         health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
       // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
       effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
@@ -260,6 +297,10 @@ export class Runtime extends Service implements SourceHost {
   pump(): Promise<void> { return this.passes.pump() }
   sendReplies(): Promise<void> { return this.outbox.sent() }
   private closing(): boolean { return this.closingFlag }
+  /** 飞书知识库读取能力：按凭据现取，轮换或删除后下一次读取自然生效。 */
+  private async wikiOf(credential: string): Promise<FeishuWikiApi | undefined> {
+    return this.feishuWikiReader?.(credential)
+  }
   /** 在暂停或等待初始化期间暂缓评估、调度和出站投递；来源仍会记录传入的触发器。 */
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }
   private async initialize(): Promise<void> {
@@ -286,6 +327,7 @@ export class Runtime extends Service implements SourceHost {
     const runtime = this
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
+      gitCredentials: this.gitCredentials, feishuCredentials: this.feishuCredentials,
       queue: () => this.scheduler.snapshot(),
       forgetProject: id => this.scheduler.forget(id),
       get deployment() { return setup.deployment },
@@ -294,6 +336,7 @@ export class Runtime extends Service implements SourceHost {
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
       checkSetup: () => { setup.check() },
       checkSource: (kind, config, field, meta) => setup.checkSource(kind, config, field, sources, meta),
+      checkCodeRepo: (kind, config, field, meta) => setup.checkCodeRepo(kind, config, field, store.settings(), meta),
       checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, store.settings(), meta),
       requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
       reset: () => runtime.reset() }
@@ -348,4 +391,13 @@ export class Runtime extends Service implements SourceHost {
       }
     }
   }
+}
+
+/** 收集飞书知识库任务来源引用的凭据 ID；删除凭据时按它统计引用。 */
+export function feishuCredentialReferences(settings: SettingsSnapshot): string[] {
+  return Object.values(settings.taskSources).flatMap(record => {
+    if (record.kind !== 'feishu-wiki') return []
+    const parsed = FeishuWikiTaskSourceSchema.safeParse(record.config)
+    return parsed.success && parsed.data.feishuCredential ? [parsed.data.feishuCredential] : []
+  })
 }

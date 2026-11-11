@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { Commands } from '../infra/commands.ts'
 import { LIMITS } from '../limits.ts'
 import type { RawTask } from './tasks.ts'
-import type { LarkCall } from './feishu-doc.ts'
+import type { FeishuWikiApi } from './feishu-api.ts'
 import type { WriteTarget } from './writeback.ts'
 import type { SourceCheck } from '../setup.ts'
 import type { FieldSpec, Localized } from '../sources/kind.ts'
@@ -29,8 +29,8 @@ export const TaskFieldMapSchema = z.object({
 }).strict()
 export type TaskFieldMap = z.infer<typeof TaskFieldMapSchema>
 
-/** 驱动给出的默认列名；用户可以按自己的表头覆盖。 */
-export const DEFAULT_TASK_FIELDS: TaskFieldMap = { id: 'id', title: 'title', description: 'description', status: 'status', priority: 'priority' }
+/** 标准任务列（016 与 013 §3.3 共用）：界面语言不影响表头。 */
+export const DEFAULT_TASK_FIELDS: TaskFieldMap = { id: 'task_id', title: 'title', description: 'description', status: 'status', priority: 'priority' }
 
 /** 面板扁平列字段：任务来源记录按字段键直接保存，避免嵌套配置难以逐字段预检。 */
 export interface TaskColumnConfig {
@@ -52,9 +52,9 @@ export const taskColumnShape = {
   priorityColumn: z.string().trim().max(100).default(DEFAULT_TASK_FIELDS.priority),
 }
 
-/** 代码仓库工作副本相关问题：驱动据此给出「未选择 / 记录不存在 / 未就绪 / 同步失败」的不同提示。 */
+/** 代码仓库工作副本相关问题：驱动据此给出「未选择 / 记录不存在 / 未就绪 / 空仓库 / 同步失败」的不同提示。 */
 export class TaskRepoError extends Error {
-  constructor(readonly code: 'repoUnset' | 'repoMissing' | 'repoNotReady' | 'syncFailed', message: string) {
+  constructor(readonly code: 'repoUnset' | 'repoMissing' | 'repoNotReady' | 'repoEmpty' | 'syncFailed', message: string) {
     super(message)
     this.name = 'TaskRepoError'
   }
@@ -62,8 +62,8 @@ export class TaskRepoError extends Error {
 
 /** 预检依赖：真实读取外部来源所需的能力，由宿主注入；预检本身不写设置、不重启。 */
 export interface TaskSourceVerifyDeps {
-  /** 按消息来源记录 ID 取得飞书 OpenAPI 调用；记录不存在或类型不符时返回 undefined。 */
-  lark(source: string): Promise<LarkCall | undefined>
+  /** 按飞书凭据 ID 取得知识库读取能力；凭据不存在或材料不可用时返回 undefined。 */
+  feishu?(credential: string): Promise<FeishuWikiApi | undefined>
   /** 同步代码仓库并返回本地工作副本目录。 */
   syncRepo(repo: string): Promise<string>
 }
@@ -75,6 +75,8 @@ export interface TaskSourceRunContext {
   commands: Commands
   /** 同步并返回代码仓库的本地工作副本；Excel 驱动配置了 `repo` 时必须提供。 */
   syncRepo?(repo: string): Promise<string>
+  /** 按飞书凭据 ID 取得知识库读取能力；飞书知识库驱动使用。 */
+  feishu?(credential: string): Promise<FeishuWikiApi | undefined>
 }
 
 /** 回写上下文：回写前同样需要代码仓库工作副本，但不需要读取任务。 */
@@ -84,6 +86,9 @@ export interface TaskSourceWriteContext {
   /** 绑定到代码仓库记录的命令入口；用于在回写后把工作副本恢复干净。 */
   commands?: Commands
 }
+
+/** 推送上下文：与回写共用工作副本与命令入口。 */
+export type TaskSourcePushContext = TaskSourceWriteContext
 
 /** 预检结果构造：通过。 */
 export const checkPassed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck =>
@@ -97,7 +102,7 @@ export const errorText = (error: unknown): string => error instanceof Error ? er
 export function repoCheck(field: string, error: unknown): SourceCheck {
   if (error instanceof TaskRepoError) {
     const code = { repoUnset: 'taskRepoUnset', repoMissing: 'taskRepoMissing', repoNotReady: 'taskRepoNotReady',
-      syncFailed: 'taskRepoSyncFailed' }[error.code]
+      repoEmpty: 'taskRepoEmpty', syncFailed: 'taskRepoSyncFailed' }[error.code]
     return checkFailed(field, code, { output: error.message })
   }
   return checkFailed(field, 'taskRepoSyncFailed', { output: errorText(error) })
@@ -120,10 +125,17 @@ export interface TaskSourceDriver<C extends Record<string, unknown> = Record<str
   fieldMap: { defaults: TaskFieldMap; required: readonly (keyof TaskFieldMap)[] }
   /** 驱动读取的代码仓库记录 ID；项目必须绑定同一个仓库。只读、不产生任务的来源可省略。 */
   repo?(config: C): string
+  /** 驱动独占的外部范围（如飞书 `spaceId`）；同一范围只能绑定一个任务来源。 */
+  knowledgeBase?(config: C): string
   /** 真实访问来源做字段级预检；`field` 是驱动字段键，不处理 `name` / `id` / `kind`。 */
   verify(config: C, field: string, deps: TaskSourceVerifyDeps): Promise<SourceCheck[]>
   /** 列出任务；只读取与规范化。 */
   list(config: C, ctx: TaskSourceRunContext): Promise<RawTask[]>
-  /** 可选能力：把状态写回外部清单。 */
+  /** 可选能力：把状态写回外部清单；默认只提交本地工作副本，不推送远端。 */
   writeback?(config: C, target: WriteTarget, status: string, ctx: TaskSourceWriteContext): Promise<void>
+  /**
+   * 后续能力：把回写产生的本地提交推送到远端。
+   * 当前没有驱动实现，调度器不会调用；接口与健康度分类先留位，接入时只需在驱动内实现并在副作用中登记。
+   */
+  push?(config: C, ctx: TaskSourcePushContext): Promise<void>
 }

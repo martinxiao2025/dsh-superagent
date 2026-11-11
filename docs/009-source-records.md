@@ -55,6 +55,9 @@
 | `config.instanceUrl` | 实例地址；留空表示官方站点。GitHub Enterprise 与自建 GitLab 必填 |
 | `config.cli` | 凭据引用：已登录的 CLI 包装或命令名；登录态由 CLI 自身保存，不写入设置 |
 | `config.repository` / `project` | 仓库或项目标识 |
+| `config.auth` | 代码仓库认证方式：`https`（默认，使用该记录的 CLI 凭据）或 `ssh`（使用本机 SSH key，不运行 `gh`/`glab`） |
+| `config.remote` | 可选自定义远端地址；`https://`、`ssh://` 或 `user@host:path`，不得内嵌账号密码。留空时按 `auth` 推导 |
+| `config.sshKey` | `auth = ssh` 时的私钥路径（绝对路径或 `~/...`）；留空使用本机默认 key 与 SSH 配置 |
 | `config` 其余字段 | 轮询与过滤参数，由各适配器 schema 定义并在面板渲染 |
 
 新增来源不要求任何默认记录；首次使用由面板创建，必须填写项目名称。所有记录地位相同，没有「主记录」。

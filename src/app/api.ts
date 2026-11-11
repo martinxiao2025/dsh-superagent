@@ -12,6 +12,9 @@ import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } f
 import type { TicketListView } from './views/tickets.ts'
 import type { QueueSnapshot } from '../queue/model.ts'
 import type { ResetReport } from './reset.ts'
+import type { CredentialCheck } from '../secrets/check.ts'
+import type { GitCredentialInput, GitCredentialView } from '../git-credentials/kind.ts'
+import type { FeishuCredentialInput, FeishuCredentialView } from '../feishu-credentials/kind.ts'
 
 export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
@@ -34,6 +37,10 @@ export interface Api {
   'DELETE sources/:id': { response: { removed: true; restarting: true } }
   'POST code-repos': { body: { kind: 'github' | 'gitlab'; id?: string; name: string; config?: unknown };
     response: { id: string; revision: number; restarting: false } }
+  'POST code-repos/verify': {
+    body: { kind: 'github' | 'gitlab'; id?: string; name?: string; config?: unknown; field?: string }
+    response: { checks: SourceCheck[] }
+  }
   'DELETE code-repos/:id': { response: { removed: true; restarting: false } }
   'POST task-sources': { body: { kind: string; id?: string; name: string; config?: unknown };
     response: { id: string; revision: number; restarting: false } }
@@ -41,11 +48,33 @@ export interface Api {
     body: { kind: string; id?: string; name?: string; config?: unknown; field?: string }
     response: { checks: SourceCheck[] }
   }
+  /** 016 标准任务清单模板；内容是 base64 编码的 xlsx。 */
+  'GET task-format/template': { response: { filename: string; content: string } }
   'DELETE task-sources/:id': { response: { removed: true; restarting: false } }
   'POST projects': { body: { id?: string; name: string; codeRepo: string; taskSource: string };
     response: { id: string; revision: number; restarting: false } }
   'DELETE projects/:id': { response: { removed: true; restarting: false } }
   'GET projects/:id/tasks': { response: ProjectTasksView }
+  'GET git-credentials': { response: { credentials: GitCredentialView[] } }
+  'GET git-credentials/:id': { response: GitCredentialView }
+  'POST git-credentials': { body: { id?: string; value: GitCredentialInput }; response: { id: string; revision: number } }
+  'PUT git-credentials/:id': { body: { value: GitCredentialInput; revision: number }; response: { revision: number } }
+  'POST git-credentials/:id/rotate': { body: Partial<GitCredentialInput>; response: { revision: number } }
+  'POST git-credentials/verify': {
+    body: { id?: string; value?: Partial<GitCredentialInput>; repository?: string }
+    response: { checks: CredentialCheck[] }
+  }
+  'DELETE git-credentials/:id': { response: { removed: true } }
+  'GET feishu-credentials': { response: { credentials: FeishuCredentialView[] } }
+  'GET feishu-credentials/:id': { response: FeishuCredentialView }
+  'POST feishu-credentials': { body: { id?: string; value: FeishuCredentialInput }; response: { id: string; revision: number } }
+  'PUT feishu-credentials/:id': { body: { value: FeishuCredentialInput; revision: number }; response: { revision: number } }
+  'POST feishu-credentials/:id/rotate': { body: Partial<FeishuCredentialInput>; response: { revision: number } }
+  'POST feishu-credentials/verify': {
+    body: { id?: string; value?: Partial<FeishuCredentialInput>; spaceId?: string }
+    response: { checks: CredentialCheck[] }
+  }
+  'DELETE feishu-credentials/:id': { response: { removed: true } }
   'GET health': { response: HealthView }
   'GET queue': { response: QueueSnapshot }
   'GET settings': { response: SettingsView }

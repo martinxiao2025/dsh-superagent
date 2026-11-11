@@ -8,7 +8,7 @@ import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, Settings
 import { CodeRepoKindSchema, CodeRepoRecordSchema } from '../code-repos/kind.ts'
 import { ProjectSchema } from '../projects/kind.ts'
 import { TaskSourceRecordSchema } from '../task-sources/kind.ts'
-import { taskSourceRepo, taskSources } from '../task-sources/index.ts'
+import { taskSourceKnowledgeBase, taskSourceRepo, taskSources } from '../task-sources/index.ts'
 import type { SourceHost } from '../sources/host.ts'
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -204,7 +204,7 @@ export class Settings {
     }
     rules.guard?.(current, candidate, origin)
     if (kind === 'project') this.checkRepoBinding(candidate, id)
-    else if (kind === 'taskSource') this.checkRepoBinding(candidate, undefined, id)
+    else if (kind === 'taskSource') { this.checkRepoBinding(candidate, undefined, id); this.checkKnowledgeBase(candidate, id) }
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // 异步检查后重新读取当前设置，以防无关块被并发保存。
@@ -341,6 +341,7 @@ export class Settings {
     const recordId = this.recordId(id, kind, current.taskSources, 'taskSourceExists', 'source')
     const record = TaskSourceRecordSchema.parse({ kind, name, enabled: true, config: driver.schema.parse(config ?? {}) })
     const settings = SettingsSchema.parse({ ...current, taskSources: { ...current.taskSources, [recordId]: record } })
+    this.checkKnowledgeBase(settings, recordId)
     return this.persistRecord(`taskSource:${recordId}`, settings, current, origin, recordId)
   }
   /** 创建一个项目；引用的代码仓库与任务来源必须已存在，且任务来源读取的仓库必须与项目一致。 */
@@ -366,6 +367,20 @@ export class Settings {
       if (!repo || repo === project.codeRepo) continue
       throw new UserError(projectId ? 'projectRepoMismatch' : 'taskSourceRepoMismatch',
         { project: id, source: project.taskSource, repo: project.codeRepo, taskRepo: repo })
+    }
+  }
+  /**
+   * 同一知识空间只能归属一个任务来源：两个来源读取同一空间会让任务被两个项目各读一遍，回写也会互相覆盖。
+   * 只约束声明了 `knowledgeBase` 的驱动（当前为飞书知识库），空范围（未填写）不参与冲突判断。
+   * @throws 冲突时抛出 `knowledgeBaseInUse`。
+   */
+  private checkKnowledgeBase(settings: SettingsValue, sourceId: string): void {
+    const record = settings.taskSources[sourceId]
+    const space = record ? taskSourceKnowledgeBase(record) : ''
+    if (!space) return
+    for (const [id, other] of Object.entries(settings.taskSources)) {
+      if (id === sourceId) continue
+      if (taskSourceKnowledgeBase(other) === space) throw new UserError('knowledgeBaseInUse', { source: id, space })
     }
   }
   /** 删除一条代码仓库记录；仍被项目引用时拒绝。 */

@@ -76,11 +76,26 @@ const instanceUrl = () => z.string().trim().default('').refine(value => {
     return (url.protocol === 'http:' || url.protocol === 'https:') && url.pathname === '/' && !url.search && !url.hash
   } catch { return false }
 }, 'the site root, such as https://git.example.com')
-/** GitHub 来源记录的配置：仓库、CLI 与实例地址。 */
+/**
+ * 代码仓库的远端认证方式：`https` 使用智能体 CLI 的凭据助手，`ssh` 使用本机 SSH key，
+ * 后者不依赖 `gh` / `glab`，适合运维者已经配置好 SSH 的私有仓库。
+ */
+export const RepoAuthSchema = z.enum(['https', 'ssh'])
+export type RepoAuth = z.infer<typeof RepoAuthSchema>
+/** 自定义远端地址：允许 `https://`、`ssh://` 或 `user@host:path`，但拒绝内嵌凭据。 */
+const remoteAddress = () => z.string().trim().max(2000).default('').refine(value => !value || (
+  !/[^/@\s]+:[^/@\s]+@/.test(value) && /^(?:https?:\/\/|ssh:\/\/|[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:)/.test(value)
+), 'an https://, ssh:// or user@host:path address without embedded credentials')
+/** SSH 私钥路径；留空时使用 ssh-agent、`~/.ssh/config` 或默认密钥。 */
+const sshKeyPath = () => z.string().trim().max(1000).default('')
+/** GitHub 来源记录的配置：仓库、CLI、实例地址与远端认证方式。 */
 export const GithubSourceSchema = z.object({
   instanceUrl: instanceUrl(),
   repository: z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default(''),
   cli: z.string().trim().default(''),
+  auth: RepoAuthSchema.default('https'),
+  remote: remoteAddress(),
+  sshKey: sshKeyPath(),
 })
 /** 飞书来源记录的配置：机器人 CLI 与实例地址。 */
 export const FeishuSourceSchema = z.object({ instanceUrl: instanceUrl(), cli: z.string().trim().default('') })
@@ -89,13 +104,18 @@ export const GitlabSourceSchema = z.object({
   instanceUrl: instanceUrl(),
   project: z.string().trim().regex(/^([A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+)?$/, 'group/project').default(''),
   cli: z.string().trim().default(''),
+  auth: RepoAuthSchema.default('https'),
+  remote: remoteAddress(),
+  sshKey: sshKeyPath(),
 })
 /**
  * 影响部署解析、且修改后需要重启的来源配置键（按适配器类型）。
  * 记录 ID、类型和启用状态由 `setupChanged` 单独比较，因此新增、删除或启停记录也会触发重启。
  */
 export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  github: ['instanceUrl', 'repository', 'cli'], feishu: ['instanceUrl', 'cli'], gitlab: ['instanceUrl', 'project', 'cli'],
+  github: ['instanceUrl', 'repository', 'cli', 'auth', 'remote', 'sshKey'],
+  feishu: ['instanceUrl', 'cli'],
+  gitlab: ['instanceUrl', 'project', 'cli', 'auth', 'remote', 'sshKey'],
 }
 
 /** 已解析的 GitHub 来源记录：一个记录一个智能体账号和一个仓库。 */
@@ -108,6 +128,12 @@ export interface ResolvedGithubSource {
   readonly repository: string
   readonly login: string
   readonly noreply: string
+  /** 远端认证方式；`ssh` 时不使用 CLI。 */
+  readonly auth: RepoAuth
+  /** 覆盖默认远端地址；空表示按认证方式推导。 */
+  readonly remote: string
+  /** SSH 私钥路径；空表示使用本机默认 SSH 配置。 */
+  readonly sshKey: string
 }
 /** 已解析的 GitLab 来源记录。 */
 export interface ResolvedGitlabSource {
@@ -120,6 +146,10 @@ export interface ResolvedGitlabSource {
   readonly login: string
   /** GitLab 的数字用户 ID。 */
   readonly userId: number
+  /** 远端认证方式；`ssh` 时不使用 CLI。 */
+  readonly auth: RepoAuth
+  readonly remote: string
+  readonly sshKey: string
 }
 /** 已解析的飞书来源记录：一个记录一个机器人。 */
 export interface ResolvedFeishuSource {
@@ -246,8 +276,16 @@ export async function checkGithubRepository(machine: Machine, id: string, github
 /** 完整解析一条 GitHub 记录；字段级预检复用同一组探测，避免两套口径。 */
 export async function resolveGithubSource(machine: Machine, id: string, github: unknown, probe: Probe,
   path = process.env.PATH ?? ''): Promise<ResolvedGithubSource> {
-  const { account, repository } = await checkGithubRepository(machine, id, github, probe, path)
-  return { id, kind: 'github', instanceUrl: account.instanceUrl, cli: account.cli, repository, login: account.login, noreply: account.noreply }
+  const config = GithubSourceSchema.parse(github ?? {})
+  // SSH 模式只依赖本机 SSH key，不运行 gh；仓库是否存在与可用性由字段预检和同步时探测。
+  if (config.auth === 'ssh') {
+    if (!config.repository && !config.remote) throw new SetupError('repositoryUnset', {}, id)
+    return { id, kind: 'github', instanceUrl: config.instanceUrl, cli: config.cli, repository: config.repository,
+      login: '', noreply: '', auth: 'ssh', remote: config.remote, sshKey: config.sshKey }
+  }
+  const { account, repository } = await checkGithubRepository(machine, id, config, probe, path)
+  return { id, kind: 'github', instanceUrl: account.instanceUrl, cli: account.cli, repository, login: account.login, noreply: account.noreply,
+    auth: 'https', remote: config.remote, sshKey: config.sshKey }
 }
 
 const GitlabUser = z.object({ id: z.number().int().positive(), username: z.string().regex(/^[A-Za-z0-9_.-]+$/) })
@@ -304,8 +342,16 @@ export async function checkGitlabProject(machine: Machine, id: string, config: u
  */
 export async function resolveGitlabSource(machine: Machine, id: string, config: unknown, probe: Probe,
   path = process.env.PATH ?? ''): Promise<ResolvedGitlabSource> {
-  const { account, project, projectId } = await checkGitlabProject(machine, id, config, probe, path)
-  return { id, kind: 'gitlab', instanceUrl: account.instanceUrl, cli: account.cli, project, projectId, login: account.login, userId: account.userId }
+  const parsed = GitlabSourceSchema.parse(config ?? {})
+  // 与 GitHub 一致：SSH 模式不运行 glab，远端访问权限留给预检与同步探测。
+  if (parsed.auth === 'ssh') {
+    if (!parsed.project && !parsed.remote) throw new SetupError('gitlabProjectUnset', {}, id)
+    return { id, kind: 'gitlab', instanceUrl: parsed.instanceUrl, cli: parsed.cli, project: parsed.project, projectId: 0,
+      login: '', userId: 0, auth: 'ssh', remote: parsed.remote, sshKey: parsed.sshKey }
+  }
+  const { account, project, projectId } = await checkGitlabProject(machine, id, parsed, probe, path)
+  return { id, kind: 'gitlab', instanceUrl: account.instanceUrl, cli: account.cli, project, projectId, login: account.login, userId: account.userId,
+    auth: 'https', remote: parsed.remote, sshKey: parsed.sshKey }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })

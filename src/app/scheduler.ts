@@ -10,6 +10,7 @@ import type { Commands } from '../infra/commands.ts'
 import { syncRepoWorkCopy } from '../code-repos/work.ts'
 import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
+import type { FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import type { Store } from './store.ts'
 import type { Effects } from './effects.ts'
 import type { Health } from '../sources/host.ts'
@@ -39,6 +40,8 @@ export interface SchedulerHost {
   readonly registry?: TaskSourceRegistry
   /** 同步代码仓库并返回工作副本目录；默认走 `syncRepoWorkCopy`。 */
   readonly syncRepo?: (repo: string) => Promise<string>
+  /** 按飞书凭据 ID 取知识库读取能力；飞书知识库任务来源使用。 */
+  readonly feishuWiki?: FeishuWikiReader
   /** 队列变化后的通知，供上层刷新。 */
   readonly onChange?: () => void
   /** 调度健康条目；轮询、建单与工作区回收的结果写在这里，面板据 `category` 区分调度故障。 */
@@ -120,7 +123,8 @@ export class ProjectScheduler {
     if (bound && bound !== project.codeRepo) return this.fail(projectId, `The task source reads ${bound}, but the project uses ${project.codeRepo}`)
     let tasks: RawTask[]
     try {
-      tasks = await driver.list(parsed.data, { signal: this.host.lifetime, commands: this.boundCommands(parsed.data, project.codeRepo), syncRepo: this.syncRepo })
+      tasks = await driver.list(parsed.data, { signal: this.host.lifetime, commands: this.boundCommands(parsed.data, project.codeRepo),
+        syncRepo: this.syncRepo, feishu: this.host.feishuWiki })
     } catch (error) {
       return this.fail(projectId, String(error instanceof Error ? error.message : error))
     }
@@ -450,6 +454,7 @@ export class ProjectScheduler {
 
   private async defaultSync(repo: string): Promise<string> {
     const result = await syncRepoWorkCopy({ commands: this.host.commands.scope(repo), stateDir: this.host.stateDir, repo, signal: this.host.lifetime })
+    if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repo}`)
     return result.directory
   }
 

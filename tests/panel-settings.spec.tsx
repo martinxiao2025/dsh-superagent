@@ -135,12 +135,68 @@ it('builds the TaskSource kind dropdown from the driver catalog and reports a mi
   expect(document.querySelector('.dt-error.dt-check')?.textContent).toBe(zh['check.sourceNameRequired'])
 })
 
+it('renders the code repository auth fields and verifies them with the draft value', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.codeRepos'], '.dt-settings-link'))
+  // 记录默认折叠；编辑后按类型描述渲染字段，认证方式用分段按钮呈现。
+  await click(find(zh.edit, 'button'))
+  expect(all('.dt-field-segmented button').slice(0, 2).map(button => button.textContent)).toEqual(['HTTPS + 智能体凭据', 'SSH + 本机密钥'])
+  await click(document.querySelector(`[aria-label="${zh.verify} · 认证方式"]`) as HTMLElement)
+  await settle()
+  expect(document.querySelector('.dt-check')?.textContent).toBe('使用 HTTPS 与智能体 CLI 凭据')
+  // 切到 SSH 后再次预检，说明不再依赖 gh，且私钥留空时使用默认 key。
+  await click(find('SSH + 本机密钥', '.dt-field-segmented button'))
+  await click(document.querySelector(`[aria-label="${zh.verify} · 认证方式"]`) as HTMLElement)
+  await settle()
+  expect(document.querySelector('.dt-check')?.textContent).toBe('使用 SSH 与本机密钥，不需要 gh / glab')
+  expect(server.requests.filter(request => request.path === 'code-repos/verify').map(request => request.method)).toEqual(['POST', 'POST'])
+})
+
+it('creates, verifies and deletes a Git credential on its own settings page', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))
+  await type(field<HTMLInputElement>(zh.credentialName), '部署机器人')
+  await type(document.querySelector<HTMLSelectElement>('.dt-source-add .dt-select')!, 'https')
+  await type(field<HTMLInputElement>(zh.credentialToken), 'ghp_abcdefgh')
+  await click(find(zh.credentialAdd, '.dt-source-add button'))
+  await settle()
+  expect(server.gitCredentials.map(item => item.name)).toEqual(['部署机器人'])
+  expect(document.querySelector('.dt-card .dt-card-title')?.textContent).toBe('部署机器人')
+  expect(document.querySelector('.dt-card .dt-hint')?.textContent).toContain('••••abcd')
+  await click(find(zh.verify, '.dt-card button'))
+  await settle()
+  expect(document.querySelector('.dt-card .dt-check')?.textContent).toBe('材料可读：••••abcd')
+  await click(find(zh.credentialDelete, '.dt-card button'))
+  await click(find(zh.confirm, '.dt-modal button'))
+  await settle()
+  expect(server.gitCredentials).toEqual([])
+  expect(text()).toContain(zh.gitCredentialNone)
+})
+
+it('keeps Feishu credentials on their own page with a CLI identity', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.feishuCredentials'], '.dt-settings-link'))
+  await type(field<HTMLInputElement>(zh.credentialName), '知识库机器人')
+  await type(document.querySelector<HTMLSelectElement>('.dt-source-add .dt-select')!, 'cli')
+  await type(field<HTMLInputElement>(zh.feishuCli), 'lark')
+  await click(find(zh.credentialAdd, '.dt-source-add button'))
+  await settle()
+  expect(server.feishuCredentials.map(item => item.mode)).toEqual(['cli'])
+  await click(find(zh.verify, '.dt-card button'))
+  await settle()
+  expect(document.querySelector('.dt-card .dt-check')?.textContent).toBe('CLI 可执行：lark')
+  expect(server.requests.filter(request => request.path.startsWith('feishu-')).length).toBeGreaterThan(0)
+})
+
 it('lists the settings groups stages first, opens each stage\'s group from its status, and returns to the last group opened',
   async () => {
   await mount()
   await click(tab(zh['tab.settings']))
-  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['来源', '代码仓库', '任务来源', '项目', '评估', '执行', '提示词',
-    '部署'])
+  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['来源', '代码仓库', 'Git 凭据', '任务来源', '飞书凭据', '项目', '评估',
+    '执行', '提示词', '部署'])
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
   for (const [tab, group] of [['来源', '来源'], ['项目', '项目'], ['评估', '评估'], ['执行', '执行']] as const) {
     await click(find(tab, '[role="tab"]'))
