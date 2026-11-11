@@ -1,0 +1,102 @@
+{
+  "startedAt": "2026-11-11T12:15:18.689Z",
+  "marker": "hmr-probe-1794399318689",
+  "libFile": "D:\\dsh-superagent\\lib\\index.js",
+  "patchFile": "C:\\Users\\61054\\.dsh\\profiles\\desktop\\cordis.patch.yml",
+  "phases": [
+    {
+      "phase": "基线",
+      "at": "2026-11-11T12:15:18.725Z",
+      "detail": {
+        "startup": {
+          "port": 51736,
+          "phase": "ready",
+          "pid": 50244,
+          "at": "2026-11-11T12:14:16.539Z"
+        },
+        "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel"
+      }
+    },
+    {
+      "phase": "写入带标记的构建产物",
+      "at": "2026-11-11T12:15:18.731Z",
+      "detail": {
+        "file": "D:\\dsh-superagent\\lib\\index.js",
+        "at": "2026-11-11T12:15:18.731Z"
+      }
+    },
+    {
+      "phase": "仅改文件（20s）",
+      "at": "2026-11-11T12:15:39.000Z",
+      "detail": {
+        "seen": false,
+        "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+        "waitedMs": 20267
+      }
+    },
+    {
+      "phase": "触发 profile 重组",
+      "at": "2026-11-11T12:15:39.001Z",
+      "detail": {
+        "file": "C:\\Users\\61054\\.dsh\\profiles\\desktop\\cordis.patch.yml",
+        "at": "2026-11-11T12:15:39.001Z"
+      }
+    },
+    {
+      "phase": "profile 重组后（60s）",
+      "at": "2026-11-11T12:15:42.047Z",
+      "detail": {
+        "seen": true,
+        "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel [hmr-probe-1794399318689]",
+        "waitedMs": 3045,
+        "reloadAt": "2026-11-11T12:15:41.668Z"
+      }
+    },
+    {
+      "phase": "恢复构建产物",
+      "at": "2026-11-11T12:15:42.049Z",
+      "detail": {
+        "restored": true
+      }
+    },
+    {
+      "phase": "恢复后确认标记消失",
+      "at": "2026-11-11T12:15:42.060Z",
+      "detail": {
+        "markerStillPresent": true,
+        "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel [hmr-probe-1794399318689]"
+      }
+    },
+    {
+      "phase": "结论",
+      "at": "2026-11-11T12:15:42.066Z",
+      "detail": {
+        "autoReload": false,
+        "reloadOnProfilePatch": true
+      }
+    }
+  ],
+  "autoReload": {
+    "seen": false,
+    "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+    "waitedMs": 20267
+  },
+  "patchOriginalBytes": 1047,
+  "afterProfilePatch": {
+    "seen": true,
+    "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel [hmr-probe-1794399318689]",
+    "waitedMs": 3045,
+    "reloadAt": "2026-11-11T12:15:41.668Z"
+  },
+  "final": {
+    "startup": {
+      "port": 51736,
+      "phase": "ready",
+      "pid": 50244,
+      "at": "2026-11-11T12:15:41.668Z"
+    },
+    "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel [hmr-probe-1794399318689]",
+    "settingsStillServed": true
+  },
+  "finishedAt": "2026-11-11T12:15:42.066Z"
+}

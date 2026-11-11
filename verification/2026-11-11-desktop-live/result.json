@@ -1,0 +1,424 @@
+{
+  "startedAt": "2026-11-11T12:14:15.245Z",
+  "stateDir": "C:\\Users\\61054\\.dsh\\state\\superagent",
+  "phases": [
+    {
+      "phase": "插件就绪",
+      "at": "2026-11-11T12:14:15.267Z",
+      "detail": {
+        "port": 51736,
+        "pid": 50244,
+        "at": "2026-11-11T12:13:17.217Z"
+      }
+    },
+    {
+      "phase": "初始健康探针",
+      "at": "2026-11-11T12:14:15.271Z",
+      "detail": {
+        "ok": true,
+        "stage": "ready",
+        "configured": true,
+        "paused": false,
+        "problem": null,
+        "listen": {
+          "host": "127.0.0.1",
+          "port": 51736
+        },
+        "phase": "ready",
+        "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+        "machine": {
+          "stateDir": "C:/Users/61054/.dsh/state/superagent"
+        },
+        "sources": []
+      }
+    },
+    {
+      "phase": "清理旧记录后可用的设置",
+      "at": "2026-11-11T12:14:15.336Z",
+      "detail": {
+        "codeRepos": []
+      }
+    },
+    {
+      "phase": "启动本地 dumb HTTP git 服务",
+      "at": "2026-11-11T12:14:16.144Z",
+      "detail": {
+        "remote": "http://127.0.0.1:57956/live.git"
+      }
+    },
+    {
+      "phase": "创建代码仓库记录",
+      "at": "2026-11-11T12:14:16.156Z",
+      "detail": {
+        "id": "live-ledger",
+        "revision": 10,
+        "restarting": false,
+        "context_delivery": "injected"
+      }
+    },
+    {
+      "phase": "写入仓库配置（触发插件重挂载）",
+      "at": "2026-11-11T12:14:16.263Z",
+      "detail": {
+        "saved": true,
+        "revision": 11,
+        "policy_changed": false,
+        "restarting": true,
+        "context_delivery": "pending",
+        "stopped": 0
+      }
+    },
+    {
+      "phase": "管理接口恢复 ready",
+      "at": "2026-11-11T12:14:17.282Z",
+      "detail": {
+        "port": 51736,
+        "pid": 50244,
+        "at": "2026-11-11T12:14:16.539Z"
+      }
+    },
+    {
+      "phase": "创建 Excel 任务来源",
+      "at": "2026-11-11T12:14:17.307Z",
+      "detail": {
+        "id": "live-backlog",
+        "revision": 7,
+        "restarting": false,
+        "context_delivery": "injected"
+      }
+    },
+    {
+      "phase": "创建项目",
+      "at": "2026-11-11T12:14:17.318Z",
+      "detail": {
+        "id": "live-project",
+        "revision": 9,
+        "restarting": false,
+        "context_delivery": "injected"
+      }
+    },
+    {
+      "phase": "调度轮询产生队列条目",
+      "at": "2026-11-11T12:14:33.403Z",
+      "detail": {
+        "id": "0170287f7755e41d7219c43f5315126d",
+        "project": "live-project",
+        "projectName": "桌面直连验证",
+        "task": "LIVE-1794399255608",
+        "item": 0,
+        "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+        "state": "running",
+        "attempt": 0,
+        "dueAt": 1794399272409,
+        "ticketId": "94420f77f08f35601ee7ad543276e86a",
+        "enqueuedAt": "2026-11-11T12:14:32.403Z",
+        "updatedAt": "2026-11-11T12:14:32.417Z"
+      }
+    },
+    {
+      "phase": "真实执行结束",
+      "at": "2026-11-11T12:14:42.460Z",
+      "detail": {
+        "queueState": "succeeded",
+        "outcome": "completed",
+        "ticketId": "94420f77f08f35601ee7ad543276e86a"
+      }
+    },
+    {
+      "phase": "回写结果",
+      "at": "2026-11-11T12:14:42.460Z",
+      "detail": {
+        "bom": true,
+        "crlf": true,
+        "line": "LIVE-1794399255608,这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。,done,,P1"
+      }
+    },
+    {
+      "phase": "完成",
+      "at": "2026-11-11T12:14:42.461Z",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "phase": "停用项目以停止轮询",
+      "at": "2026-11-11T12:14:42.483Z",
+      "detail": {
+        "revision": 9
+      }
+    }
+  ],
+  "server": {
+    "remote": "http://127.0.0.1:57956/live.git"
+  },
+  "startup": {
+    "port": 51736,
+    "pid": 50244,
+    "at": "2026-11-11T12:13:17.217Z"
+  },
+  "restart": {
+    "port": 51736,
+    "pid": 50244,
+    "at": "2026-11-11T12:14:16.539Z"
+  },
+  "queueAfterPoll": {
+    "at": "2026-11-11T12:14:33.402Z",
+    "maxWorkers": 3,
+    "used": 1,
+    "projects": [
+      {
+        "id": "live-project",
+        "name": "桌面直连验证",
+        "enabled": true,
+        "nextPollAt": "2026-11-11T12:44:31.546Z"
+      }
+    ],
+    "items": [
+      {
+        "id": "0170287f7755e41d7219c43f5315126d",
+        "project": "live-project",
+        "projectName": "桌面直连验证",
+        "task": "LIVE-1794399255608",
+        "item": 0,
+        "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+        "state": "running",
+        "attempt": 0,
+        "dueAt": 1794399272409,
+        "ticketId": "94420f77f08f35601ee7ad543276e86a",
+        "enqueuedAt": "2026-11-11T12:14:32.403Z",
+        "updatedAt": "2026-11-11T12:14:32.417Z"
+      }
+    ]
+  },
+  "queueFinal": {
+    "at": "2026-11-11T12:14:42.460Z",
+    "maxWorkers": 3,
+    "used": 0,
+    "projects": [
+      {
+        "id": "live-project",
+        "name": "桌面直连验证",
+        "enabled": true,
+        "nextPollAt": "2026-11-11T12:44:31.546Z"
+      }
+    ],
+    "items": [
+      {
+        "id": "0170287f7755e41d7219c43f5315126d",
+        "project": "live-project",
+        "projectName": "桌面直连验证",
+        "task": "LIVE-1794399255608",
+        "item": 0,
+        "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+        "state": "succeeded",
+        "attempt": 0,
+        "dueAt": 1794399272409,
+        "ticketId": "94420f77f08f35601ee7ad543276e86a",
+        "enqueuedAt": "2026-11-11T12:14:32.403Z",
+        "updatedAt": "2026-11-11T12:14:39.598Z"
+      }
+    ]
+  },
+  "ticket": {
+    "id": "94420f77f08f35601ee7ad543276e86a",
+    "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+    "state": "ended",
+    "stage": "ended",
+    "actions": {
+      "retry": false,
+      "stop": false
+    },
+    "strength": "explicit",
+    "ended": {
+      "at": "2026-11-11T12:14:39.597Z",
+      "by": "executor",
+      "outcome": "completed"
+    },
+    "assignments": [
+      {
+        "id": "079666754dea5eeeb665c4560fd4d241",
+        "state": "ended",
+        "createdAt": "2026-11-11T12:14:32.413Z",
+        "startedAt": "2026-11-11T12:14:33.160Z",
+        "report": {
+          "state": "ready",
+          "summary": "desktop-live-ok",
+          "at": "2026-11-11T12:14:39.597Z"
+        },
+        "endedAt": "2026-11-11T12:14:39.597Z",
+        "ref": "worker-94420f77f08f35601ee7ad543276e86a"
+      }
+    ],
+    "inputs": [],
+    "undelivered": 0,
+    "sessionId": "worker-94420f77f08f35601ee7ad543276e86a",
+    "directory": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\94420f77f08f35601ee7ad543276e86a",
+    "project": "live-project",
+    "summary": "desktop-live-ok",
+    "createdAt": "2026-11-11T12:14:32.412Z",
+    "updatedAt": "2026-11-11T12:14:39.597Z",
+    "threads": [
+      {
+        "key": "live-ledger:schedule/live-project",
+        "source": "live-ledger",
+        "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修",
+        "stage": "dormant",
+        "latest": {
+          "actor": {
+            "source": "live-ledger",
+            "id": "live-project",
+            "name": {
+              "zh": "live-project",
+              "en": "live-project"
+            }
+          },
+          "human": false,
+          "at": "2026-11-11T12:14:32.412Z",
+          "preview": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。"
+        },
+        "lastAt": "2026-11-11T12:14:32.412Z",
+        "createdAt": "2026-11-11T12:07:58.211Z",
+        "subscriptions": 2,
+        "tickets": [
+          {
+            "id": "5b239abc83831bd8e631339ebccb3eaa",
+            "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+            "state": "ended"
+          },
+          {
+            "id": "94420f77f08f35601ee7ad543276e86a",
+            "title": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+            "state": "ended"
+          }
+        ],
+        "pending": 0,
+        "facts": {}
+      }
+    ],
+    "mandate": {
+      "strength": "explicit",
+      "policyVersion": "9fbbf9a0cf77f5da1785bc7d03d13b0b",
+      "scope": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+      "actor": {
+        "source": "live-ledger",
+        "id": "live-project",
+        "name": {
+          "zh": "live-project",
+          "en": "live-project"
+        }
+      },
+      "basis": {
+        "via": "scheduled",
+        "source": "live-ledger",
+        "scope": {
+          "project": "live-project",
+          "task": "LIVE-1794399255608",
+          "item": "0"
+        },
+        "project": "live-project",
+        "task": "LIVE-1794399255608"
+      }
+    },
+    "basis": {
+      "facts": [
+        {
+          "name": "scheduled",
+          "value": "LIVE-1794399255608"
+        }
+      ],
+      "legacy": false
+    },
+    "paused": false,
+    "channels": [],
+    "decision": {
+      "id": "78cd3727a9264ac1c24e63af22091c55",
+      "kind": "accept",
+      "outcome": "accept",
+      "reason": [
+        {
+          "code": "said",
+          "values": {
+            "text": "Scheduled from 桌面直连验证"
+          }
+        }
+      ],
+      "at": "2026-11-11T12:14:32.412Z",
+      "strength": "explicit",
+      "ticketId": "94420f77f08f35601ee7ad543276e86a",
+      "triggerIds": [
+        "740b0b95770bfd03e85bc722159ef9d2"
+      ],
+      "thread": "live-ledger:schedule/live-project",
+      "rules": [],
+      "threadTitle": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修",
+      "preview": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。",
+      "ticketTitle": "这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。"
+    },
+    "environment": [
+      {
+        "key": "DSH_SUPERAGENT_DIR",
+        "value": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\94420f77f08f35601ee7ad543276e86a",
+        "description": {
+          "zh": "这个工单的执行目录（项目目录下按工单 id 命名的子目录）；执行器 Session 在其中工作",
+          "en": "This ticket's directory, a subdirectory named after the ticket id inside its project; the executor Session works in it"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_NAME",
+        "value": "task-live-1794399255608-94420f77f08f",
+        "description": {
+          "zh": "工单的短名，用于分支与工单标识；执行目录按项目和工单 id 命名，见 DSH_SUPERAGENT_DIR",
+          "en": "The ticket's short name, used for its branch; the directory is named after the project and the ticket id, see DSH_SUPERAGENT_DIR"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_TICKET",
+        "value": "94420f77f08f35601ee7ad543276e86a",
+        "description": {
+          "zh": "工单 id",
+          "en": "The ticket id"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_SOURCE",
+        "value": "live-ledger",
+        "description": {
+          "zh": "这个工单的来源记录 id；执行环境只按该记录注入变量",
+          "en": "This ticket's Source record id; the execution environment only uses that record"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_BLOCKED_COMMANDS",
+        "value": "",
+        "description": {
+          "zh": "这个执行环境禁止调用的命令，以空格分隔；不要运行它们",
+          "en": "Commands blocked in this execution environment, separated by spaces; never run them"
+        },
+        "owner": "executor"
+      }
+    ]
+  },
+  "writeback": {
+    "file": "C:\\Users\\61054\\.dsh\\state\\superagent\\repos\\live-ledger\\tasks\\backlog.csv",
+    "bom": true,
+    "crlf": true,
+    "text": "﻿task_id,title,status,description,priority\r\nLIVE-1794399255608,这是桌面版直连验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=desktop-live-ok，不要修改任何文件。,done,,P1\r\n"
+  },
+  "workspaces": [
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\5b239abc83831bd8e631339ebccb3eaa",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\94420f77f08f35601ee7ad543276e86a",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\5b239abc83831bd8e631339ebccb3eaa\\.git",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\5b239abc83831bd8e631339ebccb3eaa\\tasks",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\94420f77f08f35601ee7ad543276e86a\\.git",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\94420f77f08f35601ee7ad543276e86a\\tasks",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\5b239abc83831bd8e631339ebccb3eaa\\tasks\\backlog.csv",
+    "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\桌面直连验证\\94420f77f08f35601ee7ad543276e86a\\tasks\\backlog.csv"
+  ],
+  "finishedAt": "2026-11-11T12:14:42.461Z",
+  "ok": true
+}

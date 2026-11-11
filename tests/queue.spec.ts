@@ -63,7 +63,8 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     atomic: <T>(work: () => T): T => work(),
   } as unknown as Store
   const driver = memory()
-  const scheduler = new ProjectScheduler({ store, settings: () => settings, registry: new TaskSourceRegistry([driver]),
+  /** 调度器宿主；热加载测试用同一份宿主（同一份状态）重建调度器实例。 */
+  const host = { store, settings: () => settings, registry: new TaskSourceRegistry([driver]),
     engine: {
       schedule: input => {
         const existing = byTrigger.get(input.trigger.id)
@@ -88,14 +89,16 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     },
     executor: { slotsInUse: () => 0, projectsInUse: () => [] },
     commands: { scope: () => ({}) } as never, stateDir: 'C:/tmp', lifetime: new AbortController().signal,
-    syncRepo: async () => 'C:/tmp/repo', now: () => clock })
+    syncRepo: async () => 'C:/tmp/repo', now: () => clock }
+  const scheduler = new ProjectScheduler(host)
   /** 执行排队的回写副作用；真实实现由 Effects 在工作线程外调用同一个处理器。 */
   const flush = async () => {
     for (const effect of effects.splice(0)) {
       if (effect.kind === 'writeback') await scheduler.writeBackNow(effect.payload as never)
     }
   }
-  return { scheduler, driver, entries, tickets, effects, flush, advance: (ms: number) => { clock += ms }, settings }
+  // `reload` 模拟插件热加载：模块重新求值后，同一状态库上出现新的调度器实例。
+  return { scheduler, reload: () => new ProjectScheduler(host), driver, entries, tickets, effects, flush, advance: (ms: number) => { clock += ms }, settings }
 }
 
 /** 项目记录：两个项目共用同一套默认策略，只有名称不同。 */
@@ -117,6 +120,33 @@ it('按全局入队顺序出队，并跳过已有任务在跑的项目', async (
   const states = [...h.entries.values()].sort((left, right) => left.seq - right.seq).map(entry => [entry.task, entry.state])
   // a1 先出队；a2 因 a 项目已有任务被跳过，b1 越过它出队。
   expect(states).toEqual([['a1', 'running'], ['a2', 'queued'], ['b1', 'running']])
+})
+
+it('热加载后新调度器接管同一状态：排队项保留、不重复建单，运行中的任务按终态结算', async () => {
+  const h = setup({ a: project('a') }, 1)
+  h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const [running, queued] = [...h.entries.values()].sort((left, right) => left.seq - right.seq)
+  expect([running!.state, queued!.state]).toEqual(['running', 'queued'])
+  const ticketCount = h.tickets.size
+
+  // 模拟插件热加载：模块重新求值后，同一状态库上出现新的调度器实例。
+  const reloaded = h.reload()
+  await reloaded.scan()
+
+  // 状态来自状态库而不是内存：排队项与运行中的条目都还在，也没有被重复入队或重复建单。
+  expect(h.entries.size).toBe(2)
+  expect(h.entries.get(queued!.id)).toMatchObject({ state: 'queued', present: true })
+  expect(h.entries.get(running!.id)).toMatchObject({ state: 'running' })
+  expect(h.tickets.size).toBe(ticketCount)
+
+  // 运行中的工单结束后，新实例按终态结算，并把排队项继续派出去。
+  h.tickets.get(running!.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  reloaded.observe(running!.ticketId!)
+  expect(h.entries.get(running!.id)).toMatchObject({ state: 'succeeded' })
+  reloaded.pump()
+  expect(h.entries.get(queued!.id)).toMatchObject({ state: 'running' })
 })
 
 it('任务从来源消失时取消队列条目，重新出现时只再入队一次', async () => {
