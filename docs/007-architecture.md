@@ -306,6 +306,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/task-sources/kind.ts` | 任务来源记录、字段映射与 `TaskSourceDriver` 契约：类型、名称、schema、字段、预检、读取、可选回写与仓库绑定 |
 | `src/task-sources/index.ts` | 驱动注册表与字段级预检：类型目录、名称/ID 预检、`all` 依次验证；驱动回写默认只提交本地工作副本，`push` 接口与健康度先留位 |
 | `src/task-sources/excel.ts` | Excel 驱动：先同步代码仓库工作副本，再读取 CSV / TSV / XLSX，支持回写 |
+| `src/task-sources/feishu-im.ts` | 飞书消息驱动：按群 ID 读取最近消息，一条消息一个任务，去掉 @ 占位、跳过空文本，按消息编号去重；只读 |
+| `src/task-sources/feishu-im-api.ts` | 飞书群消息读取接口：文本、富文本与非文本占位抽取，按时间倒序分页；应用身份走 HTTP，CLI 身份走 `lark api` |
 | `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：按 `spaceId` 唯一归属与根节点集合读取，目录递归、多文档与多维表格都转成任务；首批只读 |
 | `src/task-sources/feishu-api.ts` | 飞书知识库读取接口：节点、目录、docx 正文、多维表格与记录；应用身份走 HTTP，CLI 身份走 `lark api` |
 | `src/task-sources/feishu-wiki-read.ts` | 知识库遍历：根节点顺序 → 目录顺序 → 表出现顺序，稳定键、跳过类型、单文档隔离与严格编号冲突 |
@@ -471,7 +473,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
-| `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、字段级预检文案与注册表扩展 |
+| `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |
 | `tests/feishu-wiki.spec.ts` | 飞书知识库遍历：根节点顺序与目录递归、多文档与多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突 |
 | `tests/excel-format.spec.ts` | 016 标准格式：表头与枚举校验、版本门禁、完成/失败状态映射与模板往返读取 |
 | `tests/vault.spec.ts` | 凭据加密存储：往返、掩码与指纹、缺失密钥、不可解密与临时材料 |

@@ -11,6 +11,8 @@ import { gitEnv } from './fixtures/git.ts'
 import { readTaskTable } from '../src/task-sources/table.ts'
 import { TASK_SOURCE_DRIVERS, TaskSourceRegistry, taskSources } from '../src/task-sources/index.ts'
 import { excelTaskSource } from '../src/task-sources/excel.ts'
+import { feishuImTaskSource } from '../src/task-sources/feishu-im.ts'
+import { messageTextOf, type FeishuImApi } from '../src/task-sources/feishu-im-api.ts'
 import { feishuWikiTaskSource } from '../src/task-sources/feishu-wiki.ts'
 import { TaskRepoError, type TaskSourceDriver, type TaskSourceVerifyDeps } from '../src/task-sources/kind.ts'
 
@@ -133,6 +135,53 @@ describe('feishu wiki task source', () => {
       node: async () => { throw new Error('no') }, children: async () => { throw new Error('permission denied') },
       document: async () => '', tables: async () => [], records: async () => [] }) })
     expect(unreadable[0]).toMatchObject({ field: 'spaceId', ok: false, code: 'feishuWikiForbidden' })
+  })
+})
+
+describe('feishu im task source', () => {
+  it('turns recent chat messages into tasks, stripping mentions and skipping empty text', async () => {
+    const calls: { chatId: string; limit: number }[] = []
+    const api: FeishuImApi = { async messages(chatId, options) {
+      calls.push({ chatId, limit: options.limit })
+      return [
+        { messageId: 'om_1', text: '@_user_1 修复登录\n第二行说明', senderId: 'ou_1', senderType: 'user', createdAt: '1' },
+        { messageId: 'om_2', text: '   ', senderId: 'ou_1', senderType: 'user', createdAt: '2' },
+        { messageId: 'om_3', text: '更新文档', senderId: 'ou_2', senderType: 'user', createdAt: '3' },
+      ]
+    } }
+    const config = feishuImTaskSource.schema.parse({ feishuCredential: 'bot', chatId: 'oc_1', limit: 5 })
+    const tasks = await feishuImTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands,
+      feishuIm: async () => api })
+    expect(calls).toEqual([{ chatId: 'oc_1', limit: 5 }])
+    expect(tasks).toEqual([
+      { id: 'om_1', title: '修复登录', description: '修复登录\n第二行说明', status: '待处理' },
+      { id: 'om_3', title: '更新文档', description: '更新文档', status: '待处理' },
+    ])
+  })
+
+  it('checks the credential and chat access before polling', async () => {
+    const unset = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({}), 'feishuCredential', deps())
+    expect(unset[0]).toMatchObject({ field: 'feishuCredential', ok: false, code: 'feishuCredentialUnset' })
+    const missing = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot' }),
+      'feishuCredential', deps())
+    expect(missing[0]).toMatchObject({ field: 'feishuCredential', ok: false, code: 'feishuCredentialMissing' })
+    const noChat = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot' }), 'chatId',
+      { ...deps(), feishuIm: async () => ({ messages: async () => [] }) })
+    expect(noChat[0]).toMatchObject({ field: 'chatId', ok: false, code: 'feishuChatUnset' })
+    const forbidden = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot', chatId: 'oc_1' }),
+      'chatId', { ...deps(), feishuIm: async () => ({ messages: async () => { throw new Error('permission denied') } }) })
+    expect(forbidden[0]).toMatchObject({ field: 'chatId', ok: false, code: 'feishuChatForbidden' })
+    const ok = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot', chatId: 'oc_1' }),
+      'chatId', { ...deps(), feishuIm: async () => ({ messages: async () => [
+        { messageId: 'om_1', text: 'hi', senderId: '', senderType: '', createdAt: '' }] }) })
+    expect(ok[0]).toMatchObject({ field: 'chatId', ok: true, code: 'feishuChatOk', values: { chatId: 'oc_1', messages: '1' } })
+  })
+
+  it('extracts text from plain, rich text and non-text messages', () => {
+    expect(messageTextOf('text', JSON.stringify({ text: ' 你好 ' }))).toBe('你好')
+    expect(messageTextOf('post', JSON.stringify({ title: '日报',
+      content: [[{ tag: 'text', text: '第一段' }], [{ tag: 'text', text: '第二段' }]] }))).toBe('日报\n第一段\n第二段')
+    expect(messageTextOf('image', '{}')).toBe('[图片]')
   })
 })
 

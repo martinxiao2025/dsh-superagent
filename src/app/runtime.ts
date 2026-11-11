@@ -48,6 +48,7 @@ import { gitProbe } from '../git-credentials/probe.ts'
 import { FeishuCredentials } from '../feishu-credentials/service.ts'
 import { feishuProbe } from '../feishu-credentials/probe.ts'
 import { httpWikiApi, larkWikiApi, type FeishuWikiApi, type FeishuWikiReader } from '../task-sources/feishu-api.ts'
+import { httpImApi, larkImApi, type FeishuImApi, type FeishuImReader } from '../task-sources/feishu-im-api.ts'
 import { feishuSettings } from '../sources/feishu.ts'
 import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
 import type { SourceAdapter } from '../sources/kind.ts'
@@ -97,6 +98,8 @@ export class Runtime extends Service implements SourceHost {
   readonly feishuCredentials: FeishuCredentials
   /** 按飞书凭据 ID 取知识库读取能力；预检与调度共用，凭据材料不经过任何视图。 */
   private feishuWikiReader?: FeishuWikiReader
+  /** 按飞书凭据 ID 取群消息读取能力；任务来源预检与项目轮询共用，材料不经过任何视图。 */
+  private feishuImReader?: FeishuImReader
   readonly ready: Promise<void>
   private readonly board = new HealthBoard()
   private readonly runtimeHealth = this.board.claim('runtime', { state: 'starting', detail: '' })
@@ -136,7 +139,7 @@ export class Runtime extends Service implements SourceHost {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart,
-        feishuWiki: credential => this.wikiOf(credential) })
+        feishuWiki: credential => this.wikiOf(credential), feishuIm: credential => this.imOf(credential) })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')
@@ -150,22 +153,31 @@ export class Runtime extends Service implements SourceHost {
       this.gitCredentials = new GitCredentials({ credentials: store.gitCredentials, vault, projects, probe: gitProbe(commands, vault) })
       this.feishuCredentials = new FeishuCredentials({ credentials: store.feishuCredentials, vault,
         references: () => feishuCredentialReferences(store.settings()), probe: feishuProbe(commands) })
-      // 凭据材料只在读取知识库时短暂进入内存；CLI 身份用凭据自己的可执行文件，应用身份走 HTTP。
-      this.feishuWikiReader = async credential => {
+      /** 凭据的调用方式：CLI 身份用可执行文件，应用身份用 appId 与密钥；材料只在这里短暂读取。 */
+      const feishuApi = (credential: string): { cli: string } | { appId: string; secret: string } | undefined => {
         const record = store.feishuCredentials.get(credential)
         if (!record) return undefined
-        if (record.mode === 'cli') {
-          const cli = record.cli.trim() || 'lark'
-          return larkWikiApi(async args => {
-            const output = await commands.run(cli, [...args, '--as', 'bot', '--format', 'json'], machine.stateDir)
-            const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
-            if (!result.ok) throw new Error(`${result.error?.message ?? 'Feishu command failed'}${result.error?.code ? ` (${result.error.code})` : ''}`)
-            return result.data
-          })
-        }
+        if (record.mode === 'cli') return { cli: record.cli.trim() || 'lark' }
         const secret = this.feishuCredentials.material(credential)?.appSecret
-        if (!record.appId || !secret) return undefined
-        return httpWikiApi(record.appId, secret, this.lifetime)
+        return record.appId && secret ? { appId: record.appId, secret } : undefined
+      }
+      /** CLI 身份调用：以机器人身份、JSON 输出，失败时把业务码并进消息。 */
+      const larkCall = (cli: string) => async (args: string[]): Promise<unknown> => {
+        const output = await commands.run(cli, [...args, '--as', 'bot', '--format', 'json'], machine.stateDir)
+        const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
+        if (!result.ok) throw new Error(`${result.error?.message ?? 'Feishu command failed'}${result.error?.code ? ` (${result.error.code})` : ''}`)
+        return result.data
+      }
+      // 凭据材料只在读取知识库或群消息时短暂进入内存；两种能力共用同一份凭据解析。
+      this.feishuWikiReader = async credential => {
+        const api = feishuApi(credential)
+        if (!api) return undefined
+        return 'cli' in api ? larkWikiApi(larkCall(api.cli)) : httpWikiApi(api.appId, api.secret, this.lifetime)
+      }
+      this.feishuImReader = async credential => {
+        const api = feishuApi(credential)
+        if (!api) return undefined
+        return 'cli' in api ? larkImApi(larkCall(api.cli)) : httpImApi(api.appId, api.secret, this.lifetime)
       }
       const board = this.board
       const effects = this.effects = new Effects(store, board)
@@ -217,7 +229,7 @@ export class Runtime extends Service implements SourceHost {
         engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
         executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
         effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime, feishuWiki: credential => this.wikiOf(credential),
-        health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
+        feishuIm: credential => this.imOf(credential), health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
       // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
       effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
       // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
@@ -300,6 +312,10 @@ export class Runtime extends Service implements SourceHost {
   /** 飞书知识库读取能力：按凭据现取，轮换或删除后下一次读取自然生效。 */
   private async wikiOf(credential: string): Promise<FeishuWikiApi | undefined> {
     return this.feishuWikiReader?.(credential)
+  }
+  /** 飞书群消息读取能力：按凭据现取，轮换或删除后下一次读取自然生效。 */
+  private async imOf(credential: string): Promise<FeishuImApi | undefined> {
+    return this.feishuImReader?.(credential)
   }
   /** 在暂停或等待初始化期间暂缓评估、调度和出站投递；来源仍会记录传入的触发器。 */
   private paused(): boolean { return !this.setup.configured() || this.store.settings().paused }

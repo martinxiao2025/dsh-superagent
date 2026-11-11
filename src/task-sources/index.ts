@@ -2,6 +2,7 @@
 import { LIMITS } from '../limits.ts'
 import type { SourceCheck } from '../setup.ts'
 import { excelTaskSource } from './excel.ts'
+import { feishuImTaskSource } from './feishu-im.ts'
 import { feishuWikiTaskSource } from './feishu-wiki.ts'
 import {
   checkFailed, checkPassed,
@@ -9,7 +10,7 @@ import {
 } from './kind.ts'
 
 /** 内置驱动；新增来源只需在这里登记，面板下拉与预检自动出现。 */
-export const TASK_SOURCE_DRIVERS: readonly TaskSourceDriver[] = [excelTaskSource, feishuWikiTaskSource]
+export const TASK_SOURCE_DRIVERS: readonly TaskSourceDriver[] = [excelTaskSource, feishuImTaskSource, feishuWikiTaskSource]
 
 /** 新增任务来源表单的候选配置。 */
 export interface TaskSourceVerifyMeta {

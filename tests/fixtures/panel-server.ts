@@ -203,6 +203,7 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
     codeRepo: project.codeRepo, taskSource: project.taskSource, value: project, revision: server.revisions[`project:${id}`] ?? 0 })),
   taskSourceKinds: [
     { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, fields: [] },
+    { kind: 'feishu-im', title: { zh: '飞书消息', en: 'Feishu messages' }, description: { zh: '群消息', en: 'Chat messages' }, fields: [] },
     { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, fields: [] },
   ],
   environment: { root: '/srv/dsh-superagent/work', variables: [

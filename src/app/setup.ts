@@ -17,6 +17,7 @@ import { taskSources, type TaskSourceVerifyMeta } from '../task-sources/index.ts
 import { TaskRepoError } from '../task-sources/kind.ts'
 import { LIMITS } from '../limits.ts'
 import type { FeishuWikiApi } from '../task-sources/feishu-api.ts'
+import type { FeishuImApi } from '../task-sources/feishu-im-api.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import type { SourceInstance } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -28,6 +29,8 @@ export interface SetupHost {
   readonly lifetime: AbortSignal
   /** 按飞书凭据 ID 取知识库读取能力；凭据未安装或材料不可用时返回 undefined。 */
   feishuWiki?(credential: string): Promise<FeishuWikiApi | undefined>
+  /** 按飞书凭据 ID 取群消息读取能力；凭据未安装或材料不可用时返回 undefined。 */
+  feishuIm?(credential: string): Promise<FeishuImApi | undefined>
   restart(): void
 }
 
@@ -162,6 +165,7 @@ export class Setup {
     meta: TaskSourceVerifyMeta = {}): Promise<SourceCheck[]> {
     return taskSources.verify(kind, config, field, { ...meta, taken: id => settings.taskSources[id] !== undefined }, {
       feishu: async credential => this.host.feishuWiki?.(credential) ?? undefined,
+      feishuIm: async credential => this.host.feishuIm?.(credential) ?? undefined,
       syncRepo: async repo => this.taskSourceRepo(repo, settings),
     })
   }

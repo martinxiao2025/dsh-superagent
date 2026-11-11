@@ -11,6 +11,7 @@ import { syncRepoWorkCopy } from '../code-repos/work.ts'
 import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
 import type { FeishuWikiReader } from '../task-sources/feishu-api.ts'
+import type { FeishuImReader } from '../task-sources/feishu-im-api.ts'
 import type { Store } from './store.ts'
 import { Later, type Effects } from './effects.ts'
 import type { Health } from '../sources/host.ts'
@@ -42,6 +43,8 @@ export interface SchedulerHost {
   readonly syncRepo?: (repo: string) => Promise<string>
   /** 按飞书凭据 ID 取知识库读取能力；飞书知识库任务来源使用。 */
   readonly feishuWiki?: FeishuWikiReader
+  /** 按飞书凭据 ID 取群消息读取能力；飞书消息任务来源使用。 */
+  readonly feishuIm?: FeishuImReader
   /** 队列变化后的通知，供上层刷新。 */
   readonly onChange?: () => void
   /** 调度健康条目；轮询、建单与工作区回收的结果写在这里，面板据 `category` 区分调度故障。 */
@@ -157,7 +160,7 @@ export class ProjectScheduler {
     let tasks: RawTask[]
     try {
       tasks = await driver.list(parsed.data, { signal: this.host.lifetime, commands: this.boundCommands(parsed.data, project.codeRepo),
-        syncRepo: this.syncRepo, feishu: this.host.feishuWiki })
+        syncRepo: this.syncRepo, feishu: this.host.feishuWiki, feishuIm: this.host.feishuIm })
     } catch (error) {
       return this.fail(projectId, String(error instanceof Error ? error.message : error))
     }

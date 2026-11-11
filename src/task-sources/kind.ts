@@ -4,11 +4,12 @@ import type { Commands } from '../infra/commands.ts'
 import { LIMITS } from '../limits.ts'
 import type { RawTask } from './tasks.ts'
 import type { FeishuWikiApi } from './feishu-api.ts'
+import type { FeishuImApi } from './feishu-im-api.ts'
 import type { WriteTarget } from './writeback.ts'
 import type { SourceCheck } from '../setup.ts'
 import type { FieldSpec, Localized } from '../sources/kind.ts'
 
-/** 驱动注册名：小写字母开头，允许数字与连字符。首批为 `excel` 与 `feishu-wiki`。 */
+/** 驱动注册名：小写字母开头，允许数字与连字符。内置 `excel`、`feishu-im` 与 `feishu-wiki`。 */
 export const TaskSourceKindSchema = z.string().trim().regex(/^[a-z][a-z0-9-]*$/, '任务来源类型')
 export const TaskSourceRecordSchema = z.object({
   kind: TaskSourceKindSchema,
@@ -64,6 +65,8 @@ export class TaskRepoError extends Error {
 export interface TaskSourceVerifyDeps {
   /** 按飞书凭据 ID 取得知识库读取能力；凭据不存在或材料不可用时返回 undefined。 */
   feishu?(credential: string): Promise<FeishuWikiApi | undefined>
+  /** 按飞书凭据 ID 取得群消息读取能力；飞书消息驱动使用。 */
+  feishuIm?(credential: string): Promise<FeishuImApi | undefined>
   /** 同步代码仓库并返回本地工作副本目录。 */
   syncRepo(repo: string): Promise<string>
 }
@@ -77,6 +80,8 @@ export interface TaskSourceRunContext {
   syncRepo?(repo: string): Promise<string>
   /** 按飞书凭据 ID 取得知识库读取能力；飞书知识库驱动使用。 */
   feishu?(credential: string): Promise<FeishuWikiApi | undefined>
+  /** 按飞书凭据 ID 取得群消息读取能力；飞书消息驱动使用。 */
+  feishuIm?(credential: string): Promise<FeishuImApi | undefined>
 }
 
 /** 回写上下文：回写前同样需要代码仓库工作副本，但不需要读取任务。 */

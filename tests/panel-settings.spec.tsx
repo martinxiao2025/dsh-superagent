@@ -130,7 +130,7 @@ it('builds the TaskSource kind dropdown from the driver catalog and reports a mi
   await click(zh['tab.settings'])
   await click(find(zh['settingsGroup.taskSources'], '.dt-settings-link'))
   expect(all(`[aria-label="${zh.taskSourceAddTitle}"] .dt-select option`).map(option => option.textContent))
-    .toEqual(['Excel 文件', '飞书知识库'])
+    .toEqual(['Excel 文件', '飞书消息', '飞书知识库'])
   // 消息来源与任务清单在同一页分区展示。
   expect(text()).toContain(zh.sourceMessageTitle)
   expect(text()).toContain(zh.sourceTaskListTitle)
