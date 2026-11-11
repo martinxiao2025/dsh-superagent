@@ -45,15 +45,15 @@ it('returns to the exact page after a remount of the main panel', async () => {
 
 it('shows domain terms in the interface language only and lists both languages in the (?) glossary', async () => {
   await mount(en)
-  expect(all('[role="tab"]').map(tab => tab.textContent)).toEqual(['Overview', 'Source', 'Projects', 'Trigger', 'Eval', 'Execution',
-    'Settings'])
+  expect(all('[role="tab"]').map(tab => tab.textContent)).toEqual(['Overview', 'Projects', en['tab.source'], 'Trigger', 'Eval',
+    'Execution', 'Settings'])
   await click('Glossary')
   const dialog = document.querySelector('[role="dialog"]')!
   const row = [...dialog.querySelectorAll('tr')].find(item => item.textContent?.startsWith('Ticket'))!
   expect([...row.querySelectorAll('td')].map(cell => cell.textContent)).toEqual(['Ticket', '工单', 'An authorized unit of work'])
   expect(dialog.textContent).toContain('Accept 接单')
   // 术语按标签页跟随流程的顺序分组，位于其中行动的角色之后。
-  expect([...dialog.querySelectorAll('th.dt-glossary-group')].map(cell => cell.textContent)).toEqual(['Roles', 'Source', 'Projects',
+  expect([...dialog.querySelectorAll('th.dt-glossary-group')].map(cell => cell.textContent)).toEqual(['Roles', 'Projects', en['tab.source'],
     'Trigger', 'Eval', 'Execution'])
   expect([...dialog.querySelectorAll('tr')].find(item => item.textContent?.startsWith('Main Session'))!.textContent).toContain('prompts call it the orchestrator')
 })

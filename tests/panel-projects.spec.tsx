@@ -66,7 +66,7 @@ it('creates a project through the four-step wizard and saves the full configurat
   await mount()
   await click(zh['tab.projects'])
   await click(find(zh['tab.settings'], '.dt-status-head button'))
-  await click(find(zh['settingsGroup.projects'], '.dt-settings-link'))
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   expect(text()).toContain(zh.projectWizardTitle)
   await type(field(zh.sourceName), '内容运营')
   await click(zh.projectNext)

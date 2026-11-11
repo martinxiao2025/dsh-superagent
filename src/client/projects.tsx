@@ -188,7 +188,7 @@ function ProjectWizard() {
       <div className="dt-row-title"><span className="dt-card-title">{t('projectWizardTitle')}</span></div>
       <p className="dt-hint">{t('projectWizardHint')}</p>
     </div>
-    <SegmentedControl label={t('projectWizardSteps')} value={step}
+    <SegmentedControl className="dt-wizard-steps" label={t('projectWizardSteps')} value={step}
       options={PROJECT_STEPS.map((value, index) => ({ value, label: t(`projectStep.${value}`, { number: index + 1 }) }))}
       onChange={setStep} />
     <div className="dt-form dt-block">

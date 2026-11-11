@@ -33,7 +33,7 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
   await type(provider as HTMLInputElement, 'worker-provider'); await type(model as HTMLInputElement, 'worker-model')
   await click(zh.save)
   expect(server.settings.eval).toEqual({ mode: 'auto', timeoutSeconds: 180, model: { provider: 'worker-provider', model: 'worker-model' } })
-  await click(find(zh['promptPart.runtime/work'], '.dt-settings-link'))
+  await click(find(`${zh['promptPart.runtime/work']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await type(field<HTMLInputElement>(zh.maxWorkers), '5')
   // 空的根目录使用默认目录，字段会说明它，而不是看起来已设置。
   expect(field<HTMLInputElement>(zh.executionDirectory).closest('.dt-field')!.querySelector('small')?.textContent).toBe('留空时用 /srv/dsh-superagent/work')
@@ -162,17 +162,39 @@ it('creates, verifies and deletes a Git credential on its own settings page', as
   await mount()
   await click(zh['tab.settings'])
   await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))
+  // 新增表单默认收起，由列表上方的按钮展开。
+  expect(document.querySelector('.dt-source-add')).toBeNull()
+  await click(find(zh.credentialNew, '.dt-add-trigger button'))
   await type(field<HTMLInputElement>(zh.credentialName), '部署机器人')
-  await type(document.querySelector<HTMLSelectElement>('.dt-source-add .dt-select')!, 'https')
+  await type(field<HTMLSelectElement>(zh.credentialKind), 'https')
   await type(field<HTMLInputElement>(zh.credentialToken), 'ghp_abcdefgh')
-  await click(find(zh.credentialAdd, '.dt-source-add button'))
+  await click(find(zh.credentialNew, '.dt-source-add button'))
   await settle()
   expect(server.gitCredentials.map(item => item.name)).toEqual(['部署机器人'])
   expect(document.querySelector('.dt-card .dt-card-title')?.textContent).toBe('部署机器人')
   expect(document.querySelector('.dt-card .dt-hint')?.textContent).toContain('••••abcd')
+  // 列表默认不展开表单，点击编辑后才出现。
+  expect(document.querySelector('.dt-card .dt-add-grid')).toBeNull()
+  await click(find(zh.edit, '.dt-card button'))
+  expect(document.querySelector('.dt-card .dt-add-grid')).not.toBeNull()
+  await click(find(zh.cancel, '.dt-card button'))
+  expect(document.querySelector('.dt-card .dt-add-grid')).toBeNull()
   await click(find(zh.verify, '.dt-card button'))
+  const dialog = document.querySelector('.dt-modal')!
+  await type(field<HTMLInputElement>(zh.credentialRepository, dialog), 'git@github.com:acme/widgets.git')
+  await click(find(zh.verify, '.dt-modal button'))
   await settle()
-  expect(document.querySelector('.dt-card .dt-check')?.textContent).toBe('材料可读：••••abcd')
+  expect(all('.dt-card .dt-check').map(check => check.textContent)).toEqual(['材料可读：••••abcd', '远端可访问：3 个分支'])
+  expect(server.requests.find(request => request.path === 'git-credentials/verify')?.body)
+    .toMatchObject({ id: 'credential', repository: 'git@github.com:acme/widgets.git' })
+  expect(document.querySelector('.dt-modal .dt-verify-summary')?.textContent).toBe('验证通过：2 项检查')
+  await click(find(zh.cancel, '.dt-modal button'))
+  // 再次打开验证弹窗时不带上一次的结果与地址。
+  await click(find(zh.verify, '.dt-card button'))
+  expect(document.querySelector('.dt-modal .dt-check')).toBeNull()
+  expect(document.querySelector('.dt-modal .dt-verify-summary')).toBeNull()
+  expect(field<HTMLInputElement>(zh.credentialRepository, document.querySelector('.dt-modal')!).value).toBe('')
+  await click(find(zh.cancel, '.dt-modal button'))
   await click(find(zh.credentialDelete, '.dt-card button'))
   await click(find(zh.confirm, '.dt-modal button'))
   await settle()
@@ -180,30 +202,71 @@ it('creates, verifies and deletes a Git credential on its own settings page', as
   expect(text()).toContain(zh.gitCredentialNone)
 })
 
+it('fills a Git credential from an uploaded file and switches the kind by its content', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))
+  await click(find(zh.credentialNew, '.dt-add-trigger button'))
+  // 上传入口随认证方式切换，每次取当前可见的文件选择框。
+  const pick = async (name: string, body: string) => {
+    const input = document.querySelector<HTMLInputElement>('.dt-source-add input[type="file"]')!
+    const file = new File([body], name, { type: 'text/plain' })
+    Object.defineProperty(file, 'text', { value: async () => body })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    await settle()
+  }
+  await pick('deploy.key', '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n')
+  expect(field<HTMLInputElement>(zh.credentialName).value).toBe('deploy')
+  expect(field<HTMLTextAreaElement>(zh.credentialPrivateKey).value).toContain('BEGIN OPENSSH PRIVATE KEY')
+  await pick('ci-token.txt', 'ghp_abcdefgh\n')
+  expect(field<HTMLSelectElement>(zh.credentialKind).value).toBe('https')
+  expect(field<HTMLInputElement>(zh.credentialToken).value).toBe('ghp_abcdefgh')
+  // 已填写的名称不会被后续上传覆盖，材料齐备后可以直接保存。
+  expect(field<HTMLInputElement>(zh.credentialName).value).toBe('deploy')
+  expect(find(zh.credentialNew, '.dt-source-add button').hasAttribute('disabled')).toBe(false)
+})
+
 it('keeps Feishu credentials on their own page with a CLI identity', async () => {
   await mount()
   await click(zh['tab.settings'])
   await click(find(zh['settingsGroup.feishuCredentials'], '.dt-settings-link'))
+  // 与 Git 凭据一致：新增区块默认收起。
+  expect(document.querySelector('.dt-source-add')).toBeNull()
+  await click(find(zh.credentialNew, '.dt-add-trigger button'))
   await type(field<HTMLInputElement>(zh.credentialName), '知识库机器人')
-  await type(document.querySelector<HTMLSelectElement>('.dt-source-add .dt-select')!, 'cli')
+  await type(field<HTMLSelectElement>(zh.feishuMode), 'cli')
   await type(field<HTMLInputElement>(zh.feishuCli), 'lark')
-  await click(find(zh.credentialAdd, '.dt-source-add button'))
+  await click(find(zh.credentialNew, '.dt-source-add button'))
   await settle()
   expect(server.feishuCredentials.map(item => item.mode)).toEqual(['cli'])
+  // 列表默认不展开表单，验证在弹窗中执行。
+  expect(document.querySelector('.dt-card .dt-add-grid')).toBeNull()
   await click(find(zh.verify, '.dt-card button'))
+  await click(find(zh.verify, '.dt-modal button'))
   await settle()
   expect(document.querySelector('.dt-card .dt-check')?.textContent).toBe('CLI 可执行：lark')
   expect(server.requests.filter(request => request.path.startsWith('feishu-')).length).toBeGreaterThan(0)
+  expect(document.querySelector('.dt-modal .dt-verify-summary')?.textContent).toBe('验证通过：1 项检查')
+  await click(find(zh.cancel, '.dt-modal button'))
+  // 再次打开不带上次结果。
+  await click(find(zh.verify, '.dt-card button'))
+  expect(document.querySelector('.dt-modal .dt-check')).toBeNull()
+  await click(find(zh.cancel, '.dt-modal button'))
+  await click(find(zh.edit, '.dt-card button'))
+  expect(document.querySelector('.dt-card .dt-add-grid')).not.toBeNull()
 })
 
 it('lists the settings groups stages first, opens each stage\'s group from its status, and returns to the last group opened',
   async () => {
   await mount()
   await click(tab(zh['tab.settings']))
-  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['Git 凭据', '飞书凭据', '代码仓库', '任务来源', '项目',
-    '评估', '执行', '提示词', '部署'])
+  const tag = zh['settingsGroupTag']
+  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['Git 凭据', '飞书凭据', '代码仓库', '任务来源',
+    `项目${tag}`, `评估${tag}`, `执行${tag}`, '提示词', '部署'])
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.taskSources'])
-  for (const [tab, group] of [['来源', '任务来源'], ['项目', '项目'], ['评估', '评估'], ['执行', '执行']] as const) {
+  for (const [tab, group] of [['任务来源', '任务来源'], ['项目', `项目${tag}`], ['评估', `评估${tag}`],
+    ['执行', `执行${tag}`]] as [string, string][]) {
     await click(find(tab, '[role="tab"]'))
     await click(find(zh['tab.settings'], '.dt-status-head button'))
     expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(group)
@@ -212,9 +275,11 @@ it('lists the settings groups stages first, opens each stage\'s group from its s
   await click(tab(zh['tab.trigger']))
   expect(all('.dt-status-head button').map(button => button.textContent)).not.toContain(zh['tab.settings'])
   await click(tab(zh['tab.settings']))
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['promptPart.runtime/work'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent)
+    .toBe(`${zh['promptPart.runtime/work']}${zh['settingsGroupTag']}`)
   await click(tab(zh['tab.trigger']))
   await remount()
   await click(tab(zh['tab.settings']))
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['promptPart.runtime/work'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent)
+    .toBe(`${zh['promptPart.runtime/work']}${zh['settingsGroupTag']}`)
 })

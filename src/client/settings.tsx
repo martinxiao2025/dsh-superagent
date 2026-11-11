@@ -15,6 +15,8 @@ import { SourceTaskSettings } from './task-sources.tsx'
 
 const STAGE_GROUPS: readonly SettingsGroup[] = ['gitCredentials', 'feishuCredentials', 'codeRepos', 'taskSources',
   'projects', 'eval', 'execution']
+/** 与主菜单同名但含义是配置的分组；导航上追加“配置”标记，避免与运行页混淆。 */
+const CONFIG_GROUPS: readonly SettingsGroup[] = ['projects', 'eval', 'execution']
 export function SettingsPage({ group, query, state, deploymentForm }: {
   group: SettingsGroup; query: { source?: string; version?: string }; state: StateView; deploymentForm: DeploymentForm
 }) {
@@ -37,7 +39,8 @@ export function SettingsPage({ group, query, state, deploymentForm }: {
       {SETTINGS_GROUPS.map(value => <button key={value} type="button" className="dt-settings-link" data-stage={STAGE_GROUPS.includes(value)
         || undefined}
         aria-current={value === group ? 'page' : undefined} onClick={() => navigate(settingsRoute(value),
-          true)}>{t(`settingsGroup.${value}`)}</button>)}
+          true)}>{t(`settingsGroup.${value}`)}{CONFIG_GROUPS.includes(value)
+          && <span className="dt-settings-tag">{t('settingsGroupTag')}</span>}</button>)}
     </nav>
     <div className="dt-settings-body">
       <h2 className="dt-settings-title">{t(`settingsGroup.${group}`)}</h2>

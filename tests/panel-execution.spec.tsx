@@ -27,7 +27,8 @@ it('lists Tickets under Execution by who they wait on, with the Executor state a
   // 暂停是独立操作：在它之前开始的执行设置草稿仍可保存。
   await click(find(zh['tab.settings'], '.dt-status-head button'))
   expect(tab(zh['tab.settings']).getAttribute('aria-selected')).toBe('true')
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['promptPart.runtime/work'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent)
+    .toBe(`${zh['promptPart.runtime/work']}${zh['settingsGroupTag']}`)
   await type(field<HTMLInputElement>(zh.maxWorkers), '4')
   await click(tab(zh['tab.execution']))
   await click(zh.pauseProcessing)

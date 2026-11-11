@@ -60,7 +60,7 @@ it('keeps a Policy draft across remounts, and merges another save into it sender
 it('keeps the Policy to its rules and the Feishu Source\'s part, in that Source\'s own identities', async () => {
   await mount()
   await click(tab(zh['tab.settings']))
-  await click(find(zh['term.eval'], '.dt-settings-link'))
+  await click(find(`${zh['term.eval']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   // 自动合并及其阈值属于提示词文本，策略核心中不放置任何来源的设置。
   for (const gone of ['自动合并', '行数阈值', '成员', '计入策略版本']) expect(text()).not.toContain(gone)
   expect(all('.dt-lv').map(item => item.textContent)[0]).toBe('策略版本 abcdef12')
@@ -122,7 +122,8 @@ it('shows the current Policy version once, explains what makes it up, and opens 
   await click('修复回归')
   await click('abcdef12')
   expect(tab(zh['tab.settings']).getAttribute('aria-selected')).toBe('true')
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.eval'])
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent)
+    .toBe(`${zh['term.eval']}${zh['settingsGroupTag']}`)
   await settle()
   // 历史打开在生成该版本的那次保存处，并列出各来源保存也产生的版本。
   expect(document.querySelector('.dt-highlight')?.textContent).toContain('生成策略版本 abcdef12')
@@ -135,7 +136,7 @@ it('sets the Feishu admission table per receiving scope, offering only the cells
       otherChats: 'none' } } } }
   await mount()
   await click(tab(zh['tab.settings']))
-  await click(find(zh['term.eval'], '.dt-settings-link'))
+  await click(find(`${zh['term.eval']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   const rows = all('.dt-admission tbody tr').map(row => [row.querySelector('.dt-admission-scope')!.firstChild?.textContent,
     row.querySelectorAll('select').length])
   // 接收所有消息的群聊拥有全部三个单元格；仅 @ 的群聊只有点名单元格；其他群聊在不接收时没有单元格。

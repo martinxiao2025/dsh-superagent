@@ -4,7 +4,8 @@ import type { SetupPlace } from '../setup.ts'
 import { DECISION_FILTERS, type DecisionFilter } from './api.ts'
 import type { T } from './text.ts'
 
-export const TABS = ['overview', 'source', 'projects', 'trigger', 'eval', 'execution', 'settings'] as const
+/** 主菜单按使用视角排列：概览之后先进入项目这一交付单元，再看任务来源等输入状态。 */
+export const TABS = ['overview', 'projects', 'source', 'trigger', 'eval', 'execution', 'settings'] as const
 export type Tab = typeof TABS[number]
 /** 设置分组按创建与使用流程排列：先凭据，再数据接入，再项目，最后系统级配置。 */
 export const SETTINGS_GROUPS = ['gitCredentials', 'feishuCredentials', 'codeRepos', 'taskSources', 'projects', 'eval',
