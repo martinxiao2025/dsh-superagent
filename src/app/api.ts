@@ -15,6 +15,7 @@ import type { ResetReport } from './reset.ts'
 import type { CredentialCheck } from '../secrets/check.ts'
 import type { GitCredentialInput, GitCredentialView } from '../git-credentials/kind.ts'
 import type { FeishuCredentialInput, FeishuCredentialView } from '../feishu-credentials/kind.ts'
+import type { Project } from '../projects/kind.ts'
 
 export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
@@ -51,8 +52,8 @@ export interface Api {
   /** 016 标准任务清单模板；内容是 base64 编码的 xlsx。 */
   'GET task-format/template': { response: { filename: string; content: string } }
   'DELETE task-sources/:id': { response: { removed: true; restarting: false } }
-  'POST projects': { body: { id?: string; name: string; codeRepo: string; taskSource: string };
-    response: { id: string; revision: number; restarting: false } }
+  /** 新建项目接受完整配置：向导一次提交仓库、任务来源、执行目录、轮询、重试与状态策略。 */
+  'POST projects': { body: { id?: string } & Project; response: { id: string; revision: number; restarting: false } }
   'DELETE projects/:id': { response: { removed: true; restarting: false } }
   'GET projects/:id/tasks': { response: ProjectTasksView }
   'GET git-credentials': { response: { credentials: GitCredentialView[] } }

@@ -1,11 +1,13 @@
 /** 项目页签与项目设置：项目列表与运行时概览、单项目的任务与队列详情，以及按项目配置的轮询与重试策略。 */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { GitCredentialView } from '../git-credentials/kind.ts'
 import { ApiError, usePoll, type SettingsView } from './api.ts'
-import { Button, Input, Switch, Tag } from './controls.tsx'
+import { Button, Input, SegmentedControl, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { useAction, usePanel } from './provider.tsx'
+import { settingsRoute } from './route.ts'
 import { Field, Fields, numberOf, useBlockDraft, useSettings } from './settings-kit.tsx'
-import { when } from './text.ts'
+import { errorText, when } from './text.ts'
 import { ConfirmButton, Hint, LabelValue, LoadState, PageHead, Section, StatusHead } from './widgets.tsx'
 
 type ProjectView = SettingsView['projects'][number]
@@ -106,12 +108,12 @@ export function ProjectPage({ id }: { id: string }) {
   </>
 }
 
-/** 项目设置分区：新增项目 + 已保存项目的编辑与删除。 */
+/** 项目设置分区：新建项目向导 + 已保存项目的编辑与删除。 */
 export function ProjectSettings() {
-  const { t, call, notify } = usePanel()
-  const { settings, reload } = useSettings()
+  const { t } = usePanel()
+  const { settings } = useSettings()
   return <>
-    <AddProject />
+    <ProjectWizard />
     <div className="dt-cards">
       {settings.projects.length === 0 ? <p className="dt-hint">{t('projectNone')}</p>
         : settings.projects.map(project => <ProjectCard key={project.id} project={project} />)}
@@ -119,46 +121,161 @@ export function ProjectSettings() {
   </>
 }
 
-function AddProject() {
-  const { t, call, notify } = usePanel()
+/** 向导步骤：与设置分组的创建流程一致，先基本信息，再仓库与任务来源，最后执行与调度。 */
+const PROJECT_STEPS = ['basics', 'codeRepo', 'taskSource', 'execution'] as const
+type ProjectStep = typeof PROJECT_STEPS[number]
+/** 新建项目的默认执行参数；与 ProjectSchema 的默认值保持一致。 */
+const PROJECT_DEFAULTS = {
+  intervalMinutes: '30', maxRetries: '2', retryBackoffSeconds: '60',
+  pendingStatuses: '待处理, todo, pending, open', doneStatus: '已完成', failedStatus: '失败',
+}
+
+/** 新建项目向导：四步填写完整参数，代码仓库与任务来源复用已保存的记录。 */
+function ProjectWizard() {
+  const { t, call, notify, navigate } = usePanel()
   const { settings, reload } = useSettings()
+  const [step, setStep] = useState<ProjectStep>('basics')
   const [name, setName] = useState('')
+  const [enabled, setEnabled] = useState(true)
   const [codeRepo, setCodeRepo] = useState('')
   const [taskSource, setTaskSource] = useState('')
+  const [credential, setCredential] = useState('')
+  const [credentials, setCredentials] = useState<GitCredentialView[]>([])
+  const [credentialError, setCredentialError] = useState<string>()
+  const [directory, setDirectory] = useState('')
+  const [branch, setBranch] = useState('')
+  const [intervalMinutes, setIntervalMinutes] = useState(PROJECT_DEFAULTS.intervalMinutes)
+  const [runOnStart, setRunOnStart] = useState(true)
+  const [maxRetries, setMaxRetries] = useState(PROJECT_DEFAULTS.maxRetries)
+  const [retryBackoffSeconds, setRetryBackoffSeconds] = useState(PROJECT_DEFAULTS.retryBackoffSeconds)
+  const [pendingStatuses, setPendingStatuses] = useState(PROJECT_DEFAULTS.pendingStatuses)
+  const [doneStatus, setDoneStatus] = useState(PROJECT_DEFAULTS.doneStatus)
+  const [failedStatus, setFailedStatus] = useState(PROJECT_DEFAULTS.failedStatus)
+  // 凭据列表不属于设置快照，进入向导时单独读取一次；失败时只在字段下提示。
+  useEffect(() => { call('GET git-credentials').then(result => setCredentials(result.credentials),
+    failure => setCredentialError(errorText(failure))) }, [call])
   const repos = settings.codeRepos.filter(repo => repo.enabled)
   const sources = settings.taskSources.filter(source => source.enabled)
   const repo = codeRepo || repos[0]?.id || ''
   const source = taskSource || sources[0]?.id || ''
+  const interval = Number(intervalMinutes), retries = Number(maxRetries), backoff = Number(retryBackoffSeconds)
+  const numbersValid = [interval, retries, backoff].every(value => Number.isInteger(value) && value >= 0)
+  const policyValid = [pendingStatuses, doneStatus, failedStatus].every(value => value.trim() !== '')
+  const ready = name.trim() !== '' && repo !== '' && source !== '' && numbersValid && policyValid
+  const stepReady: Record<ProjectStep, boolean> = { basics: name.trim() !== '', codeRepo: repo !== '', taskSource: source !== '',
+    execution: numbersValid && policyValid }
+  const repoName = repos.find(item => item.id === repo)?.name ?? repo
+  const sourceName = sources.find(item => item.id === source)?.name ?? source
+  const position = PROJECT_STEPS.indexOf(step)
   const create = useAction(async () => {
-    const { id } = await call('POST projects', { body: { name: name.trim(), codeRepo: repo, taskSource: source } })
+    const { id } = await call('POST projects', { body: {
+      name: name.trim(), enabled, codeRepo: repo, taskSource: source, gitCredential: credential,
+      execution: { directory: directory.trim(), branch: branch.trim() },
+      schedule: { intervalMinutes: interval, runOnStart },
+      retry: { maxRetries: retries, retryBackoffSeconds: backoff },
+      taskPolicy: { pendingStatuses: pendingStatuses.split(/[,，]/).map(status => status.trim()).filter(Boolean),
+        doneStatus: doneStatus.trim(), failedStatus: failedStatus.trim() },
+    } })
     notify(t('projectAdded', { id }))
-    setName('')
+    setName(''); setCodeRepo(''); setTaskSource(''); setCredential(''); setDirectory(''); setBranch('')
+    setIntervalMinutes(PROJECT_DEFAULTS.intervalMinutes); setMaxRetries(PROJECT_DEFAULTS.maxRetries)
+    setRetryBackoffSeconds(PROJECT_DEFAULTS.retryBackoffSeconds); setPendingStatuses(PROJECT_DEFAULTS.pendingStatuses)
+    setDoneStatus(PROJECT_DEFAULTS.doneStatus); setFailedStatus(PROJECT_DEFAULTS.failedStatus)
+    setStep('basics')
   }, { reload })
-  return <div className="dt-source-add" role="group" aria-label={t('projectAddTitle')}>
+  return <div className="dt-source-add" role="group" aria-label={t('projectWizardTitle')}>
     <div className="dt-row-main">
-      <div className="dt-row-title"><span className="dt-card-title">{t('projectAddTitle')}</span></div>
-      <p className="dt-hint">{t('projectAddHint')}</p>
+      <div className="dt-row-title"><span className="dt-card-title">{t('projectWizardTitle')}</span></div>
+      <p className="dt-hint">{t('projectWizardHint')}</p>
     </div>
-    {repos.length === 0 && <p className="dt-hint">{t('projectNeedsCodeRepo')}</p>}
-    {sources.length === 0 && <p className="dt-hint">{t('projectNeedsTaskSource')}</p>}
-    <div className="dt-add-grid">
-      <Field label={t('sourceName')} hint={t('sourceNameHint')}>
-        <Input required value={name} placeholder={t('projectNamePlaceholder')} onChange={event => setName(event.target.value)} />
-      </Field>
-      <Field label={t('projectCodeRepoLabel')}>
-        <select className="dt-select" value={repo} onChange={event => setCodeRepo(event.target.value)}>
-          {repos.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-      </Field>
-      <Field label={t('projectTaskSourceLabel')}>
-        <select className="dt-select" value={source} onChange={event => setTaskSource(event.target.value)}>
-          {sources.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-      </Field>
+    <SegmentedControl label={t('projectWizardSteps')} value={step}
+      options={PROJECT_STEPS.map((value, index) => ({ value, label: t(`projectStep.${value}`, { number: index + 1 }) }))}
+      onChange={setStep} />
+    <div className="dt-form dt-block">
+      {step === 'basics' && <>
+        <Field label={t('sourceName')} hint={t('sourceNameHint')}>
+          <Input required value={name} placeholder={t('projectNamePlaceholder')} onChange={event => setName(event.target.value)} />
+        </Field>
+        <Field label={t('projectEnabled')} hint={t('projectEnabledHint')}>
+          <div><Switch checked={enabled} onChange={setEnabled} label={t('projectEnabled')} /></div>
+        </Field>
+      </>}
+      {step === 'codeRepo' && (repos.length === 0
+        ? <>
+          <p className="dt-hint">{t('projectNeedsCodeRepo')}</p>
+          <div className="dt-row-buttons">
+            <Button variant="outline" onClick={() => navigate(settingsRoute('codeRepos'))}>{t('projectGoCodeRepos')}</Button>
+          </div>
+        </>
+        : <>
+          <Field label={t('projectCodeRepoLabel')} hint={t('projectCodeRepoPickHint')}>
+            <select className="dt-select" value={repo} onChange={event => setCodeRepo(event.target.value)}>
+              {repos.map(item => <option key={item.id} value={item.id}>{item.name} ({item.id})</option>)}
+            </select>
+          </Field>
+          <Field label={t('projectGitCredentialLabel')} hint={t('projectGitCredentialHint')} note={credentialError}>
+            <select className="dt-select" value={credential} onChange={event => setCredential(event.target.value)}>
+              <option value="">{t('projectGitCredentialNone')}</option>
+              {credentials.map(item => <option key={item.id} value={item.id}>{item.name} ({item.id})</option>)}
+            </select>
+          </Field>
+        </>)}
+      {step === 'taskSource' && (sources.length === 0
+        ? <>
+          <p className="dt-hint">{t('projectNeedsTaskSource')}</p>
+          <div className="dt-row-buttons">
+            <Button variant="outline" onClick={() => navigate(settingsRoute('taskSources'))}>{t('projectGoTaskSources')}</Button>
+          </div>
+        </>
+        : <Field label={t('projectTaskSourceLabel')} hint={t('projectTaskSourcePickHint')}>
+          <select className="dt-select" value={source} onChange={event => setTaskSource(event.target.value)}>
+            {sources.map(item => <option key={item.id} value={item.id}>{item.name} ({item.id})</option>)}
+          </select>
+        </Field>)}
+      {step === 'execution' && <>
+        <Field label={t('projectDirectory')} hint={t('projectDirectoryHint')}>
+          <Input className="dt-mono" value={directory} placeholder={t('executionDirectoryEmpty')}
+            onChange={event => setDirectory(event.target.value)} />
+        </Field>
+        <Field label={t('projectBranch')} hint={t('projectBranchHint')}>
+          <Input value={branch} placeholder={t('projectBranchEmpty')} onChange={event => setBranch(event.target.value)} />
+        </Field>
+        <Field label={t('projectInterval')} hint={t('projectIntervalHint')}>
+          <Input type="number" required value={intervalMinutes} onChange={event => setIntervalMinutes(event.target.value)} />
+        </Field>
+        <Field label={t('projectRunOnStart')} hint={t('projectRunOnStartHint')}>
+          <div><Switch checked={runOnStart} onChange={setRunOnStart} label={t('projectRunOnStart')} /></div>
+        </Field>
+        <Field label={t('projectMaxRetries')} hint={t('projectMaxRetriesHint')}>
+          <Input type="number" required value={maxRetries} onChange={event => setMaxRetries(event.target.value)} />
+        </Field>
+        <Field label={t('projectBackoff')} hint={t('projectBackoffHint')}>
+          <Input type="number" required value={retryBackoffSeconds} onChange={event => setRetryBackoffSeconds(event.target.value)} />
+        </Field>
+        <Field label={t('projectPendingStatuses')} hint={t('projectPendingStatusesHint')}>
+          <Input required value={pendingStatuses} onChange={event => setPendingStatuses(event.target.value)} />
+        </Field>
+        <Field label={t('projectDoneStatus')} hint={t('projectDoneStatusHint')}>
+          <Input required value={doneStatus} onChange={event => setDoneStatus(event.target.value)} />
+        </Field>
+        <Field label={t('projectFailedStatus')} hint={t('projectFailedStatusHint')}>
+          <Input required value={failedStatus} onChange={event => setFailedStatus(event.target.value)} />
+        </Field>
+        <div className="dt-row-meta dt-status-line">
+          <LabelValue label={t('projectWizardSummaryName')} value={name.trim() || t('unsetValue')} />
+          <LabelValue label={t('projectCodeRepoLabel')} value={repoName || t('unsetValue')} />
+          <LabelValue label={t('projectTaskSourceLabel')} value={sourceName || t('unsetValue')} />
+          <LabelValue label={t('projectWizardSummarySchedule')}
+            value={t('projectWizardScheduleValue', { minutes: intervalMinutes, retries: maxRetries, backoff: retryBackoffSeconds })} />
+        </div>
+      </>}
     </div>
     <div className="dt-row-buttons">
-      <Button variant="primary" disabled={create.busy || !name.trim() || !repo || !source}
-        onClick={() => { void create.run() }}>{t('projectAdd')}</Button>
+      <Button variant="outline" disabled={position === 0}
+        onClick={() => setStep(PROJECT_STEPS[position - 1]!)}>{t('projectBack')}</Button>
+      {position < PROJECT_STEPS.length - 1
+        ? <Button variant="primary" disabled={!stepReady[step]} onClick={() => setStep(PROJECT_STEPS[position + 1]!)}>{t('projectNext')}</Button>
+        : <Button variant="primary" disabled={create.busy || !ready} onClick={() => { void create.run() }}>{t('projectCreate')}</Button>}
     </div>
   </div>
 }

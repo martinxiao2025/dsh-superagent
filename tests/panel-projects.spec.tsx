@@ -61,24 +61,39 @@ it('sends retry, cancel and clear requests from the project queue', async () => 
   expect(posts.some(path => path.includes('queue/clear'))).toBe(true)
 })
 
-it('creates a project from the settings and saves its polling and retry policy', async () => {
+it('creates a project through the four-step wizard and saves the full configuration', async () => {
   server.settings = { ...server.settings, taskSources: { sheet: taskSource } }
   await mount()
   await click(zh['tab.projects'])
   await click(find(zh['tab.settings'], '.dt-status-head button'))
   await click(find(zh['settingsGroup.projects'], '.dt-settings-link'))
+  expect(text()).toContain(zh.projectWizardTitle)
   await type(field(zh.sourceName), '内容运营')
-  await click(find(zh.projectAdd))
-  await settle()
-  expect(server.settings.projects.project?.name).toBe('内容运营')
-  expect(server.settings.projects.project?.taskSource).toBe('sheet')
-  const [editButton] = all('.dt-card button').filter(button => button.textContent?.trim() === zh.edit)
-  await click(editButton!)
+  await click(zh.projectNext)
+  await click(zh.projectNext)
+  await click(zh.projectNext)
+  await type(field(zh.projectDirectory), '/srv/work/content')
+  await type(field(zh.projectBranch), 'main')
   await type(field(zh.projectInterval), '5')
   await type(field(zh.projectMaxRetries), '4')
+  await type(field(zh.projectBackoff), '30')
+  await type(field(zh.projectPendingStatuses), 'todo, pending')
+  await click(zh.projectCreate)
+  await settle()
+  expect(server.settings.projects.project).toMatchObject({
+    name: '内容运营', codeRepo: 'github', taskSource: 'sheet',
+    execution: { directory: '/srv/work/content', branch: 'main' },
+    schedule: { intervalMinutes: 5, runOnStart: true },
+    retry: { maxRetries: 4, retryBackoffSeconds: 30 },
+    taskPolicy: { pendingStatuses: ['todo', 'pending'], doneStatus: '已完成', failedStatus: '失败' },
+  })
+  const [editButton] = all('.dt-card button').filter(button => button.textContent?.trim() === zh.edit)
+  await click(editButton!)
+  await type(field(zh.projectInterval), '7')
+  await type(field(zh.projectMaxRetries), '6')
   await click(zh.save)
-  expect(server.settings.projects.project?.schedule.intervalMinutes).toBe(5)
-  expect(server.settings.projects.project?.retry.maxRetries).toBe(4)
+  expect(server.settings.projects.project?.schedule.intervalMinutes).toBe(7)
+  expect(server.settings.projects.project?.retry.maxRetries).toBe(6)
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:project'])
 })
 

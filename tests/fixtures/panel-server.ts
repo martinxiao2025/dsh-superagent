@@ -437,14 +437,13 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       values: { kind: String(body.kind ?? ''), name: String(body.name ?? '') } }] }
   } },
   'GET task-format/template': { answer: () => ({ filename: 'tasks-template.xlsx', content: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==' }) },
+  // 与宿主一致：创建时校验完整项目值；向导提交全部参数，省略的字段取 schema 默认值。
   'POST projects': { body: true, answer: ({ body }) => {
-    const id = body.id ?? 'project'
-    server.settings = { ...server.settings, projects: { ...server.settings.projects, [id]: { name: body.name, enabled: true,
-      codeRepo: body.codeRepo, taskSource: body.taskSource, gitCredential: '',
-      execution: { directory: '', branch: '' },
-      schedule: { intervalMinutes: 30, runOnStart: true }, retry: { maxRetries: 2, retryBackoffSeconds: 60 },
-      taskPolicy: { pendingStatuses: ['待处理', 'todo', 'pending', 'open'], doneStatus: '已完成', failedStatus: '失败' } } } }
-    return { id, revision: 0, restarting: false as const }
+    const { id, ...value } = body
+    const recordId = id ?? 'project'
+    const project = ProjectSchema.parse(value)
+    server.settings = { ...server.settings, projects: { ...server.settings.projects, [recordId]: project } }
+    return { id: recordId, revision: 0, restarting: false as const }
   } },
   'DELETE projects/:id': { answer: ({ params }) => {
     const { [params.id]: _record, ...projects } = server.settings.projects
