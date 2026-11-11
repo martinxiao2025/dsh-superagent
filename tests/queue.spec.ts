@@ -258,6 +258,41 @@ it('runOnStart 决定启动时是否立即轮询', async () => {
   expect([...h.entries.values()].map(entry => entry.project).sort()).toEqual(['a', 'b'])
 })
 
+it('手动重试、取消与清空排队项', async () => {
+  const h = setup({ a: project('a') }, 0)
+  h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
+  await h.scheduler.poll('a')
+  const [first, second] = [...h.entries.values()].sort((left, right) => left.seq - right.seq)
+  // 排队中的条目不能重复重试。
+  expect(h.scheduler.retryEntry(first!.id)).toEqual({ retried: false })
+  // 取消排队项后保留记录与原因。
+  expect(h.scheduler.cancelEntry(first!.id)).toEqual({ cancelled: true })
+  expect(h.entries.get(first!.id)).toMatchObject({ state: 'cancelled', reason: expect.stringContaining('panel') })
+  // 已取消的条目可以手动重试，尝试次数重置并重新排队。
+  expect(h.scheduler.retryEntry(first!.id)).toEqual({ retried: true })
+  expect(h.entries.get(first!.id)).toMatchObject({ state: 'queued', attempt: 0, reason: undefined })
+  // 清空只影响排队项，并返回实际取消数量。
+  expect(h.scheduler.clearQueue('a')).toEqual({ cancelled: 2 })
+  expect([...h.entries.values()].every(entry => entry.state === 'cancelled')).toBe(true)
+  expect(h.entries.get(second!.id)).toMatchObject({ state: 'cancelled', reason: expect.stringContaining('Cleared') })
+})
+
+it('取消运行中的条目会同时停止工单', async () => {
+  const h = setup({ a: project('a') }, 1)
+  h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const running = [...h.entries.values()].find(entry => entry.state === 'running')!
+  expect(h.scheduler.cancelEntry(running.id)).toEqual({ cancelled: true })
+  expect(h.entries.get(running.id)).toMatchObject({ state: 'cancelled', reason: expect.stringContaining('panel') })
+  expect(h.tickets.get(running.ticketId!)!.ended).toMatchObject({ outcome: 'stopped', by: 'human' })
+  // 已结束的条目不再被重复取消。
+  expect(h.scheduler.cancelEntry(running.id)).toEqual({ cancelled: false })
+  // 清空排队项不会影响已经结束的条目。
+  const queuedBefore = [...h.entries.values()].filter(entry => entry.state === 'queued').length
+  expect(h.scheduler.clearQueue()).toEqual({ cancelled: queuedBefore })
+})
+
 it('队列在数据库层保证活动条目唯一，并清理过期终态', () => {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-queue-unique-'))
   const path = join(directory, 'state.db')

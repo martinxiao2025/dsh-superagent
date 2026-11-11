@@ -39,6 +39,27 @@ it('lists projects with queue and runtime counts, then opens the project Tasks a
   expect(text()).toContain('t1')
 })
 
+it('sends retry, cancel and clear requests from the project queue', async () => {
+  server.settings = { ...server.settings, taskSources: { sheet: taskSource }, projects: { content: project } }
+  server.queueItems = [
+    queued('queued', { id: 'q1' }),
+    queued('running', { id: 'q2', ticketId: 't2' }),
+    queued('queued', { id: 'q3', state: 'failed' }),
+  ]
+  await mount()
+  await click(zh['tab.projects'])
+  await click('内容运营')
+  await click(zh.queueCancel)
+  await click(zh.queueStop)
+  await click(zh.queueRetry)
+  await click(zh.queueClear)
+  const posts = server.requests.filter(request => request.method === 'POST').map(request => request.path)
+  expect(posts.some(path => path.includes('queue/q1/cancel'))).toBe(true)
+  expect(posts.some(path => path.includes('queue/q2/cancel'))).toBe(true)
+  expect(posts.some(path => path.includes('queue/q3/retry'))).toBe(true)
+  expect(posts.some(path => path.includes('queue/clear'))).toBe(true)
+})
+
 it('creates a project from the settings and saves its polling and retry policy', async () => {
   server.settings = { ...server.settings, taskSources: { sheet: taskSource } }
   await mount()

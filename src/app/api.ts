@@ -77,6 +77,9 @@ export interface Api {
   'DELETE feishu-credentials/:id': { response: { removed: true } }
   'GET health': { response: HealthView }
   'GET queue': { response: QueueSnapshot }
+  'POST queue/:id/retry': { response: { retried: boolean } }
+  'POST queue/:id/cancel': { response: { cancelled: boolean } }
+  'POST queue/clear': { query?: { project?: string }; response: { cancelled: number } }
   'GET settings': { response: SettingsView }
   'POST sources/:id/labels': { response: { added: string[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }

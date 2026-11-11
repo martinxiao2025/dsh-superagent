@@ -351,6 +351,9 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET sources': { answer: sourceStatuses },
   'GET queue': { answer: () => ({ at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
     items: server.queueItems }) },
+  'POST queue/:id/retry': { answer: () => ({ retried: true }) },
+  'POST queue/:id/cancel': { answer: () => ({ cancelled: true }) },
+  'POST queue/clear': { query: ['project'], answer: () => ({ cancelled: 0 }) },
   'GET projects/:id/tasks': { answer: ({ params }) => {
     const project = server.settings.projects[params.id]
     if (!project) return refuse(404, 'Project not found')

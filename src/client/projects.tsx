@@ -53,10 +53,13 @@ export function ProjectsPage() {
   </>
 }
 
-/** 单项目详情：项目配置摘要与该项目队列中的任务状态。 */
+/** 单项目详情：项目配置摘要与该项目队列中的任务状态，并提供重试/取消/清空排队操作。 */
 export function ProjectPage({ id }: { id: string }) {
-  const { t, call, navigate } = usePanel()
+  const { t, call, notify, navigate } = usePanel()
   const { data, error } = usePoll(() => call('GET projects/:id/tasks', { id }), [id], 3000)
+  const retry = useAction((entryId: string) => call('POST queue/:id/retry', { id: entryId }))
+  const cancel = useAction((entryId: string) => call('POST queue/:id/cancel', { id: entryId }))
+  const clear = useAction(() => call('POST queue/clear', { query: { project: id } }))
   if (!data) return <><PageHead title={t('term.project')} />
     {error instanceof ApiError && error.missing ? <Hint>{t('projectNotFound')}</Hint> : <LoadState error={error} loading />}</>
   return <>
@@ -68,11 +71,15 @@ export function ProjectPage({ id }: { id: string }) {
       <LabelValue label={t('projectRunningLabel')} value={data.running} />
       <LabelValue label={t('queuedLabel')} value={data.queued} />
     </div>
-    <Section title={t('projectTasksTitle')} hint={t('projectTasksHint')} count={data.items.length}>
+    <Section title={t('projectTasksTitle')} hint={t('projectTasksHint')} count={data.items.length}
+      action={data.queued > 0 ? <Button variant="outline" size="sm" disabled={clear.busy}
+        onClick={() => { void clear.run().then(done => done && notify(t('queueCleared', { count: data.queued }))) }}>
+        {t('queueClear')}</Button> : undefined}>
       {data.items.length === 0 ? <Hint>{t('projectNoTasks')}</Hint> : <table className="dt-table">
         <thead><tr>
           <th>{t('projectTaskColumn')}</th><th>{t('projectTitleColumn')}</th><th>{t('projectStateColumn')}</th>
           <th>{t('projectAttemptColumn')}</th><th>{t('projectNextColumn')}</th><th>{t('term.ticket')}</th>
+          <th>{t('projectActionsColumn')}</th>
         </tr></thead>
         <tbody>{data.items.map(item => <tr key={item.id}>
           <td className="dt-mono">{item.task}{item.item > 0 ? `#${item.item + 1}` : ''}</td>
@@ -82,6 +89,14 @@ export function ProjectPage({ id }: { id: string }) {
           <td>{item.state === 'queued' ? when(new Date(item.dueAt).toISOString(), t('lang')) : ''}</td>
           <td>{item.ticketId && <button type="button" className="dt-textlink dt-mono"
             onClick={() => navigate({ page: 'execution', id: item.ticketId! })}>{item.ticketId}</button>}</td>
+          <td>{item.state === 'queued'
+            ? <Button variant="ghost" size="sm" disabled={cancel.busy}
+              onClick={() => { void cancel.run(item.id).then(done => done && notify(t('queueCancelled'))) }}>{t('queueCancel')}</Button>
+            : item.state === 'starting' || item.state === 'running'
+              ? <Button variant="ghost" size="sm" disabled={cancel.busy}
+                onClick={() => { void cancel.run(item.id).then(done => done && notify(t('queueCancelled'))) }}>{t('queueStop')}</Button>
+              : <Button variant="ghost" size="sm" disabled={retry.busy}
+                onClick={() => { void retry.run(item.id).then(done => done && notify(t('queueRetried'))) }}>{t('queueRetry')}</Button>}</td>
         </tr>)}</tbody>
       </table>}
     </Section>

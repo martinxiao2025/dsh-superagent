@@ -69,6 +69,12 @@ export interface HttpHost {
   configured(): boolean
   /** 项目调度队列的只读快照；P5 面板与外部集成读取。 */
   queue(): QueueSnapshot
+  /** 手动重试一个已结束或退避中的队列条目。 */
+  retryQueue(id: string): { retried: boolean }
+  /** 手动取消一个活动中的队列条目；运行中的工单会被停止。 */
+  cancelQueue(id: string): { cancelled: boolean }
+  /** 清空排队项；传入项目 ID 时只清理该项目的排队项。 */
+  clearQueue(project?: string): { cancelled: number }
   /** 项目被删除后清理它的队列记录并停止在跑的工单。 */
   forgetProject(projectId: string): void
   links(): LinkTarget
@@ -328,6 +334,10 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。
     'GET health': () => healthView(runtime, listen(), startup),
     'GET queue': () => runtime.queue(),
+    // 队列操作面：重试/取消单条，或清空排队项；运行中的任务不会被清空操作打断。
+    'POST queue/:id/retry': ({ params }) => runtime.retryQueue(params.id),
+    'POST queue/:id/cancel': ({ params }) => runtime.cancelQueue(params.id),
+    'POST queue/clear': ({ query }) => runtime.clearQueue(query.project || undefined),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
     'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),
     'GET threads': ({ query }) => {

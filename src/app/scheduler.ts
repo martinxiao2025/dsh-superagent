@@ -408,6 +408,40 @@ export class ProjectScheduler {
     this.changed()
   }
 
+  /**
+   * 手动重试一个已结束或退避中的队列条目：重置尝试次数并立刻重新排队。
+   * 排队中或正在执行的条目不做处理，避免重复派工；返回是否真的发生了重试。
+   */
+  retryEntry(id: string): { retried: boolean } {
+    const entry = this.host.store.queue.get(id)
+    if (!entry || queueActive(entry)) return { retried: false }
+    this.save({ ...entry, state: 'queued', attempt: 0, dueAt: this.now(), updatedAt: this.stamp(),
+      reason: undefined, endedAt: undefined, startedAt: undefined, ticketId: undefined })
+    this.pump()
+    return { retried: true }
+  }
+
+  /**
+   * 手动取消一个活动中的队列条目：运行中的工单先停止，再把条目标记为已取消。
+   * 已结束的条目保持原状，返回是否发生了取消。
+   */
+  cancelEntry(id: string): { cancelled: boolean } {
+    const entry = this.host.store.queue.get(id)
+    if (!entry || !queueActive(entry)) return { cancelled: false }
+    this.cancel(entry, 'Cancelled from the panel')
+    return { cancelled: true }
+  }
+
+  /**
+   * 清空排队项：只取消 `queued` 条目，运行中的任务不受影响；
+   * 传入项目 ID 时只清理该项目的排队项，返回被取消的条目数。
+   */
+  clearQueue(project?: string): { cancelled: number } {
+    const entries = this.host.store.queue.list().filter(entry => entry.state === 'queued' && (!project || entry.project === project))
+    for (const entry of entries) this.finish(entry, 'cancelled', 'Cleared from the panel')
+    return { cancelled: entries.length }
+  }
+
   /** 成功后回写任务状态；失败只记录在队列条目上，不改变工单结果。 */
   private writeBack(entry: QueueEntry, kind: 'done' | 'failed'): void {
     const settings = this.host.settings()
