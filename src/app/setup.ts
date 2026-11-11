@@ -13,6 +13,7 @@ import { Commands } from '../infra/commands.ts'
 import { repoDirectory, syncRepoWorkCopy } from '../code-repos/work.ts'
 import { probeRemote, remoteOf, sshKeyFile, type GitAuth } from '../code-repos/sync.ts'
 import { codeRepoType } from '../code-repos/types.ts'
+import { repositoryOfRemote } from '../code-repos/kind.ts'
 import { taskSources, type TaskSourceVerifyMeta } from '../task-sources/index.ts'
 import { TaskRepoError } from '../task-sources/kind.ts'
 import { LIMITS } from '../limits.ts'
@@ -56,6 +57,21 @@ const setupMaterial = (settings: Settings) => JSON.stringify({
 export const setupChanged = (before: Settings | undefined, after: Settings): boolean => !before || setupMaterial(before) !== setupMaterial(after)
 const checkPassed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck => ({ field, ok: true, scope: 'check', code, values })
 const checkFailed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck => ({ field, ok: false, scope: 'check', code, values })
+/**
+ * 按候选配置与 Git 凭据解析仓库远端：凭据决定认证方式；未绑定时沿用配置里的 auth 与 SSH key，
+ * 与项目保存后的解析保持同一套规则。
+ */
+const resolveCodeRepoRemote = (kind: string, config: Record<string, unknown>,
+  credential: { kind: 'ssh' | 'https'; username: string } | undefined, credentialAuth: GitAuth | undefined,
+  hosts: { github?: string; gitlab?: string }): { remote: string; credentialAuth: GitAuth | undefined; key: string } => {
+  const auth = credential?.kind ?? (config.auth === 'ssh' ? 'ssh' as const : 'https' as const)
+  const source = kind === 'github'
+    ? { kind: 'github' as const, instanceUrl: String(config.instanceUrl ?? ''), repository: String(config.repository ?? ''),
+      auth, remote: String(config.remote ?? '') }
+    : { kind: 'gitlab' as const, instanceUrl: String(config.instanceUrl ?? ''), project: String(config.project ?? ''),
+      auth, remote: String(config.remote ?? '') }
+  return { remote: remoteOf(source, '', hosts), credentialAuth, key: String(config.sshKey ?? '') }
+}
 /** `SetupError` 保留初始化问题的原始文案；其他异常只把消息暴露到 `output`。 */
 const checkThrown = (field: string, error: unknown): SourceCheck => error instanceof SetupError
   ? { field, ok: false, scope: 'setup', code: error.problem.code, values: error.problem.values }
@@ -187,6 +203,22 @@ export class Setup {
     })
   }
   /**
+   * 向导分支选择：按候选配置与 Git 凭据真实 `ls-remote`，返回分支列表与默认分支；
+   * 空仓库返回空列表。配置无效或远端不可达时抛错，由面板直接展示原因。
+   */
+  async listCodeRepoBranches(kind: string, config: unknown,
+    gitCredential = ''): Promise<{ remote: string; branches: string[]; defaultBranch: string }> {
+    const type = codeRepoType(kind)
+    if (!type) throw new Error(`未知的代码仓库类型：${kind}`)
+    const parsed = type.schema.safeParse(config ?? {})
+    if (!parsed.success) throw new Error(`仓库配置无效：${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`)
+    const { remote, credentialAuth, key } = resolveCodeRepoRemote(kind, parsed.data as Record<string, unknown>,
+      gitCredential ? this.host.gitCredential?.(gitCredential) : undefined, gitCredential ? this.host.gitAuth?.(gitCredential) : undefined,
+      { github: this.host.machine.githubHost.get(), gitlab: this.host.machine.gitlabHost.get() })
+    const refs = await probeRemote(this.probe(), remote, gitCredential ? '' : key, credentialAuth)
+    return { remote, branches: refs.branches, defaultBranch: refs.defaultBranch }
+  }
+  /**
    * 代码仓库的字段级预检：优先使用项目选择的 Git 凭据探测远端；
    * 未选择凭据时沿用 gh/glab 或本机 SSH key，保持无需凭据的既有用法。
    */
@@ -219,13 +251,9 @@ export class Setup {
       const auth = credential?.kind ?? (config.auth === 'ssh' ? 'ssh' as const : 'https' as const)
       const defaultHost = kind === 'gitlab' ? this.host.machine.gitlabHost.get() : this.host.machine.githubHost.get()
       const host = hostOf(String(config.instanceUrl ?? ''), defaultHost)
-      const key = String(config.sshKey ?? '')
-      const source = kind === 'github'
-        ? { kind: 'github' as const, instanceUrl: String(config.instanceUrl ?? ''), repository: String(config.repository ?? ''),
-          auth, remote: String(config.remote ?? '') }
-        : { kind: 'gitlab' as const, instanceUrl: String(config.instanceUrl ?? ''), project: String(config.project ?? ''),
-          auth, remote: String(config.remote ?? '') }
-      const remote = () => remoteOf(source, '', { github: this.host.machine.githubHost.get(), gitlab: this.host.machine.gitlabHost.get() })
+      const { remote: resolved, key } = resolveCodeRepoRemote(kind, config, credential, credentialAuth,
+        { github: this.host.machine.githubHost.get(), gitlab: this.host.machine.gitlabHost.get() })
+      const remote = () => resolved
       if (field === 'gitCredential') {
         if (!gitCredential) return checkPassed(field, 'codeRepoCredentialAuto')
         if (!credential || !credentialAuth) return checkFailed(field, 'codeRepoCredentialUnusable', { credential: gitCredential })
@@ -313,23 +341,27 @@ export class Setup {
     probe: ReturnType<Setup['probe']>): Promise<ResolvedSource> {
     const { machine } = this.host
     const credential = gitCredential ? this.host.gitCredential?.(gitCredential) : undefined
+    // 项目表单只填仓库全地址（config.remote）；站点与仓库路径在这里补齐，兼容旧的 owner/name 形态。
+    const derived = repositoryOfRemote(String(repo.config.remote ?? ''))
     if (!credential) {
-      const config = { ...repo.config, auth: repo.config.auth === 'ssh' ? 'ssh' : 'https' }
+      const config = { ...repo.config, auth: repo.config.auth === 'ssh' ? 'ssh' : 'https',
+        ...(derived && !String(repo.config.repository ?? '') && !String(repo.config.project ?? '')
+          ? { repository: derived.repository, project: derived.repository } : {}) }
       return repo.kind === 'github'
         ? resolveGithubSource(machine, id, config, probe)
         : resolveGitlabSource(machine, id, config, probe)
     }
     if (repo.kind === 'github') {
-      const repository = String(repo.config.repository ?? '')
-      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new SetupError('repositoryUnset', {}, id)
+      const repository = String(repo.config.repository ?? '') || (derived?.repository ?? '')
+      if (!repository) throw new SetupError('repositoryUnset', {}, id)
       return {
         id, kind: 'github', instanceUrl: String(repo.config.instanceUrl ?? ''),
         cli: String(repo.config.cli ?? ''), repository, login: credential.username, noreply: '',
         auth: credential.kind, remote: String(repo.config.remote ?? ''), sshKey: '', gitCredential,
       }
     }
-    const project = String(repo.config.project ?? '')
-    if (!/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/.test(project)) throw new SetupError('gitlabProjectUnset', {}, id)
+    const project = String(repo.config.project ?? '') || (derived?.repository ?? '')
+    if (!project) throw new SetupError('gitlabProjectUnset', {}, id)
     return {
       id, kind: 'gitlab', instanceUrl: String(repo.config.instanceUrl ?? ''),
       cli: String(repo.config.cli ?? ''), project, projectId: 0, login: credential.username, userId: 0,

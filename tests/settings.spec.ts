@@ -200,7 +200,8 @@ it('creates, reads and removes a project with its embedded repository and task s
   const repo = { kind: 'github' as const, config: { repository: 'acme/widgets' } }
   const source = { kind: 'excel', config: { file: '/tasks.csv' } }
   const project = await settings.createProject('project', { name: '支付重构', codeRepo: repo, taskSource: source }, 'panel')
-  expect(project).toMatchObject({ id: 'project', restarting: false })
+  // 新建与删除都会改变部署材料（仓库来源、凭据引用），与保存路径一样触发初始化重跑。
+  expect(project).toMatchObject({ id: 'project', restarting: true })
   expect(settings.view().projects).toMatchObject([{ id: 'project', name: '支付重构', enabled: true,
     codeRepo: 'github', taskSource: 'excel' }])
   expect(settings.block('project:project').value).toMatchObject({ name: '支付重构', codeRepo: repo, taskSource: source })
@@ -208,7 +209,7 @@ it('creates, reads and removes a project with its embedded repository and task s
   const block = settings.block('project:project')
   await settings.save('project:project', { ...(block.value as object), name: '支付重构二期' }, block.revision, 'panel')
   expect(store.settings().projects.project!.name).toBe('支付重构二期')
-  expect(await settings.removeProject('project', 'panel')).toMatchObject({ removed: true, restarting: false })
+  expect(await settings.removeProject('project', 'panel')).toMatchObject({ removed: true, restarting: true })
   expect(store.settings().projects).toEqual({})
 })
 

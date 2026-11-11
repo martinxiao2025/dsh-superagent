@@ -196,9 +196,12 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
   projects: Object.entries(server.settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
     value: project, revision: server.revisions[`project:${id}`] ?? 0 })),
   taskSourceKinds: [
-    { kind: 'feishu-im', title: { zh: '飞书消息', en: 'Feishu messages' }, description: { zh: '群消息', en: 'Chat messages' }, needsFeishuCredential: true, fields: [] },
-    { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, needsFeishuCredential: true, fields: [] },
-    { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, needsFeishuCredential: false, fields: [] },
+    { kind: 'feishu-im', title: { zh: '飞书消息', en: 'Feishu messages' }, description: { zh: '群消息', en: 'Chat messages' }, needsFeishuCredential: true,
+      fields: [{ key: 'chatId', type: 'text' as const, label: { zh: '群 ID', en: 'Chat ID' } }] },
+    { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, needsFeishuCredential: true,
+      fields: [{ key: 'spaceId', type: 'text' as const, label: { zh: '知识库 ID', en: 'Wiki space ID' } }] },
+    { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, needsFeishuCredential: false,
+      fields: [{ key: 'file', type: 'text' as const, label: { zh: '任务清单文件', en: 'Task list file' } }] },
   ],
   environment: { root: '/srv/dsh-superagent/work', variables: [
     { owner: 'executor', enabled: true, variables: [{ key: 'DSH_SUPERAGENT_DIR', description: { zh: '工单的执行目录',
@@ -400,6 +403,13 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       values: values[name] ?? {} })
     const keyFields = body.kind === 'gitlab' ? ['auth', 'project', 'remote', 'sshKey', 'cli'] : ['auth', 'repository', 'remote', 'sshKey', 'cli']
     return { checks: field === 'all' ? ['name', 'kind', 'id', ...keyFields].map(ok) : [ok(field)] }
+  } },
+  // 向导分支选择：测试里返回可预期的分支列表；真实 ls-remote 由宿主实现。
+  'POST code-repos/branches': { body: true, answer: ({ body }) => {
+    const config = (body.config ?? {}) as Record<string, unknown>
+    if (!config.remote && !config.repository && !config.project) throw new Error('remote: required')
+    return { remote: String(config.remote ?? 'git@github.com:acme/widgets.git'),
+      branches: ['main', 'develop'], defaultBranch: 'main' }
   } },
   'POST task-sources/verify': { body: true, answer: ({ body }) => {
     const field = body.field ?? 'all'

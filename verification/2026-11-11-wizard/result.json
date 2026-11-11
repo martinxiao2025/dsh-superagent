@@ -1,0 +1,511 @@
+{
+  "startedAt": "2026-11-11T23:23:05.256Z",
+  "stateDir": "C:\\Users\\61054\\.dsh\\state\\superagent",
+  "phases": [
+    {
+      "phase": "插件就绪",
+      "at": "2026-11-11T23:23:05.283Z",
+      "detail": {
+        "port": 54627,
+        "pid": 28784,
+        "at": "2026-11-11T23:22:48.951Z"
+      }
+    },
+    {
+      "phase": "启动本地 dumb HTTP git 服务（main + feature/desktop-live）",
+      "at": "2026-11-11T23:23:06.339Z",
+      "detail": {
+        "remote": "http://127.0.0.1:52573/live.git"
+      }
+    },
+    {
+      "phase": "创建 Git 凭据",
+      "at": "2026-11-11T23:23:06.360Z",
+      "detail": {
+        "id": "wizard-credential",
+        "revision": 1
+      }
+    },
+    {
+      "phase": "凭据验证（含仓库可达）通过",
+      "at": "2026-11-11T23:23:06.485Z",
+      "detail": {
+        "checks": [
+          {
+            "field": "material",
+            "ok": true,
+            "scope": "check",
+            "code": "gitCredentialMaterialOk",
+            "values": {
+              "hint": "••••oken"
+            }
+          },
+          {
+            "field": "repository",
+            "ok": true,
+            "scope": "check",
+            "code": "gitCredentialRemoteOk",
+            "values": {
+              "branches": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "phase": "仓库连通性验证通过（携带凭据）",
+      "at": "2026-11-11T23:23:06.932Z",
+      "detail": {
+        "checks": [
+          {
+            "field": "remote",
+            "ok": true,
+            "scope": "check",
+            "code": "codeRepoAccessible",
+            "values": {
+              "remote": "http://127.0.0.1:52573/live.git",
+              "branches": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "phase": "拉取远端分支",
+      "at": "2026-11-11T23:23:07.208Z",
+      "detail": {
+        "remote": "http://127.0.0.1:52573/live.git",
+        "branches": [
+          "feature/desktop-live",
+          "main"
+        ],
+        "defaultBranch": "main"
+      }
+    },
+    {
+      "phase": "任务来源验证通过（真实读取清单）",
+      "at": "2026-11-11T23:23:08.814Z",
+      "detail": {
+        "checks": [
+          {
+            "field": "file",
+            "ok": true,
+            "scope": "check",
+            "code": "taskFileStandardOk",
+            "values": {
+              "rows": "1",
+              "version": "1",
+              "warnings": ""
+            }
+          }
+        ]
+      }
+    },
+    {
+      "phase": "创建项目（分支 feature/desktop-live）",
+      "at": "2026-11-11T23:23:09.017Z",
+      "detail": {
+        "id": "wizard-project",
+        "revision": 1,
+        "restarting": true,
+        "context_delivery": "pending"
+      }
+    },
+    {
+      "phase": "管理接口恢复 ready",
+      "at": "2026-11-11T23:23:10.024Z",
+      "detail": {
+        "port": 54627,
+        "pid": 28784,
+        "at": "2026-11-11T23:23:09.569Z"
+      }
+    },
+    {
+      "phase": "调度轮询产生队列条目",
+      "at": "2026-11-11T23:23:12.040Z",
+      "detail": {
+        "id": "d529791ca264dfed07a08513b5f11051",
+        "project": "wizard-project",
+        "projectName": "向导直连验证",
+        "task": "WIZ-1794439385464",
+        "item": 0,
+        "title": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+        "state": "running",
+        "attempt": 0,
+        "dueAt": 1794439390272,
+        "ticketId": "cb1b9162b2bcf7b243e713819647603e",
+        "enqueuedAt": "2026-11-11T23:23:10.266Z",
+        "updatedAt": "2026-11-11T23:23:10.280Z"
+      }
+    },
+    {
+      "phase": "工作副本所在分支",
+      "at": "2026-11-11T23:23:12.061Z",
+      "detail": {
+        "branch": "feature/desktop-live"
+      }
+    },
+    {
+      "phase": "真实执行结束",
+      "at": "2026-11-11T23:23:15.080Z",
+      "detail": {
+        "queueState": "succeeded",
+        "outcome": "completed",
+        "ticketId": "cb1b9162b2bcf7b243e713819647603e"
+      }
+    },
+    {
+      "phase": "执行工作区 worktree",
+      "at": "2026-11-11T23:23:15.103Z",
+      "detail": {
+        "path": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\向导直连验证\\cb1b9162b2bcf7b243e713819647603e",
+        "head": "225bd1804688b10ed629d0c1302cb80dbbb20a67",
+        "featureHead": "225bd1804688b10ed629d0c1302cb80dbbb20a67",
+        "refMatches": true
+      }
+    },
+    {
+      "phase": "回写结果",
+      "at": "2026-11-11T23:23:15.104Z",
+      "detail": {
+        "bom": true,
+        "crlf": true,
+        "line": "WIZ-1794439385464,这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。,done,,P1"
+      }
+    },
+    {
+      "phase": "完成",
+      "at": "2026-11-11T23:23:15.105Z",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "phase": "停用项目以停止轮询",
+      "at": "2026-11-11T23:23:15.173Z",
+      "detail": {
+        "revision": 1
+      }
+    }
+  ],
+  "server": {
+    "remote": "http://127.0.0.1:52573/live.git",
+    "featureHead": "225bd1804688b10ed629d0c1302cb80dbbb20a67",
+    "taskId": "WIZ-1794439385464"
+  },
+  "startup": {
+    "port": 54627,
+    "pid": 28784,
+    "at": "2026-11-11T23:22:48.951Z"
+  },
+  "credentialChecks": {
+    "checks": [
+      {
+        "field": "material",
+        "ok": true,
+        "scope": "check",
+        "code": "gitCredentialMaterialOk",
+        "values": {
+          "hint": "••••oken"
+        }
+      },
+      {
+        "field": "repository",
+        "ok": true,
+        "scope": "check",
+        "code": "gitCredentialRemoteOk",
+        "values": {
+          "branches": "2"
+        }
+      }
+    ]
+  },
+  "repoChecks": {
+    "checks": [
+      {
+        "field": "remote",
+        "ok": true,
+        "scope": "check",
+        "code": "codeRepoAccessible",
+        "values": {
+          "remote": "http://127.0.0.1:52573/live.git",
+          "branches": "2"
+        }
+      }
+    ]
+  },
+  "branches": {
+    "remote": "http://127.0.0.1:52573/live.git",
+    "branches": [
+      "feature/desktop-live",
+      "main"
+    ],
+    "defaultBranch": "main"
+  },
+  "sourceChecks": {
+    "checks": [
+      {
+        "field": "file",
+        "ok": true,
+        "scope": "check",
+        "code": "taskFileStandardOk",
+        "values": {
+          "rows": "1",
+          "version": "1",
+          "warnings": ""
+        }
+      }
+    ]
+  },
+  "queueAfterPoll": {
+    "at": "2026-11-11T23:23:12.044Z",
+    "maxWorkers": 3,
+    "used": 1,
+    "projects": [
+      {
+        "id": "wizard-project",
+        "name": "向导直连验证",
+        "enabled": true,
+        "nextPollAt": "2026-11-11T23:53:09.567Z"
+      }
+    ],
+    "items": [
+      {
+        "id": "d529791ca264dfed07a08513b5f11051",
+        "project": "wizard-project",
+        "projectName": "向导直连验证",
+        "task": "WIZ-1794439385464",
+        "item": 0,
+        "title": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+        "state": "running",
+        "attempt": 0,
+        "dueAt": 1794439390272,
+        "ticketId": "cb1b9162b2bcf7b243e713819647603e",
+        "enqueuedAt": "2026-11-11T23:23:10.266Z",
+        "updatedAt": "2026-11-11T23:23:10.280Z"
+      }
+    ]
+  },
+  "workCopyBranch": "feature/desktop-live",
+  "queueFinal": {
+    "at": "2026-11-11T23:23:15.085Z",
+    "maxWorkers": 3,
+    "used": 0,
+    "projects": [
+      {
+        "id": "wizard-project",
+        "name": "向导直连验证",
+        "enabled": true,
+        "nextPollAt": "2026-11-11T23:53:09.567Z"
+      }
+    ],
+    "items": [
+      {
+        "id": "d529791ca264dfed07a08513b5f11051",
+        "project": "wizard-project",
+        "projectName": "向导直连验证",
+        "task": "WIZ-1794439385464",
+        "item": 0,
+        "title": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+        "state": "succeeded",
+        "attempt": 0,
+        "dueAt": 1794439390272,
+        "ticketId": "cb1b9162b2bcf7b243e713819647603e",
+        "enqueuedAt": "2026-11-11T23:23:10.266Z",
+        "updatedAt": "2026-11-11T23:23:12.392Z"
+      }
+    ]
+  },
+  "ticket": {
+    "id": "cb1b9162b2bcf7b243e713819647603e",
+    "title": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+    "state": "ended",
+    "stage": "ended",
+    "actions": {
+      "retry": false,
+      "stop": false
+    },
+    "strength": "explicit",
+    "ended": {
+      "at": "2026-11-11T23:23:12.391Z",
+      "by": "executor",
+      "outcome": "completed"
+    },
+    "assignments": [
+      {
+        "id": "3c4e4ae72f50fc469e1648080f101187",
+        "state": "ended",
+        "createdAt": "2026-11-11T23:23:10.277Z",
+        "startedAt": "2026-11-11T23:23:10.873Z",
+        "report": {
+          "state": "ready",
+          "summary": "wizard-live-ok",
+          "at": "2026-11-11T23:23:12.391Z"
+        },
+        "endedAt": "2026-11-11T23:23:12.391Z",
+        "ref": "worker-cb1b9162b2bcf7b243e713819647603e"
+      }
+    ],
+    "inputs": [],
+    "undelivered": 0,
+    "sessionId": "worker-cb1b9162b2bcf7b243e713819647603e",
+    "directory": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\向导直连验证\\cb1b9162b2bcf7b243e713819647603e",
+    "project": "wizard-project",
+    "summary": "wizard-live-ok",
+    "createdAt": "2026-11-11T23:23:10.275Z",
+    "updatedAt": "2026-11-11T23:23:12.391Z",
+    "threads": [
+      {
+        "key": "repo-wizard-project:schedule/wizard-project",
+        "source": "repo-wizard-project",
+        "title": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改",
+        "stage": "dormant",
+        "latest": {
+          "actor": {
+            "source": "repo-wizard-project",
+            "id": "wizard-project",
+            "name": {
+              "zh": "wizard-project",
+              "en": "wizard-project"
+            }
+          },
+          "human": false,
+          "at": "2026-11-11T23:23:10.275Z",
+          "preview": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。"
+        },
+        "lastAt": "2026-11-11T23:23:10.275Z",
+        "createdAt": "2026-11-11T23:23:10.275Z",
+        "subscriptions": 1,
+        "tickets": [
+          {
+            "id": "cb1b9162b2bcf7b243e713819647603e",
+            "title": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+            "state": "ended"
+          }
+        ],
+        "pending": 0,
+        "facts": {}
+      }
+    ],
+    "mandate": {
+      "strength": "explicit",
+      "policyVersion": "9fbbf9a0cf77f5da1785bc7d03d13b0b",
+      "scope": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+      "actor": {
+        "source": "repo-wizard-project",
+        "id": "wizard-project",
+        "name": {
+          "zh": "wizard-project",
+          "en": "wizard-project"
+        }
+      },
+      "basis": {
+        "via": "scheduled",
+        "source": "repo-wizard-project",
+        "scope": {
+          "project": "wizard-project",
+          "task": "WIZ-1794439385464",
+          "item": "0"
+        },
+        "project": "wizard-project",
+        "task": "WIZ-1794439385464"
+      }
+    },
+    "basis": {
+      "facts": [
+        {
+          "name": "scheduled",
+          "value": "WIZ-1794439385464"
+        }
+      ],
+      "legacy": false
+    },
+    "paused": false,
+    "channels": [],
+    "decision": {
+      "id": "bebf2fb386d22e0dd67028aa5d21c904",
+      "kind": "accept",
+      "outcome": "accept",
+      "reason": [
+        {
+          "code": "said",
+          "values": {
+            "text": "Scheduled from 向导直连验证"
+          }
+        }
+      ],
+      "at": "2026-11-11T23:23:10.275Z",
+      "strength": "explicit",
+      "ticketId": "cb1b9162b2bcf7b243e713819647603e",
+      "triggerIds": [
+        "7459434da1a7f124d7dceb3262b279f8"
+      ],
+      "thread": "repo-wizard-project:schedule/wizard-project",
+      "rules": [],
+      "threadTitle": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改",
+      "preview": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。",
+      "ticketTitle": "这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。"
+    },
+    "environment": [
+      {
+        "key": "DSH_SUPERAGENT_DIR",
+        "value": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\向导直连验证\\cb1b9162b2bcf7b243e713819647603e",
+        "description": {
+          "zh": "这个工单的执行目录（项目目录下按工单 id 命名的子目录）；执行器 Session 在其中工作",
+          "en": "This ticket's directory, a subdirectory named after the ticket id inside its project; the executor Session works in it"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_NAME",
+        "value": "task-wiz-1794439385464-cb1b9162b2bc",
+        "description": {
+          "zh": "工单的短名，用于分支与工单标识；执行目录按项目和工单 id 命名，见 DSH_SUPERAGENT_DIR",
+          "en": "The ticket's short name, used for its branch; the directory is named after the project and the ticket id, see DSH_SUPERAGENT_DIR"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_TICKET",
+        "value": "cb1b9162b2bcf7b243e713819647603e",
+        "description": {
+          "zh": "工单 id",
+          "en": "The ticket id"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_SOURCE",
+        "value": "repo-wizard-project",
+        "description": {
+          "zh": "这个工单的来源记录 id；执行环境只按该记录注入变量",
+          "en": "This ticket's Source record id; the execution environment only uses that record"
+        },
+        "owner": "executor"
+      },
+      {
+        "key": "DSH_SUPERAGENT_BLOCKED_COMMANDS",
+        "value": "",
+        "description": {
+          "zh": "这个执行环境禁止调用的命令，以空格分隔；不要运行它们",
+          "en": "Commands blocked in this execution environment, separated by spaces; never run them"
+        },
+        "owner": "executor"
+      }
+    ]
+  },
+  "workspace": {
+    "path": "C:\\Users\\61054\\.dsh\\state\\superagent\\work\\向导直连验证\\cb1b9162b2bcf7b243e713819647603e",
+    "head": "225bd1804688b10ed629d0c1302cb80dbbb20a67",
+    "featureHead": "225bd1804688b10ed629d0c1302cb80dbbb20a67",
+    "refMatches": true
+  },
+  "writeback": {
+    "file": "C:\\Users\\61054\\.dsh\\state\\superagent\\repos\\repo-wizard-project\\tasks\\backlog.csv",
+    "bom": true,
+    "crlf": true,
+    "text": "﻿task_id,title,status,description,priority\r\nWIZ-1794439385464,这是向导全流程验证任务：请直接调用 orchestrator_report 报告 state=ready、summary=wizard-live-ok，不要修改任何文件。,done,,P1\r\n"
+  },
+  "finishedAt": "2026-11-11T23:23:15.105Z",
+  "ok": true
+}

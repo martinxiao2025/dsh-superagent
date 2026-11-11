@@ -4,6 +4,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { hasEmbeddedCredentials, probeRemote, redactCredentials, remoteOf, sshCommandOf, sshKeyFile, syncCode } from '../src/code-repos/sync.ts'
+import { repositoryOfRemote } from '../src/code-repos/kind.ts'
 import type { Commands } from '../src/infra/commands.ts'
 
 const github = { kind: 'github' as const, instanceUrl: '', repository: 'acme/widgets', auth: 'https' as const, remote: '', sshKey: '' }
@@ -20,6 +21,17 @@ const fake = (source: unknown, run: (args: string[]) => string | Promise<string>
 }
 
 describe('remote address', () => {
+  it('derives the host and repository path from a full remote URL', () => {
+    expect(repositoryOfRemote('https://github.com/acme/widgets.git')).toEqual({ host: 'github.com', repository: 'acme/widgets' })
+    expect(repositoryOfRemote('https://github.com/acme/widgets')).toEqual({ host: 'github.com', repository: 'acme/widgets' })
+    expect(repositoryOfRemote('git@github.com:acme/widgets.git')).toEqual({ host: 'github.com', repository: 'acme/widgets' })
+    expect(repositoryOfRemote('ssh://git@lab.example.com/group/sub/widgets.git'))
+      .toEqual({ host: 'lab.example.com', repository: 'group/sub/widgets' })
+    // 本地 dumb HTTP 服务的单段路径同样可用：派工只依赖远端地址本身。
+    expect(repositoryOfRemote('http://127.0.0.1:57956/live.git')).toEqual({ host: '127.0.0.1:57956', repository: 'live' })
+    expect(repositoryOfRemote('not a url')).toBeUndefined()
+  })
+
   it('derives HTTPS or SSH from the record without hard-coding HTTPS', () => {
     expect(remoteOf(github)).toBe('https://github.com/acme/widgets.git')
     expect(remoteOf({ ...github, auth: 'ssh' })).toBe('git@github.com:acme/widgets.git')
@@ -122,6 +134,48 @@ describe('syncCode', () => {
     expect(calls).toContainEqual(['init', '--quiet'])
     expect(calls).toContainEqual(['remote', 'add', 'origin', 'https://github.com/acme/widgets.git'])
     expect(calls.some(args => args.includes('set-url'))).toBe(false)
+  })
+
+  it('rebuilds the mirror when the remote URL changed instead of merging unrelated histories', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake(github, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return `${directory}\n`
+        if (args.includes('--verify') && args.some(arg => arg.startsWith('refs/heads/'))) throw new Error('missing ref')
+        if (args.includes('--verify')) return 'refs/remotes/origin/main'
+        return 'abc123'
+      }
+      if (name === 'remote') return args[1] === 'get-url' ? 'https://github.com/acme/old.git\n' : ''
+      if (name === 'for-each-ref') return 'origin/main'
+      return ''
+    })
+    await syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal })
+    // 远端更换：先删除旧镜像再重新 init，而不是对旧历史做 set-url + merge。
+    expect(calls.some(args => args.includes('set-url'))).toBe(false)
+    expect(calls.filter(args => args[0] === 'init' || args[0] === 'remote').length).toBeGreaterThanOrEqual(2)
+    expect(calls).toContainEqual(['remote', 'add', 'origin', 'https://github.com/acme/widgets.git'])
+  })
+
+  it('keeps the mirror and only rewrites the URL when the remote is unchanged', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake(github, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return `${directory}\n`
+        if (args.includes('--verify') && args.some(arg => arg.startsWith('refs/heads/'))) return 'refs/heads/main'
+        if (args.includes('--verify')) return 'refs/remotes/origin/main'
+        return 'abc123'
+      }
+      if (name === 'remote') return args[1] === 'get-url' ? 'https://github.com/acme/widgets.git\n' : ''
+      if (name === 'for-each-ref') return 'origin/main'
+      return ''
+    })
+    await syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal })
+    expect(calls).toContainEqual(['remote', 'set-url', 'origin', 'https://github.com/acme/widgets.git'])
+    expect(calls.some(args => args[0] === 'init')).toBe(false)
   })
 
   it('refuses a record that is not a GitHub or GitLab repository', async () => {

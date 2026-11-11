@@ -367,8 +367,12 @@ export class Settings {
       store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
       if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
     })
-    const delivery = await sessions.delivery(`settings:${block}`)
-    return { id, revision: store.blockRevision(block), restarting: false as const, context_delivery: delivery }
+    // 新建项目同样可能改变部署材料（仓库、凭据引用），需要按 save 的同一规则触发初始化重跑，
+    // 否则部署里没有新项目的仓库来源，调度轮询会以「记录必须是 GitHub 或 GitLab」失败。
+    const restarting = setupChanged(current, settings) || !this.host.setup.configured()
+    const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    if (restarting) this.host.setup.restart()
+    return { id, revision: store.blockRevision(block), restarting, context_delivery: delivery }
   }
   /** 删除记录并写入变更通知。 */
   private async removeRecord(block: SettingsSave, settings: SettingsValue, current: SettingsValue, origin: SettingsOrigin) {
@@ -377,8 +381,11 @@ export class Settings {
       store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
       if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
     })
-    const delivery = await sessions.delivery(`settings:${block}`)
-    return { removed: true as const, restarting: false as const, context_delivery: delivery }
+    // 删除项目同样改变部署材料：仓库来源要在初始化重跑后移出部署，避免残留可同步的孤儿记录。
+    const restarting = setupChanged(current, settings) || !this.host.setup.configured()
+    const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    if (restarting) this.host.setup.restart()
+    return { removed: true as const, restarting, context_delivery: delivery }
   }
   /** 删除记录后释放它拥有的 `sync:<id>` 健康项，并取消待处理的策略同步重试。 */
   private releaseSource(id: string): void {

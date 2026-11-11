@@ -131,6 +131,10 @@ it('builds the task source kind dropdown from the driver catalog inside the proj
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await type(field(zh.sourceName), '内容运营')
   await click(zh.projectNext)
+  // 仓库步先验证连通并选定分支，才能进入任务来源步查看类型目录。
+  await type(field('仓库地址'), 'https://github.com/acme/content.git')
+  await click(document.querySelector(`[aria-label="${zh.verify} · 仓库地址"]`) as HTMLElement)
+  await settle()
   await click(zh.projectNext)
   await settle()
   expect(all('.dt-add-grid select.dt-select option').map(option => option.textContent))

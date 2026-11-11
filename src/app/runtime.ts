@@ -357,6 +357,7 @@ export class Runtime extends Service implements SourceHost {
       checkSetup: () => { setup.check() },
       checkSource: (kind, config, field, meta) => setup.checkSource(kind, config, field, sources, meta),
       checkCodeRepo: (kind, config, field, meta) => setup.checkCodeRepo(kind, config, field, meta),
+      listCodeRepoBranches: (kind, config, gitCredential) => setup.listCodeRepoBranches(kind, config, gitCredential ?? ''),
       checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, meta),
       requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
       reset: () => runtime.reset() }

@@ -552,8 +552,10 @@ export class ProjectScheduler {
     const project = this.host.settings().projects[projectId]
     const repoId = projectRepoId(projectId)
     const auth = project?.gitCredential ? this.host.gitAuth?.(project.gitCredential) : undefined
+    // 工作副本跟随项目选定的分支：清单轮询、回写与执行 worktree 都落在同一分支上；
+    // 未选择分支时留空，按远端默认分支检出。
     const result = await syncRepoWorkCopy({ commands: this.host.commands.scope(repoId), stateDir: this.host.stateDir, repo: repoId,
-      signal: this.host.lifetime, ...(auth ? { auth } : {}) })
+      branch: project?.execution.branch, signal: this.host.lifetime, ...(auth ? { auth } : {}) })
     if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repoId}`)
     return result.directory
   }

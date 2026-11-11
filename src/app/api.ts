@@ -40,6 +40,11 @@ export interface Api {
     body: { kind: 'github' | 'gitlab'; id?: string; name?: string; config?: unknown; field?: string; gitCredential?: string }
     response: { checks: SourceCheck[] }
   }
+  /** 向导分支选择：按候选配置与 Git 凭据真实 ls-remote，返回分支列表与默认分支。 */
+  'POST code-repos/branches': {
+    body: { kind: 'github' | 'gitlab'; config?: unknown; gitCredential?: string }
+    response: { remote: string; branches: string[]; defaultBranch: string }
+  }
   /** 016 标准任务清单模板；内容是 base64 编码的 xlsx。 */
   'GET task-format/template': { response: { filename: string; content: string } }
   /** 任务来源预检：仓库候选与凭据由项目提供，驱动据此读取真实任务。 */
@@ -49,8 +54,8 @@ export interface Api {
     response: { checks: SourceCheck[] }
   }
   /** 新建项目接受完整配置：向导一次提交仓库、任务来源、执行目录、轮询、重试与状态策略。 */
-  'POST projects': { body: { id?: string } & Project; response: { id: string; revision: number; restarting: false } }
-  'DELETE projects/:id': { response: { removed: true; restarting: false } }
+  'POST projects': { body: { id?: string } & Project; response: { id: string; revision: number; restarting: boolean } }
+  'DELETE projects/:id': { response: { removed: true; restarting: boolean } }
   'GET projects/:id/tasks': { response: ProjectTasksView }
   'GET git-credentials': { response: { credentials: GitCredentialView[] } }
   'GET git-credentials/:id': { response: GitCredentialView }

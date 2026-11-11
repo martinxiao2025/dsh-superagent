@@ -69,6 +69,11 @@ it('leads the task source step with its type and hides fields the type does not 
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await type(field(zh.sourceName), '内容运营')
   await click(zh.projectNext)
+  // 仓库步必须先验证连通并选定分支，才允许进入任务来源步。
+  await type(field('仓库地址'), 'https://github.com/acme/content.git')
+  await click(document.querySelector(`[aria-label="${zh.verify} · 仓库地址"]`) as HTMLElement)
+  await settle()
+  expect(field<HTMLSelectElement>(zh.projectBranch).value).toBe('main')
   await click(zh.projectNext)
   const wizard = document.querySelector(`[aria-label="${zh.projectWizardTitle}"]`)!
   // 来源类型是任务来源步骤的第一个下拉，默认 Excel；Excel 不显示飞书凭据。
@@ -87,11 +92,17 @@ it('creates a project through the four-step wizard and saves the full configurat
   expect(text()).toContain(zh.projectWizardTitle)
   await type(field(zh.sourceName), '内容运营')
   await click(zh.projectNext)
-  await type(field('代码仓库'), 'acme/content')
+  // 仓库步：填地址、验证连通，分支由向导按远端默认分支自动选中。
+  await type(field('仓库地址'), 'https://github.com/acme/content.git')
+  await click(document.querySelector(`[aria-label="${zh.verify} · 仓库地址"]`) as HTMLElement)
+  await settle()
+  expect(field<HTMLSelectElement>(zh.projectBranch).value).toBe('main')
   await click(zh.projectNext)
+  // 任务来源步：验证清单文件真实可读后才允许继续。
+  await click(document.querySelector(`[aria-label="${zh.verify} · 任务清单文件"]`) as HTMLElement)
+  await settle()
   await click(zh.projectNext)
   await type(field(zh.projectDirectory), '/srv/work/content')
-  await type(field(zh.projectBranch), 'main')
   await type(field(zh.projectInterval), '5')
   await type(field(zh.projectMaxRetries), '4')
   await type(field(zh.projectBackoff), '30')
@@ -99,7 +110,7 @@ it('creates a project through the four-step wizard and saves the full configurat
   await click(zh.projectCreate)
   await settle()
   expect(server.settings.projects.project).toMatchObject({
-    name: '内容运营', codeRepo: { kind: 'github', config: { repository: 'acme/content' } },
+    name: '内容运营', codeRepo: { kind: 'github', config: { remote: 'https://github.com/acme/content.git', auth: 'https' } },
     taskSource: { kind: 'excel', config: {} }, gitCredential: '', feishuCredential: '',
     execution: { directory: '/srv/work/content', branch: 'main' },
     schedule: { intervalMinutes: 5, runOnStart: true },
@@ -122,8 +133,27 @@ it('edits the code repository embedded in the project', async () => {
   await click(zh['tab.settings'])
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await click(zh.edit)
-  await type(field('代码仓库'), 'acme/next')
+  await type(field('仓库地址'), 'https://github.com/acme/next.git')
   await click(zh.save)
-  expect(server.settings.projects.content?.codeRepo).toEqual({ kind: 'github', config: { repository: 'acme/next' } })
+  expect(server.settings.projects.content?.codeRepo).toEqual({ kind: 'github', config: { remote: 'https://github.com/acme/next.git', auth: 'https' } })
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:content'])
+})
+
+it('locks the repository kind and records the auth mode when a Git credential is bound', async () => {
+  server.gitCredentials = [{ id: 'cred', name: '机器人凭据', kind: 'https', provider: 'github', username: 'agent-bot', note: '',
+    origin: 'pasted' as const, keyPath: '', revision: 1, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••oken' }]
+  await mount()
+  await click(zh['tab.projects'])
+  await click(find(zh['tab.settings'], '.dt-status-head button'))
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
+  await type(field(zh.sourceName), '内容运营')
+  await click(zh.projectNext)
+  await type(field<HTMLSelectElement>(zh.projectGitCredentialLabel), 'cred')
+  // 仓库类型随凭据锁定为 GitHub；cli 与 SSH key 等低级栏位不再出现，只剩仓库地址。
+  const wizard = document.querySelector(`[aria-label="${zh.projectWizardTitle}"]`)!
+  const kindSelect = field<HTMLSelectElement>(zh.projectRepoKind, wizard)
+  expect(kindSelect.disabled).toBe(true)
+  expect(kindSelect.value).toBe('github')
+  expect(() => field('智能体的 GitHub CLI', wizard)).toThrow()
+  expect(field(zh.projectRepoUrl, wizard)).toBeTruthy()
 })

@@ -1,6 +1,7 @@
 /** 项目页签与项目设置：项目自带代码仓库与任务来源，直接引用 Git 与飞书凭据。 */
 import { useEffect, useState, type ReactElement } from 'react'
 import type { FeishuCredentialView } from '../feishu-credentials/kind.ts'
+import { repositoryOfRemote } from '../code-repos/kind.ts'
 import type { GitCredentialView } from '../git-credentials/kind.ts'
 import type { FieldSpec, Localized } from '../sources/kind.ts'
 import type { SourceCheck } from '../setup.ts'
@@ -32,6 +33,10 @@ function sourceSummary(t: T, settings: SettingsView, value: ProjectView['value']
   return kind ? localized(t, kind.title) : value.taskSource.kind
 }
 
+/** 任务来源的主字段：连通性验证以它为准（Excel 读真实清单，飞书读真实空间或群）。 */
+const SOURCE_PRIMARY: Record<string, string> = { excel: 'file', 'feishu-wiki': 'spaceId', 'feishu-im': 'chatId' }
+const sourcePrimaryField = (kind: string): string => SOURCE_PRIMARY[kind] ?? 'file'
+
 /** 读取 Git 与飞书凭据；它们不属于设置快照，进入项目表单时单独读取一次。 */
 function useCredentials() {
   const { call } = usePanel()
@@ -62,7 +67,7 @@ function VerifyRow({ label, busy, check, onVerify, children }: { label: string; 
   </div>
 }
 
-/** 代码仓库编辑：类型、Git 凭据与类型字段；凭据引用保存在项目上，仓库配置只含类型字段。 */
+/** 代码仓库编辑：Git 凭据（认证方式随凭据）、仓库全地址与分支；站点与仓库路径由地址推导，不再单独填写。 */
 function RepoEditor({ kinds, value, credential, credentials, checks, checking, credentialError, onChange, onCredential,
   onVerify }: {
   kinds: readonly CodeRepoKindView[]
@@ -77,29 +82,56 @@ function RepoEditor({ kinds, value, credential, credentials, checks, checking, c
   onVerify: (field: string) => void
 }) {
   const { t } = usePanel()
-  const spec = kinds.find(item => item.kind === value.kind)
-  const setConfig = (field: FieldSpec, next: unknown) => onChange({ ...value, config: { ...value.config, [field.key]: next } })
+  /** 绑定的凭据决定仓库类型（github/gitlab 凭据）与认证方式；generic 凭据或未绑定时由用户选择。 */
+  const bound = credentials.find(item => item.id === credential)
+  const kindLocked = bound !== undefined && bound.provider !== 'generic'
+  /** 旧记录回填：没有全地址时按 owner/name 推导一个展示地址，用户不改动就不落回配置。 */
+  const displayUrl = String(value.config.remote ?? '')
+    || (typeof value.config.repository === 'string' && value.config.repository
+      ? `https://github.com/${value.config.repository}.git`
+      : typeof value.config.project === 'string' && value.config.project
+        ? `https://gitlab.com/${value.config.project}.git` : '')
+  /** 输入仓库全地址：推导仓库类型（凭据绑定时类型锁定）与认证方式，写进 config.remote；
+   *  同时清掉旧的 owner/name 键，避免改地址后残留的 repository/project 覆盖从地址推导的路径。 */
+  const setRemote = (next: string) => {
+    const info = repositoryOfRemote(next)
+    const kind: RepoKind = !info || kindLocked ? value.kind : info.host.includes('gitlab') ? 'gitlab' : 'github'
+    const auth = bound?.kind ?? (next.trim().startsWith('git@') || next.trim().startsWith('ssh://') ? 'ssh' : 'https')
+    const { repository: _repository, project: _project, ...rest } = value.config
+    onChange({ kind, config: { ...rest, remote: next, auth } })
+  }
+  /** 选择凭据：github/gitlab 凭据直接决定仓库类型并重置配置，generic 凭据保留类型并记录认证方式。 */
+  const chooseCredential = (next: string) => {
+    onCredential(next)
+    const target = credentials.find(item => item.id === next)
+    if (!target) return
+    const kind = target.provider === 'gitlab' ? 'gitlab' as const : target.provider === 'github' ? 'github' as const : ''
+    if (!kind || kind === value.kind) onChange({ kind: value.kind, config: { ...value.config, auth: target.kind } })
+    else onChange({ kind, config: { auth: target.kind } })
+  }
   return <>
     <VerifyRow label={t('projectGitCredentialLabel')} busy={checking.gitCredential === true} check={checks.gitCredential}
       onVerify={() => onVerify('gitCredential')}>
       <Field label={t('projectGitCredentialLabel')} hint={t('projectGitCredentialHint')} note={credentialError}>
-        <select className="dt-select" value={credential} onChange={event => onCredential(event.target.value)}>
+        <select className="dt-select" value={credential} onChange={event => chooseCredential(event.target.value)}>
           <option value="">{t('projectGitCredentialNone')}</option>
-          {credentials.map(item => <option key={item.id} value={item.id}>{item.name} ({item.id})</option>)}
+          {credentials.map(item => <option key={item.id} value={item.id}>
+            {item.name} ({item.id} · {item.kind === 'ssh' ? 'SSH' : 'HTTPS'})</option>)}
         </select>
       </Field>
     </VerifyRow>
-    <Field label={t('projectRepoKind')} hint={t('projectRepoKindHint')}>
-      <select className="dt-select" value={value.kind}
+    <Field label={t('projectRepoKind')} hint={kindLocked ? t('projectRepoKindLockedHint') : t('projectRepoKindHint')}>
+      <select className="dt-select" value={value.kind} disabled={kindLocked}
         onChange={event => onChange({ kind: event.target.value as RepoKind, config: {} })}>
         {kinds.map(item => <option key={item.kind} value={item.kind}>{localized(t, item.title)}</option>)}
       </select>
     </Field>
-    {(spec?.fields ?? []).map(field => <VerifyRow key={field.key} label={localized(t, field.label)}
-      busy={checking[field.key] === true} check={checks[field.key]} onVerify={() => onVerify(field.key)}>
-      <SourceField field={field} value={value.config[field.key]} saved={undefined} fact={undefined} labels={{}}
-        onChange={next => setConfig(field, next)} />
-    </VerifyRow>)}
+    <VerifyRow label={t('projectRepoUrl')} busy={checking.remote === true} check={checks.remote} onVerify={() => onVerify('remote')}>
+      <Field label={t('projectRepoUrl')} hint={t('projectRepoUrlHint')}>
+        <Input className="dt-mono" value={displayUrl} placeholder={t('projectRepoUrlEmpty')}
+          onChange={event => setRemote(event.target.value)} />
+      </Field>
+    </VerifyRow>
   </>
 }
 
@@ -303,8 +335,11 @@ function ProjectWizard() {
   const [source, setSource] = useState<SourceValue>(() => emptySource(settings.taskSourceKinds))
   const [gitCredential, setGitCredential] = useState('')
   const [feishuCredential, setFeishuCredential] = useState('')
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
+  const [repoChecks, setRepoChecks] = useState<Record<string, SourceCheck>>({})
+  const [sourceChecks, setSourceChecks] = useState<Record<string, SourceCheck>>({})
   const [checking, setChecking] = useState<Record<string, boolean>>({})
+  const [branches, setBranches] = useState<string[]>([])
+  const [defaultBranch, setDefaultBranch] = useState('')
   const [directory, setDirectory] = useState('')
   const [branch, setBranch] = useState('')
   const [intervalMinutes, setIntervalMinutes] = useState(PROJECT_DEFAULTS.intervalMinutes)
@@ -317,18 +352,38 @@ function ProjectWizard() {
   const interval = Number(intervalMinutes), retries = Number(maxRetries), backoff = Number(retryBackoffSeconds)
   const numbersValid = [interval, retries, backoff].every(value => Number.isInteger(value) && value >= 0)
   const policyValid = [pendingStatuses, doneStatus, failedStatus].every(value => value.trim() !== '')
+  /** 仓库步就绪：全地址已填、连通性验证通过且已选分支；配置或凭据变更后必须重新验证。 */
+  const repoConnected = repoChecks.remote?.ok === true
+  const sourceVerified = sourceChecks[sourcePrimaryField(source.kind)]?.ok === true
   const ready = name.trim() !== '' && source.kind !== '' && numbersValid && policyValid
-  const stepReady: Record<ProjectStep, boolean> = { basics: name.trim() !== '', codeRepo: true,
-    taskSource: source.kind !== '', execution: numbersValid && policyValid }
+  const stepReady: Record<ProjectStep, boolean> = { basics: name.trim() !== '',
+    codeRepo: String(repo.config.remote ?? '').trim() !== '' && repoConnected && branch.trim() !== '',
+    taskSource: source.kind !== '' && sourceVerified, execution: numbersValid && policyValid }
   const position = PROJECT_STEPS.indexOf(step)
   const sourceName = settings.taskSourceKinds.find(item => item.kind === source.kind)
-  /** 仓库字段预检：候选配置与 Git 凭据一起提交，不写入设置。 */
+  /** 拉取远端分支：向导在仓库连通后据此渲染分支选择；已选分支仍在列表里时保持不变。 */
+  const fetchBranches = useAction(async () => {
+    const result = await call('POST code-repos/branches', { body: { kind: repo.kind, config: repo.config, gitCredential } })
+    setBranches(result.branches)
+    setDefaultBranch(result.defaultBranch)
+    setBranch(current => current && result.branches.includes(current) ? current : result.defaultBranch || current)
+  })
+  /** 仓库或凭据变更：清空验证结果与分支，逼着用户对新配置重新验证，避免把旧结论带进下一步。
+   *  仓库类型与认证方式随凭据的联动在 RepoEditor 内完成。 */
+  const updateRepo = (next: RepoValue) => { setRepo(next); setRepoChecks({}); setBranches([]); setDefaultBranch(''); setBranch('') }
+  const updateGitCredential = (next: string) => {
+    setGitCredential(next); setRepoChecks({}); setBranches([]); setDefaultBranch(''); setBranch('')
+  }
+  /** 任务来源变更：同样清空该步的验证结果。 */
+  const updateSource = (next: SourceValue) => { setSource(next); setSourceChecks({}) }
+  /** 仓库字段预检：候选配置与 Git 凭据一起提交，不写入设置；地址字段验证通过后自动拉取分支。 */
   const verifyRepo = async (field: string) => {
     setChecking(current => ({ ...current, [field]: true }))
     try {
       const result = await call('POST code-repos/verify', { body: { kind: repo.kind, config: repo.config, field,
         gitCredential } })
-      setChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
+      setRepoChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
+      if (result.checks.some(check => check.field === 'remote' && check.ok)) void fetchBranches.run()
     } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
   }
   /** 任务来源字段预检：连同项目的仓库候选与飞书凭据一起提交，驱动据此读取真实任务。 */
@@ -337,7 +392,7 @@ function ProjectWizard() {
     try {
       const result = await call('POST task-sources/verify', { body: { kind: source.kind, config: source.config, field,
         repo, gitCredential, feishuCredential } })
-      setChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
+      setSourceChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
     } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
   }
   const create = useAction(async () => {
@@ -353,7 +408,7 @@ function ProjectWizard() {
     notify(t('projectAdded', { id }))
     setName(''); setRepo(emptyRepo(settings.codeRepoKinds)); setSource(emptySource(settings.taskSourceKinds))
     setGitCredential(''); setFeishuCredential('')
-    setChecks({}); setDirectory(''); setBranch('')
+    setRepoChecks({}); setSourceChecks({}); setBranches([]); setDefaultBranch(''); setDirectory(''); setBranch('')
     setIntervalMinutes(PROJECT_DEFAULTS.intervalMinutes); setMaxRetries(PROJECT_DEFAULTS.maxRetries)
     setRetryBackoffSeconds(PROJECT_DEFAULTS.retryBackoffSeconds); setPendingStatuses(PROJECT_DEFAULTS.pendingStatuses)
     setDoneStatus(PROJECT_DEFAULTS.doneStatus); setFailedStatus(PROJECT_DEFAULTS.failedStatus)
@@ -376,16 +431,32 @@ function ProjectWizard() {
           <div><Switch checked={enabled} onChange={setEnabled} label={t('projectEnabled')} /></div>
         </Field>
       </>}
-      {step === 'codeRepo' && <div className="dt-add-grid">
-        <RepoEditor kinds={settings.codeRepoKinds} value={repo} credential={gitCredential} credentials={git} checks={checks}
-          checking={checking} credentialError={credentialError} onChange={setRepo} onCredential={setGitCredential}
-          onVerify={field => { void verifyRepo(field) }} />
-      </div>}
+      {step === 'codeRepo' && <>
+        <div className="dt-add-grid">
+          <RepoEditor kinds={settings.codeRepoKinds} value={repo} credential={gitCredential} credentials={git}
+            checks={repoChecks} checking={checking} credentialError={credentialError} onChange={updateRepo}
+            onCredential={updateGitCredential} onVerify={field => { void verifyRepo(field) }} />
+        </div>
+        <Field label={t('projectBranch')} hint={t('projectBranchHint')}>
+          <div className="dt-verify-row">
+            {branches.length
+              ? <select className="dt-select" aria-label={t('projectBranch')} value={branch}
+                onChange={event => setBranch(event.target.value)}>
+                {branches.map(item => <option key={item} value={item}>{item === defaultBranch
+                  ? `${item} (${t('projectBranchDefault')})` : item}</option>)}
+              </select>
+              : <Input aria-label={t('projectBranch')} value={branch} placeholder={t('projectBranchEmpty')}
+                onChange={event => setBranch(event.target.value)} />}
+            <Button variant="outline" size="sm" disabled={fetchBranches.busy} aria-busy={fetchBranches.busy}
+              onClick={() => { void fetchBranches.run() }}>{fetchBranches.busy ? t('verifyBusy') : t('projectBranchFetch')}</Button>
+          </div>
+        </Field>
+      </>}
       {step === 'taskSource' && <>
         <div className="dt-add-grid">
           <SourceEditor kinds={settings.taskSourceKinds} value={source} credential={feishuCredential}
-            feishuCredentials={feishu} checks={checks} checking={checking} credentialError={credentialError}
-            onChange={setSource} onCredential={setFeishuCredential} onVerify={field => { void verifySource(field) }} />
+            feishuCredentials={feishu} checks={sourceChecks} checking={checking} credentialError={credentialError}
+            onChange={updateSource} onCredential={setFeishuCredential} onVerify={field => { void verifySource(field) }} />
         </div>
         {source.kind === 'excel' && <div className="dt-row-buttons"><DownloadTemplateButton /></div>}
       </>}
@@ -393,9 +464,6 @@ function ProjectWizard() {
         <Field label={t('projectDirectory')} hint={t('projectDirectoryHint')}>
           <Input className="dt-mono" value={directory} placeholder={t('executionDirectoryEmpty')}
             onChange={event => setDirectory(event.target.value)} />
-        </Field>
-        <Field label={t('projectBranch')} hint={t('projectBranchHint')}>
-          <Input value={branch} placeholder={t('projectBranchEmpty')} onChange={event => setBranch(event.target.value)} />
         </Field>
         <Field label={t('projectInterval')} hint={t('projectIntervalHint')}>
           <Input type="number" required value={intervalMinutes} onChange={event => setIntervalMinutes(event.target.value)} />
@@ -420,8 +488,9 @@ function ProjectWizard() {
         </Field>
         <div className="dt-row-meta dt-status-line">
           <LabelValue label={t('projectWizardSummaryName')} value={name.trim() || t('unsetValue')} />
-          <LabelValue label={t('projectCodeRepoLabel')} value={`${repo.kind}${typeof repo.config.repository === 'string'
-            && repo.config.repository ? ` · ${repo.config.repository}` : ''}`} />
+          <LabelValue label={t('projectCodeRepoLabel')} value={`${repo.kind}${typeof repo.config.remote === 'string'
+            && repo.config.remote ? ` · ${repo.config.remote}` : ''}`}/>
+          <LabelValue label={t('projectBranch')} value={branch.trim() || t('unsetValue')} />
           <LabelValue label={t('projectTaskSourceLabel')} value={sourceName ? localized(t, sourceName.title) : source.kind} />
           <LabelValue label={t('projectWizardSummarySchedule')}
             value={t('projectWizardScheduleValue', { minutes: intervalMinutes, retries: maxRetries, backoff: retryBackoffSeconds })} />

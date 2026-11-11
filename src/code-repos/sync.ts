@@ -119,18 +119,28 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   const auth = input.auth ? await gitAuthArgs(input.auth) : { args: [] as string[], cleanup: async () => {} }
   const ssh = auth.args.length ? auth.args : source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
   const git = (args: string[]): Promise<string> => scoped.git(ssh.length ? [...ssh, ...args] : args, input.directory)
-  await mkdir(input.directory, { recursive: true })
-  // 登记目录后，git 的凭据助手才会按目录选择该代码仓库记录的凭据。
-  await recordTicketSource(input.stateDir, input.directory, input.codeSource)
-  signal.throwIfAborted()
-  try {
-    if (!(await isRepository(git, input.directory))) {
-      await git(['init', '--quiet'])
-      await git(['remote', 'add', 'origin', remote])
-    } else {
-      await git(['remote', 'set-url', 'origin', remote])
-    }
-    const before = await head(git)
+    await mkdir(input.directory, { recursive: true })
+    // 登记目录后，git 的凭据助手才会按目录选择该代码仓库记录的凭据。
+    await recordTicketSource(input.stateDir, input.directory, input.codeSource)
+    signal.throwIfAborted()
+    try {
+      if (!(await isRepository(git, input.directory))) {
+        await git(['init', '--quiet'])
+        await git(['remote', 'add', 'origin', remote])
+      } else {
+        // 远端更换后旧镜像与新历史没有共同祖先，merge --ff-only 必然报 unrelated histories；
+        // 工作副本是纯镜像（执行发生在独立 worktree），远端变化时重建镜像而不是报错。
+        const previous = (await git(['remote', 'get-url', 'origin']).catch(() => '')).trim()
+        if (previous && previous !== remote) {
+          await rm(input.directory, { recursive: true, force: true })
+          await mkdir(input.directory, { recursive: true })
+          await git(['init', '--quiet'])
+          await git(['remote', 'add', 'origin', remote])
+        } else {
+          await git(['remote', 'set-url', 'origin', remote])
+        }
+      }
+      const before = await head(git)
     const branch = input.branch.trim() || await defaultBranch(git)
     await git(['fetch', '--prune', '--quiet', 'origin'])
     signal.throwIfAborted()

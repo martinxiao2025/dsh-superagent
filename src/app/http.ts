@@ -84,6 +84,9 @@ export interface HttpHost {
   checkSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
   /** 对代码仓库候选配置做真实预检；项目选择的 Git 凭据优先于本机 CLI 或 SSH key。 */
   checkCodeRepo(kind: string, config: unknown, field: string, meta: { gitCredential?: string }): Promise<SourceCheck[]>
+  /** 按代码仓库候选配置与 Git 凭据列出远端分支；向导在连通性验证通过后据此渲染分支选择。 */
+  listCodeRepoBranches(kind: string, config: unknown,
+    gitCredential?: string): Promise<{ remote: string; branches: string[]; defaultBranch: string }>
   /** 对新增任务来源的候选配置做真实预检；驱动负责读取清单或文档，同样不写设置、不重启。 */
   checkTaskSource(kind: string, config: unknown, field: string, meta: {
     feishuCredential?: string
@@ -266,6 +269,11 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       const request = VerifyCodeRepoRequest.parse(await body())
       return { checks: await runtime.checkCodeRepo(request.kind, request.config, request.field ?? 'all',
         { gitCredential: request.gitCredential }) }
+    },
+    // 向导分支选择：按候选配置与 Git 凭据真实 ls-remote；连通性验证通过后调用。
+    'POST code-repos/branches': async ({ body }) => {
+      const request = VerifyCodeRepoRequest.parse(await body())
+      return runtime.listCodeRepoBranches(request.kind, request.config, request.gitCredential)
     },
     // 任务来源预检：由驱动真实读取任务清单，但不持久化候选配置。
     'POST task-sources/verify': async ({ body }) => {
