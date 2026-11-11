@@ -252,6 +252,25 @@ it('refuses a task source save whose repo no longer matches a project that reads
   expect(store.settings().taskSources.tasks!.config).toMatchObject({ repo: 'main' })
 })
 
+it('refuses two Projects that resolve to the same wiki space, on create and on save', async () => {
+  h = await startRuntime()
+  const { settings, store } = h.runtime
+  await settings.createCodeRepo('github', 'main', { repository: 'acme/widgets' }, 'panel', '主仓库')
+  await settings.createTaskSource('feishu-wiki', 'wiki-a', { spaceId: 'space-1' }, 'panel', '知识库 A')
+  await settings.createProject('p1', { name: '项目一', codeRepo: 'main', taskSource: 'wiki-a' }, 'panel')
+  // 两个项目共用同一个任务来源，等于同一个空间被两个项目读取：拒绝创建。
+  await expect(settings.createProject('p2', { name: '项目二', codeRepo: 'main', taskSource: 'wiki-a' }, 'panel'))
+    .rejects.toThrow(new UserError('knowledgeBaseClaimed', { space: 'space-1', project: 'p1' }))
+  expect(store.settings().projects.p2).toBeUndefined()
+  // 已存在的项目改绑到同一空间同样拒绝，原绑定保持不变。
+  await settings.createTaskSource('excel', 'sheet', { repo: 'main', file: 'tasks/backlog.csv' }, 'panel', '清单')
+  await settings.createProject('p2', { name: '项目二', codeRepo: 'main', taskSource: 'sheet' }, 'panel')
+  const block = settings.block('project:p2')
+  const value = block.value as { taskSource: string }
+  await expect(settings.save('project:p2', { ...value, taskSource: 'wiki-a' }, block.revision, 'panel'))
+    .rejects.toThrow(new UserError('knowledgeBaseClaimed', { space: 'space-1', project: 'p1' }))
+  expect(store.settings().projects.p2!.taskSource).toBe('sheet')
+})
 it('refuses two TaskSources that claim the same wiki space, on create and on save', async () => {
   h = await startRuntime()
   const { settings, store } = h.runtime

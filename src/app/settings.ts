@@ -203,7 +203,7 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
-    if (kind === 'project') this.checkRepoBinding(candidate, id)
+    if (kind === 'project') { this.checkRepoBinding(candidate, id); this.checkKnowledgeOwner(candidate, id) }
     else if (kind === 'taskSource') { this.checkRepoBinding(candidate, undefined, id); this.checkKnowledgeBase(candidate, id) }
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
@@ -351,6 +351,7 @@ export class Settings {
     const recordId = this.recordId(id, 'project', current.projects, 'projectExists', 'project')
     const settings = SettingsSchema.parse({ ...current, projects: { ...current.projects, [recordId]: project } })
     this.checkRepoBinding(settings, recordId)
+    this.checkKnowledgeOwner(settings, recordId)
     return this.persistRecord(`project:${recordId}`, settings, current, origin, recordId)
   }
   /**
@@ -381,6 +382,24 @@ export class Settings {
     for (const [id, other] of Object.entries(settings.taskSources)) {
       if (id === sourceId) continue
       if (taskSourceKnowledgeBase(other) === space) throw new UserError('knowledgeBaseInUse', { source: id, space })
+    }
+  }
+
+  /**
+   * 知识空间归属唯一：`spaceId` 全库只归属一个项目，两个项目解析出同一空间即拒绝保存。
+   * 任务来源层已禁止两个来源占用同一空间；这一层再覆盖「两个项目共用同一个任务来源」的情况，
+   * 否则同一空间会经共享来源被两个项目同时读取。
+   * @throws 冲突时抛出 `knowledgeBaseClaimed`。
+   */
+  private checkKnowledgeOwner(settings: SettingsValue, projectId: string): void {
+    const project = settings.projects[projectId]
+    const own = project ? settings.taskSources[project.taskSource] : undefined
+    const space = own ? taskSourceKnowledgeBase(own) : ''
+    if (!space) return
+    for (const [id, other] of Object.entries(settings.projects)) {
+      if (id === projectId) continue
+      const record = settings.taskSources[other.taskSource]
+      if (record && taskSourceKnowledgeBase(record) === space) throw new UserError('knowledgeBaseClaimed', { space, project: id })
     }
   }
   /** 删除一条代码仓库记录；仍被项目引用时拒绝。 */

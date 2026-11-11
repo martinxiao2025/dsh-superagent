@@ -109,7 +109,8 @@ FeishuCredential 1 ── 0..1 ingress（消息接入）   // 与项目、知识
 ### 3.3 知识库绑定
 
 - 知识库 = 空间内的根节点集合。绑定记录保存 `spaceId` 与一组 `rootNodeToken`（默认取空间根，允许选多个目录、文档或多维表格）；递归展开后得到文档集合。
-- 唯一性建在空间上：一个 `spaceId` 只能归属一个项目（含停用项目），同一空间内不同根节点不能拆给两个项目；冲突即拒绝保存。
+- 唯一性建在空间上：一个 `spaceId` 只能归属一个项目（含停用项目），同一空间内不同根节点不能拆给两个项目；冲突即拒绝保存。两个项目共用同一个任务来源也按同一规则拒绝。
+- 根集合不单独校验重叠：归属已由 `spaceId` 唯一确定，同一项目内重复或嵌套的根在遍历时按节点去重，不会重复产生任务。
 - 归属校验：用项目所选飞书凭据对每个根节点调用 `wiki/v2/spaces/get_node`，返回的 `space_id` 必须等于绑定值；任一不符即拒绝。
 - 根节点可以增删，但每次变更都要重新校验；删除根节点等于把该子树移出知识库，其任务按「消失」处理。
 - 文档与多维表格在同一知识库内可有多份、可多层目录；快捷方式解析到目标节点，文件夹递归展开。
@@ -402,6 +403,7 @@ const FeishuWikiTaskSourceSchema = z.object({
   kind: z.literal('feishu-wiki'),
   feishuCredential: z.string().trim().min(1),
   feishuCredentialRevision: z.number().int().optional(),
+  // 知识库归属的唯一键是 spaceId：一个空间只归属一个项目，根节点只是该空间内的读取范围。
   knowledgeBase: z.object({
     spaceId: z.string().trim().min(1), spaceName: z.string().trim().default(''),
     mode: z.enum(['space', 'roots']).default('space'),
@@ -410,7 +412,6 @@ const FeishuWikiTaskSourceSchema = z.object({
       title: z.string().trim().default(''), path: z.string().trim().default(''),
     }).strict()).default([]),
   }).strict().nullable(),
-  node: z.object({ url: z.string().trim().min(1), token: z.string().trim().min(1) }).strict().nullable(),
   fieldMap: TaskFieldMapSchema,
 }).strict()
 
@@ -424,7 +425,7 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 
 - `git_credentials` 与 `feishu_credentials` 两张独立表，不设通用凭据表或 `type` 判别字段。
 - 项目只存两个凭据 ID 与上次校验通过的 revision；轮换后 revision 不一致即「待复验」。
-- `knowledgeBase.spaceId` 唯一索引（含停用项目），即一个空间只归属一个项目；每个 root 解析出的 `space_id` 必须与之一致；`roots` 为空表示整空间。
+- `knowledgeBase.spaceId` 唯一索引（含停用项目），即一个空间只归属一个项目；同一任务来源被两个项目引用同样视为冲突（两个项目因此读取同一空间）；每个 root 解析出的 `space_id` 必须与之一致；`roots` 为空表示整空间。
 - `enabled: true` 的前置条件：Git 凭据通过当前仓库校验、飞书凭据通过知识库校验、知识库已绑定且唯一。
 
 ### 9.2 重置（不做迁移）
@@ -490,7 +491,7 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 8. **停用后排队项如何处置**：已实现「保留 `queued`、不再派工、显示计数」；如需「停用即清空」仍需定义恢复语义。
 9. **写回失败是否重试**：已实现——写入 `Effects` 持久化副作用队列，失败退避重试并进入健康度；项目被删除时取消未投递的回写。
 10. **轮换后的复验时机**（新）：推荐下次项目测试或调度前复验，不允许旧凭据继续领取任务。
-11. **知识库绑定单位**（新）：推荐「空间唯一归属 + 根节点集合」；若允许两个项目共享同一空间的不同子树，需改为按根集合唯一并处理重叠。
+11. **知识库绑定单位**（已定）：按 `spaceId` 全库唯一，一个空间只归属一个项目；根节点集合只是该空间内的读取范围，不参与归属判断。由此**不校验根集合之间的重叠**：跨项目不可能重叠（空间已唯一），同一项目内重叠或重复的根在遍历时按节点 token 去重（`visited` 集合），不会产生重复任务。
 12. **跨文档重复 `task_id`**（新）：推荐默认按文档隔离，严格模式可选；若默认开启，多文档编号必须全局唯一。
 13. **Excel 标准格式**（新）：推荐标准格式为默认、自定义映射仅高级；是否保留项目级切换，以及模板生成入口，见 016 第 7 节。
 
