@@ -25,6 +25,8 @@ export interface ProjectTasksView {
   nextPollAt?: string
   /** 最近一次轮询失败的原因；成功后清除。 */
   lastError?: string
+  /** 因本项目有任务在执行而推迟轮询的原因与时间；下一次真正轮询时清除。 */
+  deferred?: { reason: string; at: string }
   items: QueueSnapshot['items']
 }
 
@@ -53,5 +55,6 @@ export function projectTasksView(id: string, project: Project, settings: Setting
     // 调度状态可选：没有轮询过或没有错误的项目不携带这些字段。
     ...(status?.nextPollAt ? { nextPollAt: status.nextPollAt } : {}),
     ...(status?.lastError ? { lastError: status.lastError } : {}),
+    ...(status?.deferred ? { deferred: status.deferred } : {}),
   }
 }

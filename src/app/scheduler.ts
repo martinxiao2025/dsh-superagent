@@ -12,7 +12,7 @@ import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
 import type { FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import type { Store } from './store.ts'
-import type { Effects } from './effects.ts'
+import { Later, type Effects } from './effects.ts'
 import type { Health } from '../sources/host.ts'
 import { queueActive, queueId, queueInFlight, queueItemKey, type QueueEntry, type QueueSnapshot } from '../queue/model.ts'
 
@@ -57,15 +57,20 @@ const TICK_MS = 15_000
 const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000
 /** 工作区回收的间隔；与保留期无关，保留期由实现按工单结束时间判断。 */
 const GC_INTERVAL_MS = 60 * 60_000
+/** 项目有任务在执行时推迟轮询的间隔；取轮询间隔与该值的较小者，项目空闲后自然恢复。 */
+const BUSY_RETRY_MS = 60_000
 
 /** 项目调度器：轮询任务来源、维护持久化队列、在容量允许时建单并跟踪工单终态。 */
 export class ProjectScheduler {
   private timer: NodeJS.Timeout | undefined
   private readonly nextPoll = new Map<string, number>()
   private readonly errors = new Map<string, string>()
+  /** 因项目忙而推迟轮询的原因与时间；下一次真正轮询时清除，供快照展示。 */
+  private readonly deferred = new Map<string, { reason: string; at: string }>()
   private readonly registry: TaskSourceRegistry
   private readonly syncRepo: (repo: string) => Promise<string>
-  private running = false
+  /** 手动扫描与定时检查共用的执行链；非空表示当前有一轮检查在跑。 */
+  private cycle: Promise<void> | undefined
   private nextGc = 0
   private gcError = ''
 
@@ -95,14 +100,32 @@ export class ProjectScheduler {
 
   /** 立即轮询所有启用的项目并检查队列；测试与手动触发共用。 */
   async scan(): Promise<void> {
-    await this.recover()
-    for (const [id, project] of Object.entries(this.host.settings().projects)) {
-      if (project.enabled) await this.poll(id)
-    }
-    this.retire()
-    this.pump()
-    await this.reclaim()
-    this.reportHealth()
+    return this.runExclusive(async () => {
+      try {
+        await this.recover()
+        for (const [id, project] of Object.entries(this.host.settings().projects)) {
+          if (project.enabled) await this.poll(id)
+        }
+        this.retire()
+        this.pump()
+        await this.reclaim()
+      } catch (error) {
+        // 与定时检查一致：一轮失败记在调度级错误上，不向调用方抛出。
+        if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
+      } finally {
+        this.reportHealth()
+      }
+    })
+  }
+
+  /**
+   * 手动扫描与定时检查共用同一条执行链：已有检查在跑时，后到的调用等待它结束，
+   * 保证同一项目不会被两个循环并发轮询。
+   */
+  private runExclusive(body: () => Promise<void>): Promise<void> {
+    if (this.cycle) return this.cycle
+    this.cycle = body().finally(() => { this.cycle = undefined })
+    return this.cycle
   }
 
   /** 轮询一个项目：读取任务来源，取消消失的任务，把新的工作项入队。 */
@@ -110,7 +133,17 @@ export class ProjectScheduler {
     const settings = this.host.settings()
     const project = settings.projects[projectId]
     if (!project?.enabled) return
-    this.nextPoll.set(projectId, this.now() + project.schedule.intervalMinutes * 60_000)
+    const interval = project.schedule.intervalMinutes * 60_000
+    // 项目有任务在执行时不拉取：同步会改写轮询工作副本，与 worker 的检出互相踩。
+    // 推迟到 `min(轮询间隔, BUSY_RETRY_MS)` 之后重试，原因写进快照供排障，不静默丢弃。
+    if (this.busy(projectId)) {
+      this.nextPoll.set(projectId, this.now() + Math.min(interval, BUSY_RETRY_MS))
+      this.deferred.set(projectId, { reason: 'A task from this project is running; polling and the git pull are deferred', at: this.stamp() })
+      this.changed()
+      return
+    }
+    this.deferred.delete(projectId)
+    this.nextPoll.set(projectId, this.now() + interval)
     const record = settings.taskSources[project.taskSource]
     const repo = settings.codeRepos[project.codeRepo]
     if (!record?.enabled) return this.fail(projectId, 'The task source is missing or disabled')
@@ -172,6 +205,7 @@ export class ProjectScheduler {
       id, name: project.name, enabled: project.enabled,
       ...(this.nextPoll.has(id) ? { nextPollAt: new Date(this.nextPoll.get(id)!).toISOString() } : {}),
       ...(this.errors.get(id) ? { lastError: this.errors.get(id)! } : {}),
+      ...(this.deferred.get(id) ? { deferred: this.deferred.get(id)! } : {}),
     }))
     const topError = this.errors.get('')
     return {
@@ -187,31 +221,34 @@ export class ProjectScheduler {
     }
   }
 
+  /**
+   * 定时检查；与手动 `scan` 共用执行链，已有检查在跑时直接并入那一轮，
+   * 避免同一项目被并发轮询。
+   */
   private async tick(startup = false): Promise<void> {
-    if (this.running) return
-    this.running = true
-    try {
-      await this.recover()
-      const projects = this.host.settings().projects
-      const now = this.now()
-      for (const [id, project] of Object.entries(projects)) {
-        if (!project.enabled) continue
-        const due = this.nextPoll.get(id)
-        // 启动时只轮询 `runOnStart` 的项目；之后按各自的下次轮询时间到期执行。
-        if (startup ? !project.schedule.runOnStart : due !== undefined && due > now) continue
-        await this.poll(id)
+    return this.runExclusive(async () => {
+      try {
+        await this.recover()
+        const projects = this.host.settings().projects
+        const now = this.now()
+        for (const [id, project] of Object.entries(projects)) {
+          if (!project.enabled) continue
+          const due = this.nextPoll.get(id)
+          // 启动时只轮询 `runOnStart` 的项目；之后按各自的下次轮询时间到期执行。
+          if (startup ? !project.schedule.runOnStart : due !== undefined && due > now) continue
+          await this.poll(id)
+        }
+        for (const entry of this.host.store.queue.active().filter(queueInFlight)) this.settle(entry, this.ticketOf(entry))
+        this.retire()
+        this.pump()
+        await this.reclaim()
+      } catch (error) {
+        // 单次检查失败不终止周期任务；具体项目的错误已记录在 `errors` 中。
+        if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
+      } finally {
+        this.reportHealth()
       }
-      for (const entry of this.host.store.queue.active().filter(queueInFlight)) this.settle(entry, this.ticketOf(entry))
-      this.retire()
-      this.pump()
-      await this.reclaim()
-    } catch (error) {
-      // 单次检查失败不终止周期任务；具体项目的错误已记录在 `errors` 中。
-      if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
-    } finally {
-      this.running = false
-      this.reportHealth()
-    }
+    })
   }
 
   /** 按固定间隔回收过期工作区；失败不阻塞调度，只记录在调度健康条目中。 */
@@ -468,6 +505,8 @@ export class ProjectScheduler {
 
   /** 副作用处理器：把状态写回任务来源；失败抛出，由 `Effects` 退避重试并上报健康度。 */
   async writeBackNow(payload: WritebackPayload): Promise<void> {
+    // 回写需要同步工作副本，同样是 git 拉取；项目仍在执行任务时推迟，不消耗失败次数也不报错。
+    if (this.busy(payload.project)) throw new Later('The project is running a task; the writeback is deferred until it is idle')
     const settings = this.host.settings()
     const project = settings.projects[payload.project]
     const record = project && settings.taskSources[project.taskSource]
@@ -481,6 +520,12 @@ export class ProjectScheduler {
 
   private ticketOf(entry: QueueEntry): Ticket | undefined {
     return entry.ticketId ? this.host.store.tickets.get(entry.ticketId) : undefined
+  }
+
+  /** 项目是否仍有任务在执行：执行器占用与队列中的在途条目任一成立即视为忙。 */
+  private busy(projectId: string): boolean {
+    if (this.host.executor.projectsInUse().includes(projectId)) return true
+    return this.host.store.queue.active().some(entry => entry.project === projectId && queueInFlight(entry))
   }
 
   private nextSeq(): number {

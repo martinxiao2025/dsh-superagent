@@ -15,18 +15,19 @@ import type { RawTask } from '../src/task-sources/tasks.ts'
 
 const task = (id: string, title: string, status = 'todo'): RawTask => ({ id, title, description: `${title} 的说明`, status })
 
-/** 内存任务来源：测试直接改 `tasks` 模拟来源变化。 */
+/** 内存任务来源：测试直接改 `tasks` 模拟来源变化；`calls` 记录读取次数，用于断言互斥。 */
 interface MemorySource extends TaskSourceDriver {
   tasks: RawTask[]
   written: { taskId: string; status: string }[]
+  calls: number
 }
 const memory = (): MemorySource => {
   const driver = {
     kind: 'memory', title: { zh: '内存', en: 'Memory' }, description: { zh: '测试用', en: 'For tests' },
     schema: z.object({}), fields: [], fieldMap: { defaults: { id: 'id', title: 'title', description: 'description', status: 'status', priority: 'priority' }, required: [] },
-    tasks: [] as RawTask[], written: [] as { taskId: string; status: string }[],
+    tasks: [] as RawTask[], written: [] as { taskId: string; status: string }[], calls: 0,
     async verify() { return [] },
-    async list() { return driver.tasks },
+    async list() { driver.calls += 1; return driver.tasks },
     async writeback(_config: unknown, target: { taskId: string }, status: string) { driver.written.push({ taskId: target.taskId, status }) },
   }
   return driver as unknown as MemorySource
@@ -257,6 +258,61 @@ it('runOnStart 决定启动时是否立即轮询', async () => {
   h.advance(5 * 60_000)
   await (h.scheduler as unknown as { tick(startup?: boolean): Promise<void> }).tick()
   expect([...h.entries.values()].map(entry => entry.project).sort()).toEqual(['a', 'b'])
+})
+
+it('项目有任务在执行时推迟轮询，并在快照中留下原因', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  expect([...h.entries.values()][0]!.state).toBe('running')
+  // 执行中新增的任务不会被拉取：本轮轮询被推迟，而不是并发读取来源。
+  h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
+  const before = h.driver.calls
+  await h.scheduler.poll('a')
+  expect(h.driver.calls).toBe(before)
+  expect([...h.entries.values()]).toHaveLength(1)
+  expect(h.scheduler.snapshot().projects[0]).toMatchObject({
+    id: 'a', deferred: { reason: expect.stringContaining('deferred'), at: expect.any(String) } })
+  // 项目空闲后恢复轮询，推迟原因随之清除。
+  const running = [...h.entries.values()][0]!
+  h.tickets.get(running.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  h.scheduler.observe(running.ticketId!)
+  await h.scheduler.poll('a')
+  expect(h.driver.calls).toBe(before + 1)
+  expect([...h.entries.values()]).toHaveLength(2)
+  expect(h.scheduler.snapshot().projects[0]!.deferred).toBeUndefined()
+})
+
+it('项目有任务在跑时推迟写回，空闲后补写', async () => {
+  const h = setup({ a: project('a') }, 1)
+  h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const first = [...h.entries.values()].find(entry => entry.state === 'running')!
+  h.tickets.get(first.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  h.scheduler.observe(first.ticketId!)
+  // 下一项立刻占用项目：此刻的写回（需要同步工作副本）必须推迟而不是并发拉取。
+  h.scheduler.pump()
+  const pending = h.effects.at(-1)!
+  await expect(h.scheduler.writeBackNow(pending.payload as never)).rejects.toThrow(/deferred/)
+  expect(h.driver.written).toHaveLength(0)
+  // 项目空闲后同一条副作用可以正常补写。
+  const second = [...h.entries.values()].find(entry => entry.state === 'running')!
+  h.tickets.get(second.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  h.scheduler.observe(second.ticketId!)
+  await h.flush()
+  expect(h.driver.written.map(item => item.taskId).sort()).toEqual(['a1', 'a2'])
+})
+
+it('手动扫描与定时检查互斥，同一项目只轮询一次', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  const scan = h.scheduler.scan()
+  const tick = (h.scheduler as unknown as { tick(startup?: boolean): Promise<void> }).tick()
+  await Promise.all([scan, tick])
+  expect(h.driver.calls).toBe(1)
+  expect([...h.entries.values()]).toHaveLength(1)
 })
 
 it('队列快照暴露下次轮询时间与最近错误', async () => {

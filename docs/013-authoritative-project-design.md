@@ -125,6 +125,8 @@ FeishuCredential 1 ── 0..1 ingress（消息接入）   // 与项目、知识
 - 执行目录按项目组织：`<executionRoot>/<project>/<ticket>`，`executionRoot` 默认 `<stateDir>/work`，项目名来自 `Project.name`。
 - 项目工单的目录是**项目仓库的实际检出**，不是空目录：`prepareDirectory` 从轮询工作副本 `<stateDir>/repos/<repo>` 创建 `git worktree --detach`。轮询副本、执行工作区、`stateDir` 下的队列数据库互不共用工作树，避免任务来源同步与 worker 改动互相踩；同一工单重试时复用已有工作区。`git worktree prune` 在每次创建前清理已删除目录的元数据；工作区默认保留供排查，删除目录后下次创建会自动清掉登记。
 - 准备命令 `executor.prepare` 在项目工单中**于工单工作区内执行**（此前在父目录执行），因此依赖安装落在真实检出上；准备失败时本次新建的工作区会被移除，不会在重试时被误认为已就绪。
+- **执行中不拉取**：项目只要有任务处于 `starting/running`（或执行器仍占用该项目的槽位），本轮轮询整体推迟，不同步仓库工作副本，避免 `git pull` 与 worker 的检出互相踩。推迟时把下次轮询设为 `min(轮询间隔, 60 秒)`，项目空闲后自动恢复；写回副作用同样需要同步工作副本，遇到项目忙时抛 `Later`，由 `Effects` 在初始延迟后重试且不计入失败次数。
+- **手动扫描与定时检查互斥**：`scan()` 与周期 `tick()` 共用同一条执行链；已有检查在跑时，后到的调用并入当前这一轮，不会对同一项目并发轮询。
 
 ### 4.2 状态机
 
@@ -150,8 +152,8 @@ queued → starting → running → succeeded
 
 ### 4.4 可观测性
 
-- 队列快照已有：`maxWorkers`、`used`、条目状态、尝试次数、`dueAt`、`reason`；`projects[]` 额外提供 `nextPollAt` 与 `lastError`（成功后清除），周期检查自身的错误在 `error`。
-- 项目详情 `GET projects/:id/tasks` 同步携带 `nextPollAt` / `lastError`，面板显示「下次轮询」与最近错误。
+- 队列快照已有：`maxWorkers`、`used`、条目状态、尝试次数、`dueAt`、`reason`；`projects[]` 额外提供 `nextPollAt` 与 `lastError`（成功后清除）以及 `deferred`（因本项目有任务在执行而推迟轮询的原因与时间，下一次真正轮询时清除），周期检查自身的错误在 `error`。
+- 项目详情 `GET projects/:id/tasks` 同步携带 `nextPollAt` / `lastError` / `deferred`，面板显示「下次轮询」、最近错误与「轮询已推迟」原因。
 - 剩余缺口：写回结果、槽位等待时长、结构化日志与请求 ID（详见 `015`）。
 
 ## 5. 凭据（两套独立功能）

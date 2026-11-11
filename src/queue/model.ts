@@ -55,6 +55,8 @@ export interface QueueProjectStatus {
   nextPollAt?: string
   /** 最近一次轮询失败的原因；成功后清除。 */
   lastError?: string
+  /** 因本项目有任务在执行而推迟轮询的原因与时间；下一次真正轮询时清除。 */
+  deferred?: { reason: string; at: string }
 }
 
 /** 队列快照：P5 面板读取的只读视图。 */

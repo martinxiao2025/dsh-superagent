@@ -569,6 +569,7 @@ const TEXT = {
   projectActionsColumn: ['操作', 'Actions'],
   projectNextPollLabel: ['下次轮询', 'Next poll'],
   projectLastError: ['最近错误', 'Last error'],
+  projectDeferred: ['轮询已推迟', 'Polling deferred'],
   queueRetry: ['重试', 'Retry'],
   queueCancel: ['取消', 'Cancel'],
   queueStop: ['停止', 'Stop'],
