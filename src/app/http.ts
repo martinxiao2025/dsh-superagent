@@ -46,7 +46,7 @@ export interface HttpHost {
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'preview' | 'save' | 'defaultChanged'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'>
   readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels' | 'createSource' | 'removeSource'
-    | 'createCodeRepo' | 'removeCodeRepo' | 'createTaskSource' | 'removeTaskSource' | 'createProject' | 'removeProject'>
+    | 'createProject' | 'removeProject'>
   /** Git 凭据：材料只存在于加密存储，面板拿到的是掩码与指纹。 */
   readonly gitCredentials: Pick<GitCredentials, 'list' | 'get' | 'create' | 'update' | 'rotate' | 'remove' | 'verify'>
   /** 飞书凭据：与 Git 凭据完全独立，互不读取对方的材料。 */
@@ -82,10 +82,15 @@ export interface HttpHost {
   checkSetup(): void
   /** 对新增来源的候选配置做真实预检；不写设置、不重启。 */
   checkSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
-  /** 对代码仓库候选配置做真实预检；SSH 模式不运行 CLI，按本机 key 探测远端。 */
-  checkCodeRepo(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
+  /** 对代码仓库候选配置做真实预检；项目选择的 Git 凭据优先于本机 CLI 或 SSH key。 */
+  checkCodeRepo(kind: string, config: unknown, field: string, meta: { gitCredential?: string }): Promise<SourceCheck[]>
   /** 对新增任务来源的候选配置做真实预检；驱动负责读取清单或文档，同样不写设置、不重启。 */
-  checkTaskSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
+  checkTaskSource(kind: string, config: unknown, field: string, meta: {
+    feishuCredential?: string
+    projectId?: string
+    repo?: { kind: 'github' | 'gitlab'; config: Record<string, unknown> }
+    gitCredential?: string
+  }): Promise<SourceCheck[]>
   requestPass(): void
   models(): Promise<ModelCatalog>
   /** 备份并清空状态目录后重启；仅由要求显式确认的管理入口调用。 */
@@ -209,19 +214,21 @@ const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.litera
   limit: limit(30, 200) })
 const count = z.coerce.number().int().nonnegative()
 const PromptsQuery = z.object({ revision: count.optional(), offset: count.default(0) })
-const RecordBlock = z.templateLiteral([z.enum(['source', 'codeRepo', 'taskSource', 'project']), ':', z.string().regex(/^[a-z][a-z0-9-]*$/)])
+const RecordBlock = z.templateLiteral([z.enum(['source', 'project']), ':', z.string().regex(/^[a-z][a-z0-9-]*$/)])
 const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), RecordBlock])
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
 const ResourceId = z.string().regex(/^[a-z][a-z0-9-]*$/)
-const CreateCodeRepoRequest = z.object({ kind: z.enum(['github', 'gitlab']), id: ResourceId.optional(),
-  name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
-const CreateTaskSourceRequest = z.object({ kind: z.string().regex(/^[a-z][a-z0-9-]*$/), id: ResourceId.optional(),
-  name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
 const CreateProjectRequest = z.object({ id: ResourceId.optional() }).passthrough()
 const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
   name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
 const VerifySourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
   name: z.string().trim().max(LIMITS.sourceName).optional(), config: z.unknown().optional(), field: z.string().max(40).optional() })
+const ProjectRepoSchema = z.object({ kind: z.enum(['github', 'gitlab']), config: z.record(z.string(), z.unknown()).default({}) })
+const VerifyCodeRepoRequest = z.object({ kind: z.enum(['github', 'gitlab']), config: z.unknown().optional(),
+  field: z.string().max(40).optional(), gitCredential: z.string().trim().max(60).optional() })
+const VerifyTaskSourceRequest = z.object({ kind: z.string().regex(/^[a-z][a-z0-9-]*$/), config: z.unknown().optional(),
+  field: z.string().max(40).optional(), projectId: ResourceId.optional(), repo: ProjectRepoSchema.optional(),
+  gitCredential: z.string().trim().max(60).optional(), feishuCredential: z.string().trim().max(60).optional() })
 const CreateGitCredentialRequest = z.object({ id: ResourceId.optional(), value: GitCredentialInputSchema })
 const UpdateGitCredentialRequest = z.object({ value: GitCredentialInputSchema, revision: z.number().int().nonnegative() })
 const RotateGitCredentialRequest = GitCredentialInputSchema.partial()
@@ -254,28 +261,19 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
         { id: request.id, name: request.name }) }
     },
     'DELETE sources/:id': ({ params }) => runtime.settings.removeSource(params.id, 'panel'),
-    'POST code-repos': async ({ body }) => {
-      const request = CreateCodeRepoRequest.parse(await body())
-      return runtime.settings.createCodeRepo(request.kind, request.id, request.config, 'panel', request.name)
-    },
-    // 与来源预检同构：字段级检查按认证方式真实探测，但不持久化候选配置。
+    // 仓库预检不再创建独立记录：候选配置来自项目表单，命中 Git 凭据时真实探测远端。
     'POST code-repos/verify': async ({ body }) => {
-      const request = VerifySourceRequest.parse(await body())
+      const request = VerifyCodeRepoRequest.parse(await body())
       return { checks: await runtime.checkCodeRepo(request.kind, request.config, request.field ?? 'all',
-        { id: request.id, name: request.name }) }
+        { gitCredential: request.gitCredential }) }
     },
-    'DELETE code-repos/:id': ({ params }) => runtime.settings.removeCodeRepo(params.id, 'panel'),
-    'POST task-sources': async ({ body }) => {
-      const request = CreateTaskSourceRequest.parse(await body())
-      return runtime.settings.createTaskSource(request.kind, request.id, request.config, 'panel', request.name)
-    },
-    // 与来源预检同构：驱动真实读取任务清单，但不持久化候选配置。
+    // 任务来源预检：由驱动真实读取任务清单，但不持久化候选配置。
     'POST task-sources/verify': async ({ body }) => {
-      const request = VerifySourceRequest.parse(await body())
+      const request = VerifyTaskSourceRequest.parse(await body())
       return { checks: await runtime.checkTaskSource(request.kind, request.config, request.field ?? 'all',
-        { id: request.id, name: request.name }) }
+        { projectId: request.projectId, repo: request.repo, gitCredential: request.gitCredential,
+          feishuCredential: request.feishuCredential }) }
     },
-    'DELETE task-sources/:id': ({ params }) => runtime.settings.removeTaskSource(params.id, 'panel'),
     // 标准任务清单模板：面板直接下载为 xlsx，不写入任何状态目录。
     'GET task-format/template': () => ({ filename: TASK_TEMPLATE_FILENAME, content: taskTemplate().toString('base64') }),
     'POST projects': async ({ body }) => {
@@ -293,9 +291,9 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       const settings = store.settings()
       const project = settings.projects[params.id]
       if (!project) throw new RouteError(404, 'Project not found')
-      return projectTasksView(params.id, project, settings, runtime.queue())
+      return projectTasksView(params.id, project, runtime.queue())
     },
-    // 凭据与来源、代码仓库记录相互独立：路由、校验端点与材料存储都不共用。
+    // 凭据与来源相互独立：路由、校验端点与材料存储都不共用。
     'GET git-credentials': () => ({ credentials: runtime.gitCredentials.list() }),
     'GET git-credentials/:id': ({ params }) => runtime.gitCredentials.get(params.id),
     'POST git-credentials': async ({ body }) => {
@@ -377,11 +375,8 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       const block = SettingsBlockSchema.parse(params.block)
       const [family, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, '']
       const known = family === 'source' ? runtime.sources.instances().some(instance => instance.id === id)
-        : family === 'codeRepo' ? !!store.settings().codeRepos[id]
-          : family === 'taskSource' ? !!store.settings().taskSources[id]
-            : family === 'project' ? !!store.settings().projects[id] : true
-      if (!known) throw new RouteError(404, family === 'source' ? 'Source not found'
-        : family === 'codeRepo' ? 'Code repository not found' : family === 'taskSource' ? 'Task source not found' : 'Project not found')
+        : family === 'project' ? !!store.settings().projects[id] : true
+      if (!known) throw new RouteError(404, family === 'source' ? 'Source not found' : 'Project not found')
       const request = SaveRequest.parse(await body())
       return runtime.settings.save(block, request.value, request.revision, 'panel')
     },

@@ -1,6 +1,5 @@
 /** 项目运行视图：项目配置、该项目在队列中的条目，以及全局运行时占用。 */
-import type { Settings } from '../../policy.ts'
-import type { Project } from '../../projects/kind.ts'
+import type { Project, ProjectRepo, ProjectTaskSource } from '../../projects/kind.ts'
 import type { QueueSnapshot } from '../../queue/model.ts'
 
 export interface ProjectTasksView {
@@ -8,8 +7,8 @@ export interface ProjectTasksView {
     id: string
     name: string
     enabled: boolean
-    codeRepo: { id: string; name: string }
-    taskSource: { id: string; name: string }
+    codeRepo: { kind: ProjectRepo['kind']; name: string }
+    taskSource: { kind: ProjectTaskSource['kind']; name: string }
     execution: Project['execution']
     schedule: Project['schedule']
     retry: Project['retry']
@@ -30,8 +29,14 @@ export interface ProjectTasksView {
   items: QueueSnapshot['items']
 }
 
+/** 仓库在面板上的短名：优先仓库路径，其次远端地址，最后退回类型名。 */
+export function repoLabel(kind: ProjectRepo['kind'], config: Record<string, unknown>): string {
+  const text = config.repository ?? config.project ?? config.remote
+  return typeof text === 'string' && text ? text : kind
+}
+
 /** 组装项目详情页所需的数据；队列条目只保留属于 `id` 的部分。 */
-export function projectTasksView(id: string, project: Project, settings: Settings, snapshot: QueueSnapshot): ProjectTasksView {
+export function projectTasksView(id: string, project: Project, snapshot: QueueSnapshot): ProjectTasksView {
   const items = snapshot.items.filter(item => item.project === id)
   const status = snapshot.projects.find(item => item.id === id)
   return {
@@ -39,8 +44,8 @@ export function projectTasksView(id: string, project: Project, settings: Setting
       id,
       name: project.name,
       enabled: project.enabled,
-      codeRepo: { id: project.codeRepo, name: settings.codeRepos[project.codeRepo]?.name ?? project.codeRepo },
-      taskSource: { id: project.taskSource, name: settings.taskSources[project.taskSource]?.name ?? project.taskSource },
+      codeRepo: { kind: project.codeRepo.kind, name: repoLabel(project.codeRepo.kind, project.codeRepo.config) },
+      taskSource: { kind: project.taskSource.kind, name: project.taskSource.kind },
       execution: project.execution,
       schedule: project.schedule,
       retry: project.retry,

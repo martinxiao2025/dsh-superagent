@@ -36,22 +36,18 @@ export interface Api {
     response: { checks: SourceCheck[] }
   }
   'DELETE sources/:id': { response: { removed: true; restarting: true } }
-  'POST code-repos': { body: { kind: 'github' | 'gitlab'; id?: string; name: string; config?: unknown };
-    response: { id: string; revision: number; restarting: false } }
   'POST code-repos/verify': {
-    body: { kind: 'github' | 'gitlab'; id?: string; name?: string; config?: unknown; field?: string }
-    response: { checks: SourceCheck[] }
-  }
-  'DELETE code-repos/:id': { response: { removed: true; restarting: false } }
-  'POST task-sources': { body: { kind: string; id?: string; name: string; config?: unknown };
-    response: { id: string; revision: number; restarting: false } }
-  'POST task-sources/verify': {
-    body: { kind: string; id?: string; name?: string; config?: unknown; field?: string }
+    body: { kind: 'github' | 'gitlab'; id?: string; name?: string; config?: unknown; field?: string; gitCredential?: string }
     response: { checks: SourceCheck[] }
   }
   /** 016 标准任务清单模板；内容是 base64 编码的 xlsx。 */
   'GET task-format/template': { response: { filename: string; content: string } }
-  'DELETE task-sources/:id': { response: { removed: true; restarting: false } }
+  /** 任务来源预检：仓库候选与凭据由项目提供，驱动据此读取真实任务。 */
+  'POST task-sources/verify': {
+    body: { kind: string; id?: string; name?: string; config?: unknown; field?: string; projectId?: string
+      repo?: { kind: 'github' | 'gitlab'; config: Record<string, unknown> }; gitCredential?: string; feishuCredential?: string }
+    response: { checks: SourceCheck[] }
+  }
   /** 新建项目接受完整配置：向导一次提交仓库、任务来源、执行目录、轮询、重试与状态策略。 */
   'POST projects': { body: { id?: string } & Project; response: { id: string; revision: number; restarting: false } }
   'DELETE projects/:id': { response: { removed: true; restarting: false } }

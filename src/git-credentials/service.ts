@@ -7,6 +7,7 @@ import { credentialCheck, type CredentialCheck } from '../secrets/check.ts'
 import { GitCredentialInputSchema, GitCredentialSchema, type GitCredential, type GitCredentialInput,
   type GitCredentialView } from './kind.ts'
 import { credentialId } from '../secrets/id.ts'
+import type { GitAuth } from '../code-repos/sync.ts'
 
 /** 记录层只依赖最小读写接口，便于用内存实现测试。 */
 export interface GitCredentialRepository {
@@ -106,6 +107,21 @@ export class GitCredentials {
     this.options.credentials.remove(id)
     this.options.vault.remove('git', id)
     return { removed: true }
+  }
+  /** 只给出认证方式与账号名，供解析项目仓库时使用；不接触材料。 */
+  metaOf(id: string): { kind: 'ssh' | 'https'; username: string } | undefined {
+    const record = this.options.credentials.get(id)
+    return record ? { kind: record.kind, username: record.username || 'git' } : undefined
+  }
+  /** 供项目同步使用的一次性材料；未安装、材料缺失或不可读时返回 undefined。 */
+  authOf(id: string): GitAuth | undefined {
+    const record = this.options.credentials.get(id)
+    if (!record) return undefined
+    let material: SecretMaterial
+    try { material = this.options.vault.read('git', id) ?? {} } catch { return undefined }
+    if (!this.complete(record.kind, material)) return undefined
+    return { kind: record.kind, material: { username: record.username || 'x-access-token',
+      token: material.token ?? '', privateKey: material.privateKey ?? '' } }
   }
   /** 校验已有凭据或尚未保存的候选材料；只读，不写记录。 */
   async verify(input: { id?: string; input?: unknown; repository?: string }): Promise<CredentialCheck[]> {

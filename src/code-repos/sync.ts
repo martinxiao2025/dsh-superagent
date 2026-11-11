@@ -1,10 +1,17 @@
 /** 代码仓库同步：把 GitHub / GitLab 仓库同步到工作副本目录，不覆盖本地改动。 */
-import { mkdir } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Commands } from '../infra/commands.ts'
 import { hostOf, type Probe, type RepoAuth } from '../deployment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
+import type { SecretMaterial } from '../secrets/vault.ts'
+
+/** 一次 git 调用的认证材料；只来自 Git 凭据，不进入设置或日志。 */
+export interface GitAuth {
+  kind: 'ssh' | 'https'
+  material: Pick<SecretMaterial, 'username' | 'token' | 'privateKey'>
+}
 
 /** 判断远端地址是否内嵌了用户名与密码；内嵌凭据的地址会被拒绝，凭据只能来自按目录绑定的 git 助手。 */
 export function hasEmbeddedCredentials(remote: string): boolean {
@@ -38,6 +45,26 @@ export function sshCommandOf(key = ''): string {
   return `${base} -i "${file.replace(/"/g, '\\"')}"`
 }
 
+/**
+ * 把 Git 凭据材料转成一次 git 调用使用的参数。
+ * SSH 私钥写入临时目录并在调用后删除；HTTPS 令牌放进只对本次调用生效的请求头。
+ */
+export async function gitAuthArgs(auth: GitAuth): Promise<{ args: string[]; cleanup: () => Promise<void> }> {
+  if (auth.kind === 'ssh') {
+    const key = auth.material.privateKey ?? ''
+    if (!key) return { args: [], cleanup: async () => {} }
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-git-'))
+    const file = join(directory, 'key')
+    await writeFile(file, key, { mode: 0o600 })
+    return { args: ['-c', `core.sshCommand=${sshCommandOf(file)}`], cleanup: () => rm(directory, { recursive: true, force: true }) }
+  }
+  const token = auth.material.token ?? ''
+  if (!token) return { args: [], cleanup: async () => {} }
+  const user = auth.material.username || 'x-access-token'
+  const header = Buffer.from(`${user}:${token}`).toString('base64')
+  return { args: ['-c', `http.extraheader=AUTHORIZATION: basic ${header}`], cleanup: async () => {} }
+}
+
 /** 一次同步的结果：目录、检出的提交、提交是否变化，以及远端是否为空仓库。 */
 export interface CodeSyncResult { directory: string; commit: string; changed: boolean; empty: boolean }
 
@@ -48,12 +75,14 @@ export interface RemoteRefs { branches: string[]; defaultBranch: string }
  * 用 `git ls-remote` 探测远端是否可访问。
  * 退出码非零表示不可访问（含权限、站点、主机指纹问题）；退出码为零但没有分支表示仓库为空。
  */
-export async function probeRemote(probe: Probe, remote: string, sshKey = ''): Promise<RemoteRefs> {
+export async function probeRemote(probe: Probe, remote: string, sshKey = '', auth?: GitAuth): Promise<RemoteRefs> {
   if (hasEmbeddedCredentials(remote)) throw new Error('代码仓库远端地址不能包含用户名或密码')
+  const extra = auth ? await gitAuthArgs(auth) : { args: [] as string[], cleanup: async () => {} }
   let text: string
   try {
-    text = await probe(['git', 'ls-remote', '--symref', remote], { GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: sshCommandOf(sshKey) })
+    text = await probe(['git', ...extra.args, 'ls-remote', '--symref', remote], { GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: sshCommandOf(sshKey) })
   } catch (error) { throw new Error(redactCredentials(errorText(error))) }
+  finally { await extra.cleanup() }
   const branches = [...text.matchAll(/^[0-9a-f]{40}\trefs\/heads\/(\S+)$/gm)].map(match => match[1]!)
   const defaultBranch = /^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m.exec(text)?.[1] ?? (branches.includes('main') ? 'main' : branches[0] ?? '')
   return { branches, defaultBranch }
@@ -69,6 +98,8 @@ export interface CodeSyncInput {
   branch: string
   directory: string
   signal: AbortSignal
+  /** 项目选择的 Git 凭据材料；为空时沿用记录里的 SSH key 或本机助手。 */
+  auth?: GitAuth
 }
 
 /**
@@ -84,8 +115,9 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   // 测试与预检可能没有解析出部署；此时 `remoteOf` 使用内置默认主机。
   const remote = remoteOf(source, input.remoteUrl, scoped.deployment
     ? { github: scoped.deployment.githubHost.get(), gitlab: scoped.deployment.gitlabHost.get() } : undefined)
-  // SSH 认证把私钥交给 git，而不是依赖按目录绑定的 HTTPS 凭据助手。
-  const ssh = source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
+  // 优先使用项目选择的 Git 凭据；没有凭据时退回记录里的 SSH key 或本机助手。
+  const auth = input.auth ? await gitAuthArgs(input.auth) : { args: [] as string[], cleanup: async () => {} }
+  const ssh = auth.args.length ? auth.args : source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
   const git = (args: string[]): Promise<string> => scoped.git(ssh.length ? [...ssh, ...args] : args, input.directory)
   await mkdir(input.directory, { recursive: true })
   // 登记目录后，git 的凭据助手才会按目录选择该代码仓库记录的凭据。
@@ -121,6 +153,8 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   } catch (error) {
     if (signal.aborted) throw error
     throw new Error(redactCredentials(errorText(error)))
+  } finally {
+    await auth.cleanup()
   }
 }
 

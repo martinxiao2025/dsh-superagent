@@ -58,17 +58,18 @@ describe('ticket execution environment', () => {
 })
 
 describe('project directory names', () => {
-  /** 代码仓库记录不属于消息来源，因此不参与工单项目目录。 */
-  const withCodeRepos = (repos: Record<string, string>) => SettingsSchema.parse({ codeRepos: Object.fromEntries(
-    Object.entries(repos).map(([id, repository]) => [id, { kind: 'github', name: id, enabled: true, config: { repository } }])) })
+  /** 项目自带的代码仓库不属于消息来源，因此不参与工单项目目录。 */
+  const withProject = () => SettingsSchema.parse({ projects: { alpha: { name: 'Alpha',
+    codeRepo: { kind: 'github', config: { repository: 'acme/Demo.ProjectOnline' } },
+    taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } } } })
 
   it('names the directory after the ticket\'s Source record, never after the ticket', () => {
     const value = SettingsSchema.parse({ sources: { alpha: { kind: 'feishu', name: 'Alpha', enabled: true, config: {} } } })
     expect(projectDirectory(value, 'alpha', 'ticket-name')).toBe('alpha')
   })
 
-  it('falls back to the worktree name without a Source record, including for a code repository id', () => {
-    const value = withCodeRepos({ alpha: 'acme/Demo.ProjectOnline' })
+  it('falls back to the worktree name without a Source record, including for a project id', () => {
+    const value = withProject()
     expect(projectDirectory(value, 'alpha', 'quiet-otter-123456789012')).toBe('quiet-otter-123456789012')
     expect(projectDirectory(value, undefined, 'quiet-otter-123456789012')).toBe('quiet-otter-123456789012')
   })

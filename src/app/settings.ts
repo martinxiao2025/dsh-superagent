@@ -5,10 +5,9 @@ import { LIMITS } from '../limits.ts'
 import { UserError, type EngineForSettings, type Ticket, type UserErrorCode } from '../core/index.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
-import { CodeRepoKindSchema, CodeRepoRecordSchema } from '../code-repos/kind.ts'
-import { ProjectSchema } from '../projects/kind.ts'
-import { TaskSourceRecordSchema } from '../task-sources/kind.ts'
-import { taskSourceKnowledgeBase, taskSourceRepo, taskSources } from '../task-sources/index.ts'
+import { ProjectSchema, type Project } from '../projects/kind.ts'
+import { codeRepoType } from '../code-repos/types.ts'
+import { taskSourceKnowledgeBase, taskSources } from '../task-sources/index.ts'
 import type { SourceHost } from '../sources/host.ts'
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -34,7 +33,7 @@ interface Block {
   merge(settings: SettingsValue, value: unknown, id: string): SettingsValue
   guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin): void
 }
-const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'codeRepo' | 'taskSource' | 'project', Block> = {
+const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'project', Block> = {
   policy: {
     parse: (value, sources) => {
       const policy = PolicyConfigSchema.parse(value)
@@ -57,19 +56,28 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'codeRepo' | 't
     // 只有管理面板可以切换来源账户。
     guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
   },
-  codeRepo: {
-    parse: value => CodeRepoRecordSchema.omit({ kind: true }).parse(value),
-    // 记录类型不可通过设置块修改：保存开关与配置时保留已存储的 `kind`。
-    merge: (settings, value, id) => ({ ...settings, codeRepos: { ...settings.codeRepos, [id]: { ...settings.codeRepos[id]!, ...value as object } } }),
-  },
-  taskSource: {
-    parse: value => TaskSourceRecordSchema.omit({ kind: true }).parse(value),
-    merge: (settings, value, id) => ({ ...settings, taskSources: { ...settings.taskSources, [id]: { ...settings.taskSources[id]!, ...value as object } } }),
-  },
   project: {
-    parse: value => ProjectSchema.parse(value),
+    parse: value => parseProject(value),
     merge: (settings, value, id) => ({ ...settings, projects: { ...settings.projects, [id]: value as SettingsValue['projects'][string] } }),
   },
+}
+
+/** 校验项目的内嵌仓库与任务来源：类型必须存在，配置交给对应 schema，避免把非法配置写进设置。 */
+function parseProject(value: unknown): Project {
+  const project = ProjectSchema.parse(value)
+  const repoType = codeRepoType(project.codeRepo.kind)
+  if (!repoType) throw new UserError('sourceKindUnknown', { kind: project.codeRepo.kind })
+  const driver = taskSources.kind(project.taskSource.kind)
+  if (!driver) throw new UserError('sourceKindUnknown', { kind: project.taskSource.kind })
+  return { ...project,
+    codeRepo: { ...project.codeRepo, config: repoType.schema.parse(project.codeRepo.config) as Record<string, unknown> },
+    taskSource: { ...project.taskSource, config: driver.schema.parse(project.taskSource.config) as Record<string, unknown> } }
+}
+
+/** 项目任务来源声明的知识空间范围；未声明或字段为空时返回空串。 */
+function projectSpace(project: Project): string {
+  return taskSourceKnowledgeBase({ kind: project.taskSource.kind, name: project.name,
+    enabled: project.enabled, config: project.taskSource.config })
 }
 
 /** `Settings` 使用的宿主依赖。 */
@@ -142,31 +150,23 @@ export class Settings {
         allowed: Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.allowed.length])), read: 'settings/policy' },
       sources: sources.instances(settings).map(({ id, kind, name, enabled, installed }) =>
         ({ id, kind, name, enabled, installed, revision: revision(`source:${id}`), read: `settings/source:${id}` })),
-      codeRepos: Object.entries(settings.codeRepos).map(([id, record]) => ({ id, kind: record.kind, name: record.name, enabled: record.enabled,
-        revision: revision(`codeRepo:${id}`), read: `settings/codeRepo:${id}` })),
-      taskSources: Object.entries(settings.taskSources).map(([id, record]) => ({ id, kind: record.kind, name: record.name, enabled: record.enabled,
-        revision: revision(`taskSource:${id}`), read: `settings/taskSource:${id}` })),
       projects: Object.entries(settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
-        codeRepo: project.codeRepo, taskSource: project.taskSource, revision: revision(`project:${id}`), read: `settings/project:${id}` })) }
+        codeRepo: project.codeRepo.kind, taskSource: project.taskSource.kind, revision: revision(`project:${id}`), read: `settings/project:${id}` })) }
   }
   /**
    * 返回 `save` 可接受的一个设置块（`policy`、`eval`、`executor`，持有 `{ paused }` 的 `pause`，
-   * 或持有 `{ name, enabled, config }` 的 `source:<id>` / `codeRepo:<id>` / `taskSource:<id>`，
-   * 或完整项目值的 `project:<id>`）及其当前块修订。
+   * 持有 `{ name, enabled, config }` 的 `source:<id>`，或完整项目值的 `project:<id>`）及其当前块修订。
+   * 代码仓库与任务来源随项目保存，不再有独立块。
    * @throws 当不存在该设置块时抛出 UserError（`unknownBlock`）。
    */
   block(block: string): { block: string; revision: number; value: unknown } {
     const { store, sources } = this.host
     const settings = store.settings(), [family, id] = block.includes(':') ? block.split(/:(.*)/s) : [block, '']
     const instance = family === 'source' ? sources.instances(settings).find(item => item.id === id) : undefined
-    const repo = family === 'codeRepo' ? settings.codeRepos[id!] : undefined
-    const taskSource = family === 'taskSource' ? settings.taskSources[id!] : undefined
     const project = family === 'project' ? settings.projects[id!] : undefined
     const value = block === 'pause' ? { paused: settings.paused } : block === 'policy' || block === 'eval' || block === 'executor' ? settings[block]
       : instance ? { name: instance.name, enabled: instance.enabled, config: instance.config }
-        : repo ? { name: repo.name, enabled: repo.enabled, config: repo.config }
-          : taskSource ? { name: taskSource.name, enabled: taskSource.enabled, config: taskSource.config }
-            : project ?? undefined
+        : project ?? undefined
     if (value === undefined) throw new UserError('unknownBlock', { block })
     return { block, revision: store.blockRevision(block as SettingsSave), value }
   }
@@ -188,8 +188,6 @@ export class Settings {
     const rules = BLOCKS[kind as keyof typeof BLOCKS]
     const stored = store.settings()
     if (kind === 'source' && !sources.record(id)) throw new UserError('sourceNotInstalled', { source: id })
-    if (kind === 'codeRepo' && !stored.codeRepos[id]) throw new UserError('codeRepoNotInstalled', { repo: id })
-    if (kind === 'taskSource' && !stored.taskSources[id]) throw new UserError('taskSourceNotInstalled', { source: id })
     if (kind === 'project' && !stored.projects[id]) throw new UserError('projectNotInstalled', { project: id })
     const parsed = rules.parse(value, sources, id)
     const current = stored
@@ -203,8 +201,7 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
-    if (kind === 'project') { this.checkRepoBinding(candidate, id); this.checkKnowledgeOwner(candidate, id) }
-    else if (kind === 'taskSource') { this.checkRepoBinding(candidate, undefined, id); this.checkKnowledgeBase(candidate, id) }
+    if (kind === 'project') this.checkKnowledgeOwner(candidate, id)
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // 异步检查后重新读取当前设置，以防无关块被并发保存。
@@ -321,106 +318,29 @@ export class Settings {
     this.host.setup.restart()
     return { removed: true as const, restarting: true as const }
   }
-  /**
-   * 创建一条代码仓库记录。运行时在启动时解析它；保存后由设置版本与后续重启生效。
-   * @throws 显式 ID 冲突（`codeRepoExists`）、类型未知或配置无效时抛出。
-   */
-  async createCodeRepo(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin, name: string) {
-    const current = this.current()
-    const parsedKind = CodeRepoKindSchema.parse(kind)
-    const recordId = this.recordId(id, parsedKind, current.codeRepos, 'codeRepoExists', 'repo')
-    const record = CodeRepoRecordSchema.parse({ kind: parsedKind, name, enabled: true, config: config ?? {} })
-    const settings = SettingsSchema.parse({ ...current, codeRepos: { ...current.codeRepos, [recordId]: record } })
-    return this.persistRecord(`codeRepo:${recordId}`, settings, current, origin, recordId)
-  }
-  /** 创建一条任务来源记录；类型必须已注册驱动，配置由驱动的 schema 校验。 */
-  async createTaskSource(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin, name: string) {
-    const current = this.current()
-    const driver = taskSources.kind(kind)
-    if (!driver) throw new UserError('sourceKindUnknown', { kind })
-    const recordId = this.recordId(id, kind, current.taskSources, 'taskSourceExists', 'source')
-    const record = TaskSourceRecordSchema.parse({ kind, name, enabled: true, config: driver.schema.parse(config ?? {}) })
-    const settings = SettingsSchema.parse({ ...current, taskSources: { ...current.taskSources, [recordId]: record } })
-    this.checkKnowledgeBase(settings, recordId)
-    return this.persistRecord(`taskSource:${recordId}`, settings, current, origin, recordId)
-  }
-  /** 创建一个项目；引用的代码仓库与任务来源必须已存在，且任务来源读取的仓库必须与项目一致。 */
+  /** 创建一个项目；代码仓库与任务来源随项目保存，配置由各自 schema 校验。 */
   async createProject(id: string | undefined, value: unknown, origin: SettingsOrigin) {
     const current = this.current()
-    const project = ProjectSchema.parse(value)
+    const project = parseProject(value)
     const recordId = this.recordId(id, 'project', current.projects, 'projectExists', 'project')
     const settings = SettingsSchema.parse({ ...current, projects: { ...current.projects, [recordId]: project } })
-    this.checkRepoBinding(settings, recordId)
     this.checkKnowledgeOwner(settings, recordId)
     return this.persistRecord(`project:${recordId}`, settings, current, origin, recordId)
-  }
-  /**
-   * 项目绑定的代码仓库必须与任务来源读取的仓库一致：Excel 清单在仓库里，仓库不一致会读到别的代码。
-   * 只读任务来源（未声明 `repo`）不约束项目；保存项目时检查该项目，保存任务来源时检查引用它的项目。
-   * @throws 不一致时抛出 `projectRepoMismatch` / `taskSourceRepoMismatch`。
-   */
-  private checkRepoBinding(settings: SettingsValue, projectId?: string, sourceId?: string): void {
-    const pairs = projectId ? [[projectId, settings.projects[projectId]!] as const]
-      : Object.entries(settings.projects).filter(([, project]) => project.taskSource === sourceId)
-    for (const [id, project] of pairs) {
-      const source = settings.taskSources[project.taskSource]
-      const repo = source ? taskSourceRepo(source) : ''
-      if (!repo || repo === project.codeRepo) continue
-      throw new UserError(projectId ? 'projectRepoMismatch' : 'taskSourceRepoMismatch',
-        { project: id, source: project.taskSource, repo: project.codeRepo, taskRepo: repo })
-    }
-  }
-  /**
-   * 同一知识空间只能归属一个任务来源：两个来源读取同一空间会让任务被两个项目各读一遍，回写也会互相覆盖。
-   * 只约束声明了 `knowledgeBase` 的驱动（当前为飞书知识库），空范围（未填写）不参与冲突判断。
-   * @throws 冲突时抛出 `knowledgeBaseInUse`。
-   */
-  private checkKnowledgeBase(settings: SettingsValue, sourceId: string): void {
-    const record = settings.taskSources[sourceId]
-    const space = record ? taskSourceKnowledgeBase(record) : ''
-    if (!space) return
-    for (const [id, other] of Object.entries(settings.taskSources)) {
-      if (id === sourceId) continue
-      if (taskSourceKnowledgeBase(other) === space) throw new UserError('knowledgeBaseInUse', { source: id, space })
-    }
   }
 
   /**
    * 知识空间归属唯一：`spaceId` 全库只归属一个项目，两个项目解析出同一空间即拒绝保存。
-   * 任务来源层已禁止两个来源占用同一空间；这一层再覆盖「两个项目共用同一个任务来源」的情况，
-   * 否则同一空间会经共享来源被两个项目同时读取。
+   * 任务来源随项目保存后，这里直接比较项目自己的任务来源配置。
    * @throws 冲突时抛出 `knowledgeBaseClaimed`。
    */
   private checkKnowledgeOwner(settings: SettingsValue, projectId: string): void {
     const project = settings.projects[projectId]
-    const own = project ? settings.taskSources[project.taskSource] : undefined
-    const space = own ? taskSourceKnowledgeBase(own) : ''
+    const space = project ? projectSpace(project) : ''
     if (!space) return
     for (const [id, other] of Object.entries(settings.projects)) {
       if (id === projectId) continue
-      const record = settings.taskSources[other.taskSource]
-      if (record && taskSourceKnowledgeBase(record) === space) throw new UserError('knowledgeBaseClaimed', { space, project: id })
+      if (projectSpace(other) === space) throw new UserError('knowledgeBaseClaimed', { space, project: id })
     }
-  }
-  /** 删除一条代码仓库记录；仍被项目引用时拒绝。 */
-  async removeCodeRepo(id: string, origin: SettingsOrigin) {
-    const current = this.current()
-    if (!current.codeRepos[id]) throw new UserError('codeRepoNotInstalled', { repo: id })
-    const used = Object.values(current.projects).filter(project => project.codeRepo === id).length
-    if (used) throw new UserError('codeRepoInUse', { repo: id, count: String(used) })
-    const { [id]: _record, ...codeRepos } = current.codeRepos
-    const settings = SettingsSchema.parse({ ...current, codeRepos })
-    return this.removeRecord(`codeRepo:${id}`, settings, current, origin)
-  }
-  /** 删除一条任务来源记录；仍被项目引用时拒绝。 */
-  async removeTaskSource(id: string, origin: SettingsOrigin) {
-    const current = this.current()
-    if (!current.taskSources[id]) throw new UserError('taskSourceNotInstalled', { source: id })
-    const used = Object.values(current.projects).filter(project => project.taskSource === id).length
-    if (used) throw new UserError('taskSourceInUse', { source: id, count: String(used) })
-    const { [id]: _record, ...taskSources } = current.taskSources
-    const settings = SettingsSchema.parse({ ...current, taskSources })
-    return this.removeRecord(`taskSource:${id}`, settings, current, origin)
   }
   /** 删除一个项目；队列与运行记录由 P4 的调度器负责收尾。 */
   async removeProject(id: string, origin: SettingsOrigin) {

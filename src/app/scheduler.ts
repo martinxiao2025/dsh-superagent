@@ -8,6 +8,8 @@ import { ticketStage, type Ticket } from '../core/index.ts'
 import type { Settings } from '../policy.ts'
 import type { Commands } from '../infra/commands.ts'
 import { syncRepoWorkCopy } from '../code-repos/work.ts'
+import type { GitAuth } from '../code-repos/sync.ts'
+import { projectRepoId } from '../projects/kind.ts'
 import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
 import type { FeishuWikiReader } from '../task-sources/feishu-api.ts'
@@ -39,8 +41,10 @@ export interface SchedulerHost {
   readonly lifetime: AbortSignal
   /** 任务来源驱动注册表；默认使用内置注册表。 */
   readonly registry?: TaskSourceRegistry
-  /** 同步代码仓库并返回工作副本目录；默认走 `syncRepoWorkCopy`。 */
-  readonly syncRepo?: (repo: string) => Promise<string>
+  /** 同步项目代码仓库并返回工作副本目录；默认走 `syncRepoWorkCopy`。 */
+  readonly syncRepo?: (projectId: string) => Promise<string>
+  /** 按 Git 凭据 ID 取一次同步材料；项目未选择凭据时返回 undefined。 */
+  readonly gitAuth?: (credential: string) => GitAuth | undefined
   /** 按飞书凭据 ID 取知识库读取能力；飞书知识库任务来源使用。 */
   readonly feishuWiki?: FeishuWikiReader
   /** 按飞书凭据 ID 取群消息读取能力；飞书消息任务来源使用。 */
@@ -71,7 +75,7 @@ export class ProjectScheduler {
   /** 因项目忙而推迟轮询的原因与时间；下一次真正轮询时清除，供快照展示。 */
   private readonly deferred = new Map<string, { reason: string; at: string }>()
   private readonly registry: TaskSourceRegistry
-  private readonly syncRepo: (repo: string) => Promise<string>
+  private readonly syncRepo: (projectId: string) => Promise<string>
   /** 手动扫描与定时检查共用的执行链；非空表示当前有一轮检查在跑。 */
   private cycle: Promise<void> | undefined
   private nextGc = 0
@@ -79,7 +83,7 @@ export class ProjectScheduler {
 
   constructor(private readonly host: SchedulerHost) {
     this.registry = host.registry ?? taskSources
-    this.syncRepo = host.syncRepo ?? (repo => this.defaultSync(repo))
+    this.syncRepo = host.syncRepo ?? (projectId => this.defaultSync(projectId))
   }
 
   /** 启动周期检查；`runOnStart` 的项目立即轮询一次，其余项目等首个间隔到期。 */
@@ -147,20 +151,15 @@ export class ProjectScheduler {
     }
     this.deferred.delete(projectId)
     this.nextPoll.set(projectId, this.now() + interval)
-    const record = settings.taskSources[project.taskSource]
-    const repo = settings.codeRepos[project.codeRepo]
-    if (!record?.enabled) return this.fail(projectId, 'The task source is missing or disabled')
-    if (!repo?.enabled) return this.fail(projectId, 'The code repository is missing or disabled')
-    const driver = this.registry.kind(record.kind)
-    if (!driver) return this.fail(projectId, `Unknown task source type: ${record.kind}`)
-    const parsed = driver.schema.safeParse(record.config)
+    const driver = this.registry.kind(project.taskSource.kind)
+    if (!driver) return this.fail(projectId, `Unknown task source type: ${project.taskSource.kind}`)
+    const parsed = driver.schema.safeParse(this.sourceConfig(projectId, driver.fields, project.taskSource.config, project.feishuCredential))
     if (!parsed.success) return this.fail(projectId, `Invalid task source configuration: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
-    const bound = driver.repo?.(parsed.data) ?? ''
-    if (bound && bound !== project.codeRepo) return this.fail(projectId, `The task source reads ${bound}, but the project uses ${project.codeRepo}`)
+    const repoId = projectRepoId(projectId)
     let tasks: RawTask[]
     try {
-      tasks = await driver.list(parsed.data, { signal: this.host.lifetime, commands: this.boundCommands(parsed.data, project.codeRepo),
-        syncRepo: this.syncRepo, feishu: this.host.feishuWiki, feishuIm: this.host.feishuIm })
+      tasks = await driver.list(parsed.data, { signal: this.host.lifetime, commands: this.host.commands.scope(repoId),
+        syncRepo: () => this.syncRepo(projectId), feishu: this.host.feishuWiki, feishuIm: this.host.feishuIm })
     } catch (error) {
       return this.fail(projectId, String(error instanceof Error ? error.message : error))
     }
@@ -380,10 +379,11 @@ export class ProjectScheduler {
     this.host.store.atomic(() => this.host.store.queue.save(starting))
     // 每次尝试都必须是一个新的触发器与工单：复用已结束工单的触发器只会拿回旧工单，重试不会真正执行。
     const triggerId = key('trigger', 'schedule', entry.id, String(entry.attempt))
+    const repoId = projectRepoId(entry.project)
     const input: ScheduledTicket = {
       trigger: {
-        id: triggerId, source: project.codeRepo, threads: [{ source: project.codeRepo, id: `schedule/${entry.project}` }],
-        actor: { source: project.codeRepo, id: entry.project }, human: false, at: new Date(this.now()).toISOString(),
+        id: triggerId, source: repoId, threads: [{ source: repoId, id: `schedule/${entry.project}` }],
+        actor: { source: repoId, id: entry.project }, human: false, at: new Date(this.now()).toISOString(),
         text: entry.title, meta: { project: entry.project, task: entry.task, item: String(entry.item) },
       },
       project: entry.project, projectName: project.name, task: entry.task, title: entry.title, scope: entry.text,
@@ -497,9 +497,8 @@ export class ProjectScheduler {
   private writeBack(entry: QueueEntry, kind: 'done' | 'failed'): void {
     const settings = this.host.settings()
     const project = settings.projects[entry.project]
-    const record = project && settings.taskSources[project.taskSource]
-    const driver = record && this.registry.kind(record.kind)
-    if (!project || !record?.enabled || !driver?.writeback) return
+    const driver = project && this.registry.kind(project.taskSource.kind)
+    if (!project || !driver?.writeback) return
     const status = kind === 'done' ? project.taskPolicy.doneStatus : project.taskPolicy.failedStatus
     // 持久化副作用：进程重启后仍会重试；键含尝试次数，重复投递不会改变结果。
     this.host.effects.enqueue('writeback', key('writeback', entry.id, kind, String(entry.attempt)),
@@ -512,13 +511,13 @@ export class ProjectScheduler {
     if (this.busy(payload.project)) throw new Later('The project is running a task; the writeback is deferred until it is idle')
     const settings = this.host.settings()
     const project = settings.projects[payload.project]
-    const record = project && settings.taskSources[project.taskSource]
-    const driver = record && this.registry.kind(record.kind)
-    if (!project || !record?.enabled || !driver?.writeback) throw new Error(`The task source for ${payload.project} is unavailable`)
-    const parsed = driver.schema.safeParse(record.config)
+    const driver = project && this.registry.kind(project.taskSource.kind)
+    if (!project || !driver?.writeback) throw new Error(`The task source for ${payload.project} is unavailable`)
+    const parsed = driver.schema.safeParse(this.sourceConfig(payload.project, driver.fields, project.taskSource.config, project.feishuCredential))
     if (!parsed.success) throw new Error(`Invalid task source configuration: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
     await driver.writeback(parsed.data, { taskId: payload.task, taskTitle: payload.taskTitle }, payload.status,
-      { signal: this.host.lifetime, syncRepo: this.syncRepo, commands: this.boundCommands(parsed.data, project.codeRepo) })
+      { signal: this.host.lifetime, syncRepo: () => this.syncRepo(payload.project),
+        commands: this.host.commands.scope(projectRepoId(payload.project)) })
   }
 
   private ticketOf(entry: QueueEntry): Ticket | undefined {
@@ -540,14 +539,22 @@ export class ProjectScheduler {
     return `task-${slug || entry.item}`
   }
 
-  private boundCommands(config: Record<string, unknown>, repo: string): Commands {
-    const source = typeof config.source === 'string' && config.source ? config.source : repo
-    return this.host.commands.scope(source)
+  /** 把项目级凭据与仓库注入驱动配置；驱动未声明这些字段时不添加，避免严格 schema 拒绝。 */
+  private sourceConfig(projectId: string, fields: readonly { key: string }[],
+    config: Record<string, unknown>, feishuCredential: string): Record<string, unknown> {
+    const injected: Record<string, unknown> = {}
+    if (fields.some(field => field.key === 'repo')) injected.repo = projectRepoId(projectId)
+    if (fields.some(field => field.key === 'feishuCredential')) injected.feishuCredential = feishuCredential
+    return { ...config, ...injected }
   }
 
-  private async defaultSync(repo: string): Promise<string> {
-    const result = await syncRepoWorkCopy({ commands: this.host.commands.scope(repo), stateDir: this.host.stateDir, repo, signal: this.host.lifetime })
-    if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repo}`)
+  private async defaultSync(projectId: string): Promise<string> {
+    const project = this.host.settings().projects[projectId]
+    const repoId = projectRepoId(projectId)
+    const auth = project?.gitCredential ? this.host.gitAuth?.(project.gitCredential) : undefined
+    const result = await syncRepoWorkCopy({ commands: this.host.commands.scope(repoId), stateDir: this.host.stateDir, repo: repoId,
+      signal: this.host.lifetime, ...(auth ? { auth } : {}) })
+    if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repoId}`)
     return result.directory
   }
 

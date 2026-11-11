@@ -5,9 +5,7 @@
 import { isAbsolute } from 'node:path'
 import { LIMITS } from './limits.ts'
 import { z } from 'zod'
-import { CodeRepoRecordSchema } from './code-repos/kind.ts'
 import { ProjectSchema } from './projects/kind.ts'
-import { TaskSourceRecordSchema } from './task-sources/kind.ts'
 import { ADMISSION_DEFAULTS, type Admission, type AdmissionCell, type AdmissionRow } from './admission.ts'
 import { key, type AssessmentOutcome, type Mandate, type Policy, type PolicyEffect, type SourceScope, type Strength, type Thread, type Ticket,
   type Trigger, type ActorRef, type GateResult } from './core/index.ts'
@@ -111,26 +109,15 @@ const SourceRecordId = z.string().regex(/^[a-z][a-z0-9-]*$/)
 const RecordSchema = <T extends z.ZodTypeAny>(schema: T) => z.record(SourceRecordId, schema).default({})
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
-  /** 消息来源（飞书）；GitHub / GitLab 只作为代码仓库，见 `codeRepos`。 */
+  /** 消息来源（飞书）；代码仓库与任务来源由各项目内嵌，不再单独保存记录。 */
   sources: RecordSchema(SourceInstanceSchema),
-  codeRepos: RecordSchema(CodeRepoRecordSchema),
-  taskSources: RecordSchema(TaskSourceRecordSchema),
   projects: RecordSchema(ProjectSchema),
   policy: PolicyConfigSchema.default(() => PolicyConfigSchema.parse({})),
   eval: EvalConfigSchema.default(() => EvalConfigSchema.parse({})),
   executor: ExecutorConfigSchema.default(() => ExecutorConfigSchema.parse({})),
-}).strict().superRefine((settings, ctx) => {
-  // 项目引用的记录必须存在；删除记录时由 Settings 先检查引用，这里兜底加载期完整性。
-  for (const [id, project] of Object.entries(settings.projects)) {
-    if (!settings.codeRepos[project.codeRepo]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projects', id, 'codeRepo'],
-      message: `未知的代码仓库：${project.codeRepo}` })
-    if (!settings.taskSources[project.taskSource]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projects', id, 'taskSource'],
-      message: `未知的任务来源：${project.taskSource}` })
-  }
-})
+}).strict()
 export type Settings = z.infer<typeof SettingsSchema>
-export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}` | `codeRepo:${string}` | `taskSource:${string}`
-  | `project:${string}`
+export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}` | `project:${string}`
 export type SettingsSave = SettingsBlock | 'pause'
 export type SettingsOrigin = 'panel' | 'tool' | 'sync'
 
@@ -239,11 +226,10 @@ export function settingsPolicy(settings: Settings, sources: SourceScope): Policy
     revalidate(mandate: Mandate) {
       // 重新校验规则遵循 docs/002（Eval 路径；Resume 会重新校验）。
       const { basis } = mandate
-      // 项目调度的授权：项目及其引用的代码仓库与任务来源都必须仍然有效。
+      // 项目调度的授权：项目仍启用并带有任务时有效；仓库与来源已随项目保存。
       if (basis.via === 'scheduled') {
         const project = settings.projects[basis.project]
-        if (!project?.enabled || !basis.task) return false
-        return !!settings.codeRepos[project.codeRepo]?.enabled && !!settings.taskSources[project.taskSource]?.enabled
+        return !!project?.enabled && !!basis.task
       }
       const { source } = basis
       const current = source && basis.scope ? listened(sources, source, basis.scope) : undefined

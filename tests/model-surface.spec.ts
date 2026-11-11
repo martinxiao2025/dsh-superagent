@@ -139,9 +139,7 @@ async function start() {
     webServer: { host: '127.0.0.1', port: 3082, register: () => () => {} } }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   const seed = new Store(join(directory, 'orchestrator.sqlite'))
-  const github = { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }
-  seed.saveSettings(SettingsSchema.parse({ ...seed.settings(), sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT } } },
-    codeRepos: { github } }))
+  seed.saveSettings(SettingsSchema.parse({ ...seed.settings(), sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT } } } }))
   seed.close()
   const runtime = new Runtime(ctx, testMachine({ stateDir: directory }), () => {})
   await runtime.ready

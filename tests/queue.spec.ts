@@ -43,8 +43,7 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   let clock = Date.parse('2026-01-01T00:00:00.000Z')
   let created = 0
   const settings = {
-    projects, codeRepos: Object.fromEntries(Object.keys(projects).map(id => [`repo-${id}`, { enabled: true, kind: 'github', name: id, config: {} }])),
-    taskSources: Object.fromEntries(Object.keys(projects).map(id => [`source-${id}`, { enabled: true, kind: 'memory', name: id, config: {} }])),
+    projects,
     executor: { maxWorkers }, taskPolicy: {},
   } as unknown as Settings
   const store = {
@@ -101,9 +100,12 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   return { scheduler, reload: () => new ProjectScheduler(host), driver, entries, tickets, effects, flush, advance: (ms: number) => { clock += ms }, settings }
 }
 
-/** 项目记录：两个项目共用同一套默认策略，只有名称不同。 */
-const project = (id: string, repo = `repo-${id}`, source = `source-${id}`) => ({
-  id, name: id, enabled: true, codeRepo: repo, taskSource: source,
+/** 项目记录：每个项目自带一个内存任务来源；只有名称不同。 */
+const project = (id: string) => ({
+  id, name: id, enabled: true,
+  codeRepo: { kind: 'github', config: {} },
+  taskSource: { kind: 'memory', config: {} },
+  gitCredential: '', feishuCredential: '',
   execution: {}, schedule: { intervalMinutes: 5, runOnStart: false },
   retry: { maxRetries: 2, retryBackoffSeconds: 10 },
   taskPolicy: { doneStatus: 'done', failedStatus: 'failed', pendingStatuses: ['todo'] },
@@ -350,7 +352,7 @@ it('队列快照暴露下次轮询时间与最近错误', async () => {
   h.driver.tasks = [task('a1', 'A 一')]
   await h.scheduler.poll('a')
   expect(h.scheduler.snapshot().projects).toEqual([{ id: 'a', name: 'a', enabled: true, nextPollAt: expect.any(String) }])
-  ;(h.settings.taskSources['source-a'] as { enabled: boolean }).enabled = false
+  ;(h.driver as unknown as { list(): Promise<never> }).list = async () => { throw new Error('task source disabled') }
   await h.scheduler.poll('a')
   expect(h.scheduler.snapshot().projects[0]).toMatchObject({ id: 'a', lastError: expect.stringContaining('disabled') })
 })

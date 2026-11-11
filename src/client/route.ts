@@ -4,12 +4,13 @@ import type { SetupPlace } from '../setup.ts'
 import { DECISION_FILTERS, type DecisionFilter } from './api.ts'
 import type { T } from './text.ts'
 
-/** 主菜单按使用视角排列：概览之后先进入项目这一交付单元，再看任务来源等输入状态。 */
+/** 面板可路由的页面；消息来源状态保留直达链接，但不再占据主菜单。 */
 export const TABS = ['overview', 'projects', 'source', 'trigger', 'eval', 'execution', 'settings'] as const
 export type Tab = typeof TABS[number]
-/** 设置分组按创建与使用流程排列：先凭据，再数据接入，再项目，最后系统级配置。 */
-export const SETTINGS_GROUPS = ['gitCredentials', 'feishuCredentials', 'codeRepos', 'taskSources', 'projects', 'eval',
-  'execution', 'prompts', 'deployment'] as const
+/** 主菜单：概览之后先进入项目这一交付单元；消息来源从概览与项目设置进入。 */
+export const MENU_TABS: readonly Tab[] = ['overview', 'projects', 'trigger', 'eval', 'execution', 'settings']
+/** 设置分组按创建与使用流程排列：先凭据，再项目（含仓库与任务来源），最后系统级配置。 */
+export const SETTINGS_GROUPS = ['gitCredentials', 'feishuCredentials', 'projects', 'eval', 'execution', 'prompts', 'deployment'] as const
 export type SettingsGroup = typeof SETTINGS_GROUPS[number]
 export type Route = { page: 'overview' | 'source'; id?: undefined; query?: undefined }
   | { page: 'projects'; id?: string; query?: undefined }
@@ -22,8 +23,11 @@ export type Route = { page: 'overview' | 'source'; id?: undefined; query?: undef
 export const HOME: Route = { page: 'overview' }
 export const settingsRoute = (group: SettingsGroup, query: { source?: string; version?: string } = {}): Route =>
   ({ page: 'settings', query: { group, ...query } })
-export const setupPage = (place: SetupPlace): Route =>
-  place === 'deployment' ? settingsRoute('deployment') : settingsRoute('taskSources', { source: place })
+export const setupPage = (place: SetupPlace): Route => {
+  if (place === 'deployment') return settingsRoute('deployment')
+  // 项目仓库的来源标识带 `repo-` 前缀；打开对应的项目设置卡片。
+  return settingsRoute('projects', { source: place.startsWith('repo-') ? place.slice(5) : place })
+}
 export const routeLabel = (t: T, route: Route): string =>
   route.id ? t(route.page === 'trigger' ? 'term.thread' : route.page === 'projects' ? 'term.project' : 'term.ticket') : t(`tab.${route.page}`)
 
@@ -45,7 +49,7 @@ export function parseRoute(value: unknown): Route | undefined {
     case 'eval': return { page, query: compact({ filter: pick(DECISION_FILTERS, query?.filter),
       window: query?.window === '24h' ? '24h' as const : undefined }) }
     case 'execution': return record ? { page, id: record } : { page, query: compact({ filter: pick(TICKET_FILTERS, query?.filter) }) }
-    case 'settings': return { page, query: { group: pick(SETTINGS_GROUPS, query?.group) ?? 'taskSources',
+    case 'settings': return { page, query: { group: pick(SETTINGS_GROUPS, query?.group) ?? 'projects',
       ...compact({ source: text('source'), version: text('version') }) } }
     default: return undefined
   }
@@ -54,7 +58,7 @@ export function parseRoute(value: unknown): Route | undefined {
 const ROUTE_KEY = 'dsh-superagent/route'
 export interface Location { route: Route; stack: Route[]; group?: SettingsGroup | undefined }
 export const lastSettingsGroup = ({ route, group }: Location): SettingsGroup => route.page === 'settings' ? route.query.group
-  : group ?? 'taskSources'
+  : group ?? 'projects'
 export function initialLocation(): Location {
   try {
     const stored = JSON.parse(sessionStorage.getItem(ROUTE_KEY) ?? 'null') as { route?: unknown; stack?: unknown; group?: unknown } | null

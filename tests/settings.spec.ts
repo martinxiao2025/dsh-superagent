@@ -161,20 +161,18 @@ it('prechecks candidate Source fields with real probes without writing settings'
   expect(await setup.checkSource('feishu', feishuConfig, 'cli', sources))
     .toMatchObject([{ ok: true, code: 'feishuAccountOk' }])
   expect(await setup.checkSource('nope', feishuConfig, 'kind', sources)).toMatchObject([{ ok: false, code: 'sourceKindUnknown' }])
-  // 任务来源属于任务侧：Excel/CSV 必须真实可读，且必须是绝对路径。
+  // 任务来源属于项目：清单相对项目仓库，绝对路径被拒绝；缺少项目仓库时明确报错。
   const dir = mkdtempSync(join(tmpdir(), 'check-source-'))
   const file = join(dir, 'tasks.csv')
   writeFileSync(file, 'task_id,title,description,status\n1,登录,,todo\n', 'utf8')
-  // 任务来源驱动走同一条预检通道：名称必填优先，Excel 真实读清单，飞书缺来源时明确报错。
-  expect(await setup.checkTaskSource('excel', { file }, 'name', store.settings(), { name: '' }))
+  // 任务来源驱动走同一条预检通道：名称必填优先，Excel 清单必须位于项目仓库内，飞书缺来源时明确报错。
+  expect(await setup.checkTaskSource('excel', { file }, 'name', { name: '' }))
     .toMatchObject([{ ok: false, code: 'sourceNameRequired' }])
-  expect(await setup.checkTaskSource('excel', { file }, 'file', store.settings()))
-    .toMatchObject([{ ok: true, code: 'taskFileStandardOk', values: { rows: '1', version: '1', warnings: '' } }])
-  expect(await setup.checkTaskSource('excel', { file: join(dir, 'missing.csv') }, 'file', store.settings()))
-    .toMatchObject([{ ok: false, code: 'taskFileMissing' }])
-  expect(await setup.checkTaskSource('excel', { file: 'tasks.csv' }, 'file', store.settings()))
-    .toMatchObject([{ ok: false, code: 'taskFileRelative' }])
-  expect(await setup.checkTaskSource('feishu-wiki', { spaceId: 'space-1' }, 'feishuCredential', store.settings()))
+  expect(await setup.checkTaskSource('excel', { file }, 'file', {}))
+    .toMatchObject([{ ok: false, code: 'taskFileAbsolute', values: { file } }])
+  expect(await setup.checkTaskSource('excel', { file: 'tasks.csv' }, 'file', {}))
+    .toMatchObject([{ ok: false, code: 'taskRepoUnset' }])
+  expect(await setup.checkTaskSource('feishu-wiki', { spaceId: 'space-1' }, 'feishuCredential', {}))
     .toMatchObject([{ ok: false, code: 'feishuCredentialUnset' }])
   // 预检不写设置、不重启。
   expect(JSON.stringify(store.settings())).toBe(before)
@@ -196,92 +194,43 @@ it('records a project name change in settings history', async () => {
   expect(store.settings().sources.feishu!.name).toBe('支付重构')
   expect(policyHistory(store, sources, '').items[0]!.changes).toContainEqual({ code: 'sourceRenamed', source: 'feishu', from: '飞书', to: '支付重构' })
 })
-it('creates, reads and removes code repos, task sources and projects, and refuses to remove a record a project uses', async () => {
+it('creates, reads and removes a project with its embedded repository and task source', async () => {
   h = await startRuntime()
   const { settings, store } = h.runtime
-  const repo = await settings.createCodeRepo('github', 'repo-main', { repository: 'acme/widgets' }, 'panel', '主仓库')
-  expect(repo).toMatchObject({ id: 'repo-main', restarting: false })
-  const tasks = await settings.createTaskSource('excel', undefined, { file: '/tasks.csv' }, 'panel', '任务表')
-  expect(tasks).toMatchObject({ id: 'excel' })
-  const project = await settings.createProject(undefined, { name: '支付重构', codeRepo: 'repo-main', taskSource: 'excel' }, 'panel')
-  expect(project).toMatchObject({ id: 'project' })
-  expect(settings.view().codeRepos.find(item => item.id === 'repo-main')).toMatchObject({ id: 'repo-main', kind: 'github', name: '主仓库', enabled: true,
-    read: 'settings/codeRepo:repo-main' })
-  expect(settings.view().taskSources).toMatchObject([{ id: 'excel', kind: 'excel', name: '任务表', enabled: true, read: 'settings/taskSource:excel' }])
-  expect(settings.view().projects).toMatchObject([{ id: 'project', name: '支付重构', enabled: true, codeRepo: 'repo-main', taskSource: 'excel',
-    read: 'settings/project:project' }])
-  expect(settings.block('codeRepo:repo-main').value).toEqual({ name: '主仓库', enabled: true, config: { repository: 'acme/widgets' } })
-  // 项目仍引用这两条记录时，两者都不能删除。
-  await expect(settings.removeCodeRepo('repo-main', 'panel')).rejects.toThrow(new UserError('codeRepoInUse', { repo: 'repo-main', count: '1' }))
-  await expect(settings.removeTaskSource('excel', 'panel')).rejects.toThrow(new UserError('taskSourceInUse', { source: 'excel', count: '1' }))
-  // 项目改名通过项目块保存，记录自身的类型保持不变。
+  const repo = { kind: 'github' as const, config: { repository: 'acme/widgets' } }
+  const source = { kind: 'excel', config: { file: '/tasks.csv' } }
+  const project = await settings.createProject('project', { name: '支付重构', codeRepo: repo, taskSource: source }, 'panel')
+  expect(project).toMatchObject({ id: 'project', restarting: false })
+  expect(settings.view().projects).toMatchObject([{ id: 'project', name: '支付重构', enabled: true,
+    codeRepo: 'github', taskSource: 'excel' }])
+  expect(settings.block('project:project').value).toMatchObject({ name: '支付重构', codeRepo: repo, taskSource: source })
+  // 项目改名通过项目块保存，仓库与来源随项目一起写入。
   const block = settings.block('project:project')
   await settings.save('project:project', { ...(block.value as object), name: '支付重构二期' }, block.revision, 'panel')
   expect(store.settings().projects.project!.name).toBe('支付重构二期')
   expect(await settings.removeProject('project', 'panel')).toMatchObject({ removed: true, restarting: false })
-  expect(await settings.removeCodeRepo('repo-main', 'panel')).toMatchObject({ removed: true, restarting: false })
-  expect(await settings.removeTaskSource('excel', 'panel')).toMatchObject({ removed: true, restarting: false })
-  expect([store.settings().projects, store.settings().taskSources]).toEqual([{}, {}])
-  expect(store.settings().codeRepos['repo-main']).toBeUndefined()
-})
-
-it('refuses a project whose code repo differs from the repo its Excel task source reads', async () => {
-  h = await startRuntime()
-  const { settings, store } = h.runtime
-  await settings.createCodeRepo('github', 'main', { repository: 'acme/widgets' }, 'panel', '主仓库')
-  await settings.createCodeRepo('github', 'other', { repository: 'acme/other' }, 'panel', '另一个仓库')
-  await settings.createTaskSource('excel', 'tasks', { repo: 'main', file: 'tasks/backlog.csv' }, 'panel', '任务表')
-  await expect(settings.createProject('p1', { name: '支付重构', codeRepo: 'other', taskSource: 'tasks' }, 'panel'))
-    .rejects.toThrow(new UserError('projectRepoMismatch', { project: 'p1', source: 'tasks', repo: 'other', taskRepo: 'main' }))
-  expect(store.settings().projects.p1).toBeUndefined()
-  await expect(settings.createProject('p1', { name: '支付重构', codeRepo: 'main', taskSource: 'tasks' }, 'panel'))
-    .resolves.toMatchObject({ id: 'p1' })
-})
-
-it('refuses a task source save whose repo no longer matches a project that reads through it', async () => {
-  h = await startRuntime()
-  const { settings, store } = h.runtime
-  await settings.createCodeRepo('github', 'main', { repository: 'acme/widgets' }, 'panel', '主仓库')
-  await settings.createCodeRepo('github', 'other', { repository: 'acme/other' }, 'panel', '另一个仓库')
-  await settings.createTaskSource('excel', 'tasks', { repo: 'main', file: 'tasks/backlog.csv' }, 'panel', '任务表')
-  await settings.createProject('p1', { name: '支付重构', codeRepo: 'main', taskSource: 'tasks' }, 'panel')
-  const block = settings.block('taskSource:tasks')
-  const value = block.value as { enabled: boolean; config: Record<string, unknown> }
-  await expect(settings.save('taskSource:tasks', { ...value, config: { ...value.config, repo: 'other' } }, block.revision, 'panel'))
-    .rejects.toThrow(new UserError('taskSourceRepoMismatch', { project: 'p1', source: 'tasks', repo: 'main', taskRepo: 'other' }))
-  expect(store.settings().taskSources.tasks!.config).toMatchObject({ repo: 'main' })
+  expect(store.settings().projects).toEqual({})
 })
 
 it('refuses two Projects that resolve to the same wiki space, on create and on save', async () => {
   h = await startRuntime()
   const { settings, store } = h.runtime
-  await settings.createCodeRepo('github', 'main', { repository: 'acme/widgets' }, 'panel', '主仓库')
-  await settings.createTaskSource('feishu-wiki', 'wiki-a', { spaceId: 'space-1' }, 'panel', '知识库 A')
-  await settings.createProject('p1', { name: '项目一', codeRepo: 'main', taskSource: 'wiki-a' }, 'panel')
-  // 两个项目共用同一个任务来源，等于同一个空间被两个项目读取：拒绝创建。
-  await expect(settings.createProject('p2', { name: '项目二', codeRepo: 'main', taskSource: 'wiki-a' }, 'panel'))
+  const repo = { kind: 'github' as const, config: { repository: 'acme/widgets' } }
+  await settings.createProject('p1', { name: '项目一', codeRepo: repo,
+    taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } }, 'panel')
+  // 两个项目解析出同一个知识空间：拒绝创建。
+  await expect(settings.createProject('p2', { name: '项目二', codeRepo: repo,
+    taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } }, 'panel'))
     .rejects.toThrow(new UserError('knowledgeBaseClaimed', { space: 'space-1', project: 'p1' }))
   expect(store.settings().projects.p2).toBeUndefined()
   // 已存在的项目改绑到同一空间同样拒绝，原绑定保持不变。
-  await settings.createTaskSource('excel', 'sheet', { repo: 'main', file: 'tasks/backlog.csv' }, 'panel', '清单')
-  await settings.createProject('p2', { name: '项目二', codeRepo: 'main', taskSource: 'sheet' }, 'panel')
+  await settings.createProject('p2', { name: '项目二', codeRepo: repo,
+    taskSource: { kind: 'excel', config: { file: '/tasks.csv' } } }, 'panel')
   const block = settings.block('project:p2')
-  const value = block.value as { taskSource: string }
-  await expect(settings.save('project:p2', { ...value, taskSource: 'wiki-a' }, block.revision, 'panel'))
+  const value = block.value as { taskSource: unknown }
+  await expect(settings.save('project:p2', { ...value, taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } },
+    block.revision, 'panel'))
     .rejects.toThrow(new UserError('knowledgeBaseClaimed', { space: 'space-1', project: 'p1' }))
-  expect(store.settings().projects.p2!.taskSource).toBe('sheet')
+  expect(store.settings().projects.p2!.taskSource).toMatchObject({ kind: 'excel', config: { file: '/tasks.csv' } })
 })
-it('refuses two TaskSources that claim the same wiki space, on create and on save', async () => {
-  h = await startRuntime()
-  const { settings, store } = h.runtime
-  await settings.createTaskSource('feishu-wiki', 'wiki-a', { spaceId: 'space-1' }, 'panel', '知识库 A')
-  await expect(settings.createTaskSource('feishu-wiki', 'wiki-b', { spaceId: 'space-1' }, 'panel', '知识库 B'))
-    .rejects.toThrow(new UserError('knowledgeBaseInUse', { source: 'wiki-a', space: 'space-1' }))
-  expect(store.settings().taskSources['wiki-b']).toBeUndefined()
-  await settings.createTaskSource('feishu-wiki', 'wiki-c', { spaceId: 'space-2' }, 'panel', '知识库 C')
-  const block = settings.block('taskSource:wiki-c')
-  const value = block.value as { enabled: boolean; config: Record<string, unknown> }
-  await expect(settings.save('taskSource:wiki-c', { ...value, config: { ...value.config, spaceId: 'space-1' } }, block.revision, 'panel'))
-    .rejects.toThrow(new UserError('knowledgeBaseInUse', { source: 'wiki-a', space: 'space-1' }))
-  expect(store.settings().taskSources['wiki-c']!.config).toMatchObject({ spaceId: 'space-2' })
-})
+

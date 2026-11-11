@@ -2,7 +2,7 @@
 import { SETUP_FIELDS } from '../../deployment.ts'
 import { KV } from '../../kv.ts'
 import { policyVersion } from '../../policy.ts'
-import { CODE_REPO_TYPES, codeRepoType } from '../../code-repos/types.ts'
+import { CODE_REPO_TYPES } from '../../code-repos/types.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
 import { taskSources } from '../../task-sources/index.ts'
 import { declaredVariables, executionRoot } from '../execution-environment.ts'
@@ -46,24 +46,15 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
         labels: store.get(KV.sources.labels(instance.id)) ?? {}, openTickets: openTicketCount(store, instance.id),
         ...problem ? { problem } : {}, ...policyOf(sources, instance.id, health) }
     }),
-    // 代码仓库、任务来源与项目各自维护记录与版本；代码仓库的类型目录与字段来自类型描述。
-    codeRepoKinds: CODE_REPO_TYPES.map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
-    codeRepos: Object.entries(settings.codeRepos).map(([id, record]) => {
-      const type = codeRepoType(record.kind)
-      return { id, kind: record.kind, name: record.name, enabled: record.enabled,
-        title: type?.title, fields: type?.fields ?? [],
-        value: { name: record.name, enabled: record.enabled, config: record.config }, revision: store.blockRevision(`codeRepo:${id}`) }
-    }),
-    // 任务来源类型目录由驱动注册表生成：新增一个驱动后，面板下拉自动出现。
-    taskSourceKinds: taskSources.kinds().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
-    taskSources: Object.entries(settings.taskSources).map(([id, record]) => {
-      const kind = taskSources.kind(record.kind)
-      return { id, kind: record.kind, name: record.name, enabled: record.enabled,
-        title: kind?.title, fields: kind?.fields ?? [],
-        value: { name: record.name, enabled: record.enabled, config: record.config }, revision: store.blockRevision(`taskSource:${id}`) }
-    }),
+    // 代码仓库与任务来源已并入项目：这里只提供类型目录与字段，供项目表单内嵌渲染。
+    codeRepoKinds: CODE_REPO_TYPES.map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description,
+      fields: kind.fields.filter(field => field.key !== 'auth' && field.key !== 'sshKey') })),
+    // 任务来源类型目录由驱动注册表生成；凭据与仓库位置由项目统一提供，不再出现在驱动字段里。
+    taskSourceKinds: taskSources.kinds().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description,
+      needsFeishuCredential: kind.fields.some(field => field.key === 'feishuCredential'),
+      fields: kind.fields.filter(field => field.key !== 'feishuCredential' && field.key !== 'repo') })),
     projects: Object.entries(settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
-      codeRepo: project.codeRepo, taskSource: project.taskSource, value: project, revision: store.blockRevision(`project:${id}`) })),
+      value: project, revision: store.blockRevision(`project:${id}`) })),
     environment: { root: executionRoot(settings, stateDir), variables: declaredVariables(sources, settings) },
   }
 }

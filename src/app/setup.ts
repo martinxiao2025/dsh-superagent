@@ -11,11 +11,12 @@ import {
 import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import { Commands } from '../infra/commands.ts'
 import { repoDirectory, syncRepoWorkCopy } from '../code-repos/work.ts'
-import { probeRemote, remoteOf, sshKeyFile } from '../code-repos/sync.ts'
+import { probeRemote, remoteOf, sshKeyFile, type GitAuth } from '../code-repos/sync.ts'
 import { codeRepoType } from '../code-repos/types.ts'
 import { taskSources, type TaskSourceVerifyMeta } from '../task-sources/index.ts'
 import { TaskRepoError } from '../task-sources/kind.ts'
 import { LIMITS } from '../limits.ts'
+import { projectRepoId, type ProjectRepo } from '../projects/kind.ts'
 import type { FeishuWikiApi } from '../task-sources/feishu-api.ts'
 import type { FeishuImApi } from '../task-sources/feishu-im-api.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
@@ -31,6 +32,10 @@ export interface SetupHost {
   feishuWiki?(credential: string): Promise<FeishuWikiApi | undefined>
   /** 按飞书凭据 ID 取群消息读取能力；凭据未安装或材料不可用时返回 undefined。 */
   feishuIm?(credential: string): Promise<FeishuImApi | undefined>
+  /** 只读取 Git 凭据的认证方式与账号名，不接触材料；用于解析项目仓库。 */
+  gitCredential?(id: string): { kind: 'ssh' | 'https'; username: string } | undefined
+  /** 按 Git 凭据 ID 取一次同步使用的材料；未安装时返回 undefined。 */
+  gitAuth?(id: string): GitAuth | undefined
   restart(): void
 }
 
@@ -42,10 +47,11 @@ const setupMaterial = (settings: Settings) => JSON.stringify({
   sources: Object.entries(settings.sources)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([id, record]) => [id, record.kind, record.enabled, (SETUP_FIELDS[record.kind] ?? []).map(key => record.config[key] ?? '')]),
-  // 代码仓库也要出现在部署里：任务来源读取清单前需要同步工作副本，git 凭据按记录 ID 绑定。
-  codeRepos: Object.entries(settings.codeRepos)
+  // 项目仓库进入部署：每个项目把自己的仓库配置解析成来源，Git 凭据随项目保存。
+  projects: Object.entries(settings.projects)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([id, record]) => [id, record.kind, record.enabled, (SETUP_FIELDS[record.kind] ?? []).map(key => record.config[key] ?? '')]),
+    .map(([id, project]) => [id, project.enabled, project.codeRepo.kind,
+      (SETUP_FIELDS[project.codeRepo.kind] ?? []).map(key => project.codeRepo.config[key] ?? ''), project.gitCredential]),
 })
 export const setupChanged = (before: Settings | undefined, after: Settings): boolean => !before || setupMaterial(before) !== setupMaterial(after)
 const checkPassed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck => ({ field, ok: true, scope: 'check', code, values })
@@ -159,26 +165,35 @@ export class Setup {
   }
   /**
    * 任务来源的字段级预检：由驱动真实读取清单或文档，但这里不写设置、不重启。
-   * 面板「全部验证」先检查名称，再按驱动声明的非高级字段依次检查。
+   * 仓库与飞书凭据由项目提供，这里注入到候选配置后再交给驱动。
    */
-  async checkTaskSource(kind: string, config: unknown, field: string, settings: Settings,
-    meta: TaskSourceVerifyMeta = {}): Promise<SourceCheck[]> {
-    return taskSources.verify(kind, config, field, { ...meta, taken: id => settings.taskSources[id] !== undefined }, {
+  async checkTaskSource(kind: string, config: unknown, field: string, meta: TaskSourceVerifyMeta & {
+    feishuCredential?: string
+    projectId?: string
+    repo?: ProjectRepo
+    gitCredential?: string
+  } = {}): Promise<SourceCheck[]> {
+    const driver = taskSources.kind(kind)
+    const repoId = projectRepoId(meta.projectId || 'candidate')
+    const injected: Record<string, unknown> = {}
+    if (driver?.fields.some(item => item.key === 'repo')) injected.repo = repoId
+    if (driver?.fields.some(item => item.key === 'feishuCredential')) injected.feishuCredential = meta.feishuCredential ?? ''
+    const merged = config && typeof config === 'object'
+      ? { ...config as Record<string, unknown>, ...injected } : injected
+    return taskSources.verify(kind, merged, field, {}, {
       feishu: async credential => this.host.feishuWiki?.(credential) ?? undefined,
       feishuIm: async credential => this.host.feishuIm?.(credential) ?? undefined,
-      syncRepo: async repo => this.taskSourceRepo(repo, settings),
+      syncRepo: async () => this.projectRepo(repoId, meta.repo, meta.gitCredential),
     })
   }
   /**
-   * 代码仓库记录的字段级预检：按所选认证方式真实运行 gh/glab 或 `git ls-remote`，不写设置、不重启。
-   * SSH 模式不依赖 CLI；可访问但没有分支的仓库返回 `codeRepoEmpty`，而不是笼统的不可访问。
+   * 代码仓库的字段级预检：优先使用项目选择的 Git 凭据探测远端；
+   * 未选择凭据时沿用 gh/glab 或本机 SSH key，保持无需凭据的既有用法。
    */
-  async checkCodeRepo(kind: string, config: unknown, field: string, settings: Settings,
-    meta: { id?: string; name?: string } = {}): Promise<SourceCheck[]> {
+  async checkCodeRepo(kind: string, config: unknown, field: string,
+    meta: { gitCredential?: string } = {}): Promise<SourceCheck[]> {
     const type = codeRepoType(kind)
     if (!type) return [checkFailed(field === 'all' ? 'kind' : field, 'sourceKindUnknown', { kind })]
-    if (field === 'name') return [checkName(meta.name ?? '')]
-    if (field === 'id') return [checkId(meta.id ?? '', { record: id => settings.codeRepos[id] })]
     const parsed = type.schema.safeParse(config ?? {})
     if (!parsed.success) {
       return [checkFailed(field === 'all' ? 'kind' : field, 'sourceConfigInvalid', {
@@ -186,22 +201,22 @@ export class Setup {
     }
     if (field === 'kind') return [checkPassed('kind', 'sourceKindOk', { kind })]
     const data = parsed.data as Record<string, unknown>
+    const injected = meta.gitCredential ? ['gitCredential'] : []
     const fields = field === 'all'
-      ? ['name', ...(meta.id === undefined ? [] : ['id']), ...type.checkFields]
+      ? [...type.checkFields.filter(name => name !== 'auth' && name !== 'sshKey'), ...injected]
       : [field]
     const probe = this.probe()
     const checks: SourceCheck[] = []
-    for (const name of fields) {
-      if (name === 'name') { checks.push(checkName(meta.name ?? '')); continue }
-      if (name === 'id') { checks.push(checkId(meta.id ?? '', { record: id => settings.codeRepos[id] })); continue }
-      checks.push(await this.checkCodeRepoField(kind, name, data, probe))
-    }
+    for (const name of fields) checks.push(await this.checkCodeRepoField(kind, name, data, probe, meta.gitCredential))
     return checks
   }
-  /** 单个代码仓库字段：SSH 用本机 key 探测远端，HTTPS 沿用 gh/glab 的账户与仓库检查。 */
-  private async checkCodeRepoField(kind: string, field: string, config: Record<string, unknown>, probe: Probe): Promise<SourceCheck> {
+  /** 单个代码仓库字段：有 Git 凭据时真实探测远端，否则沿用 SSH key 或 gh/glab 检查。 */
+  private async checkCodeRepoField(kind: string, field: string, config: Record<string, unknown>, probe: Probe,
+    gitCredential = ''): Promise<SourceCheck> {
     try {
-      const auth = config.auth === 'ssh' ? 'ssh' as const : 'https' as const
+      const credential = gitCredential ? this.host.gitCredential?.(gitCredential) : undefined
+      const credentialAuth = gitCredential ? this.host.gitAuth?.(gitCredential) : undefined
+      const auth = credential?.kind ?? (config.auth === 'ssh' ? 'ssh' as const : 'https' as const)
       const defaultHost = kind === 'gitlab' ? this.host.machine.gitlabHost.get() : this.host.machine.githubHost.get()
       const host = hostOf(String(config.instanceUrl ?? ''), defaultHost)
       const key = String(config.sshKey ?? '')
@@ -211,15 +226,21 @@ export class Setup {
         : { kind: 'gitlab' as const, instanceUrl: String(config.instanceUrl ?? ''), project: String(config.project ?? ''),
           auth, remote: String(config.remote ?? '') }
       const remote = () => remoteOf(source, '', { github: this.host.machine.githubHost.get(), gitlab: this.host.machine.gitlabHost.get() })
+      if (field === 'gitCredential') {
+        if (!gitCredential) return checkPassed(field, 'codeRepoCredentialAuto')
+        if (!credential || !credentialAuth) return checkFailed(field, 'codeRepoCredentialUnusable', { credential: gitCredential })
+        return checkPassed(field, 'codeRepoCredentialOk', { kind: auth, login: credential.username })
+      }
       if (field === 'auth') return checkPassed(field, auth === 'ssh' ? 'codeRepoAuthSsh' : 'codeRepoAuthHttps')
       if (field === 'instanceUrl') {
-        if (auth === 'ssh') return checkPassed(field, 'codeRepoInstanceOk', { host })
+        if (credential || auth === 'ssh') return checkPassed(field, 'codeRepoInstanceOk', { host })
         const account = kind === 'github'
           ? await checkGithubAccount(this.host.machine, 'candidate', config, probe)
           : await checkGitlabAccount(this.host.machine, 'candidate', config, probe)
         return checkPassed(field, 'codeRepoInstanceOk', { host: hostOf(account.instanceUrl, defaultHost) })
       }
       if (field === 'sshKey') {
+        if (credential) return checkPassed(field, 'codeRepoKeyIdle', { key: '' })
         const file = sshKeyFile(key)
         if (!file) return checkPassed(field, 'codeRepoKeyDefault')
         if (!isAbsolute(file) || !existsSync(file) || !statSync(file).isFile()) return checkFailed(field, 'codeRepoKeyMissing', { key: file })
@@ -233,14 +254,15 @@ export class Setup {
       }
       if (field === 'remote') {
         if (!String(config.remote ?? '').trim()) return checkPassed(field, 'codeRepoRemoteAuto', { remote: remote() })
-        const refs = await probeRemote(probe, remote(), key)
+        const refs = await probeRemote(probe, remote(), credential ? '' : key, credentialAuth)
         return refs.branches.length
           ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
           : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
       }
       if (field === 'repository' || field === 'project') {
-        if (auth === 'ssh') {
-          const refs = await probeRemote(probe, remote(), key)
+        if (credential || auth === 'ssh') {
+          if (credential && !credentialAuth) return checkFailed(field, 'codeRepoCredentialUnusable', { credential: gitCredential })
+          const refs = await probeRemote(probe, remote(), credential ? '' : key, credentialAuth)
           return refs.branches.length
             ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
             : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
@@ -253,7 +275,7 @@ export class Setup {
         return checkPassed(field, 'gitlabProjectOk', { project: access.project, login: access.account.login })
       }
       if (field === 'cli') {
-        if (auth === 'ssh') return checkPassed(field, 'codeRepoCliOptional')
+        if (credential || auth === 'ssh') return checkPassed(field, 'codeRepoCliOptional')
         const account = kind === 'github'
           ? await checkGithubAccount(this.host.machine, 'candidate', config, probe)
           : await checkGitlabAccount(this.host.machine, 'candidate', config, probe)
@@ -262,32 +284,57 @@ export class Setup {
       return checkFailed(field, 'checkUnsupported', { field })
     } catch (error) { return checkThrown(field, error) }
   }
-  /** 同步任务来源绑定的代码仓库并返回工作副本目录；失败按原因分类，供预检给出可读提示。 */
-  private async taskSourceRepo(repo: string, settings: Settings): Promise<string> {
-    const record = settings.codeRepos[repo]
-    if (!record) throw new TaskRepoError('repoMissing', `代码仓库记录不存在：${repo}`)
-    if (!record.enabled) throw new TaskRepoError('repoNotReady', `代码仓库记录已停用：${repo}`)
+  /** 同步项目自己的代码仓库并返回工作副本目录；失败按原因分类，供预检给出可读提示。 */
+  private async projectRepo(repoId: string, repo: ProjectRepo | undefined, gitCredential = ''): Promise<string> {
+    if (!repo) throw new TaskRepoError('repoUnset', '项目尚未配置代码仓库')
     const probe = this.probe()
-    let resolved: ResolvedSource | undefined
-    try { resolved = await this.resolveRecord(repo, record, probe) }
+    let resolved: ResolvedSource
+    try { resolved = await this.projectSource(repoId, repo, gitCredential, probe) }
     catch (error) {
-      throw new TaskRepoError('repoNotReady', `代码仓库记录尚未就绪：${error instanceof Error ? error.message : String(error)}`)
+      throw new TaskRepoError('repoNotReady', `代码仓库尚未就绪：${error instanceof Error ? error.message : String(error)}`)
     }
-    if (!resolved || (resolved.kind !== 'github' && resolved.kind !== 'gitlab')) {
-      throw new TaskRepoError('repoNotReady', `代码仓库记录尚未配置仓库：${repo}`)
-    }
-    // 记录可能刚创建、尚未进入启动时的部署，因此在按需解析后叠加到部署上再执行 git。
-    const deployment: Deployment = { ...this.host.machine, sources: { ...(this.resolved?.sources ?? {}), [repo]: resolved } }
-    const commands = new Commands(() => deployment, this.commandEnvironment, this.host.lifetime).scope(repo)
+    // 候选配置可能尚未进入启动时的部署，因此在按需解析后叠加到部署上再执行 git。
+    const deployment: Deployment = { ...this.host.machine, sources: { ...(this.resolved?.sources ?? {}), [repoId]: resolved } }
+    const commands = new Commands(() => deployment, this.commandEnvironment, this.host.lifetime).scope(repoId)
+    const auth = gitCredential ? this.host.gitAuth?.(gitCredential) : undefined
     try {
-      const result = await syncRepoWorkCopy({ commands, stateDir: this.host.machine.stateDir, repo, signal: this.host.lifetime })
+      const result = await syncRepoWorkCopy({ commands, stateDir: this.host.machine.stateDir, repo: repoId, signal: this.host.lifetime,
+        ...(auth ? { auth } : {}) })
       // 空仓库同步本身成功，但没有分支和提交；单独分类，避免提示成笼统的同步失败。
-      if (result.empty) throw new TaskRepoError('repoEmpty', `代码仓库为空，没有分支或提交：${repo}`)
+      if (result.empty) throw new TaskRepoError('repoEmpty', '代码仓库为空，没有分支或提交')
     } catch (error) {
       if (error instanceof TaskRepoError) throw error
       throw new TaskRepoError('syncFailed', `代码仓库同步失败：${error instanceof Error ? error.message : String(error)}`)
     }
-    return repoDirectory(this.host.machine.stateDir, repo)
+    return repoDirectory(this.host.machine.stateDir, repoId)
+  }
+  /** 把项目内嵌的仓库配置解析成部署来源；有 Git 凭据时不依赖 CLI 登录。 */
+  private async projectSource(id: string, repo: ProjectRepo, gitCredential: string,
+    probe: ReturnType<Setup['probe']>): Promise<ResolvedSource> {
+    const { machine } = this.host
+    const credential = gitCredential ? this.host.gitCredential?.(gitCredential) : undefined
+    if (!credential) {
+      const config = { ...repo.config, auth: repo.config.auth === 'ssh' ? 'ssh' : 'https' }
+      return repo.kind === 'github'
+        ? resolveGithubSource(machine, id, config, probe)
+        : resolveGitlabSource(machine, id, config, probe)
+    }
+    if (repo.kind === 'github') {
+      const repository = String(repo.config.repository ?? '')
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new SetupError('repositoryUnset', {}, id)
+      return {
+        id, kind: 'github', instanceUrl: String(repo.config.instanceUrl ?? ''),
+        cli: String(repo.config.cli ?? ''), repository, login: credential.username, noreply: '',
+        auth: credential.kind, remote: String(repo.config.remote ?? ''), sshKey: '', gitCredential,
+      }
+    }
+    const project = String(repo.config.project ?? '')
+    if (!/^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/.test(project)) throw new SetupError('gitlabProjectUnset', {}, id)
+    return {
+      id, kind: 'gitlab', instanceUrl: String(repo.config.instanceUrl ?? ''),
+      cli: String(repo.config.cli ?? ''), project, projectId: 0, login: credential.username, userId: 0,
+      auth: credential.kind, remote: String(repo.config.remote ?? ''), sshKey: '', gitCredential,
+    }
   }
   /** 按类型分派一次字段预检；`SetupError` 转成 `setup` 作用域的结果，其余异常转成可读失败。 */
   private async checkField(kind: string, field: string, config: Record<string, unknown>, probe: Probe): Promise<SourceCheck> {
@@ -360,16 +407,16 @@ export class Setup {
         context.logger.warn('dsh-superagent leaves source %s out: %s', id, error.message)
       }
     }
-    // 代码仓库也进入部署：git 凭据按记录 ID 绑定，任务来源同步工作副本时复用同一套命令入口。
-    for (const [id, record] of Object.entries(settings.codeRepos)) {
-      if (!record.enabled || sources[id]) continue
+    // 每个启用的项目把自己的仓库解析成部署来源，任务来源同步工作副本时复用同一套命令入口。
+    for (const [id, project] of Object.entries(settings.projects)) {
+      if (!project.enabled) continue
+      const repoId = projectRepoId(id)
       try {
-        const resolved = await this.resolveRecord(id, record, probe)
-        if (resolved) sources[id] = resolved
+        sources[repoId] = await this.projectSource(repoId, project.codeRepo, project.gitCredential, probe)
       } catch (error) {
         if (!(error instanceof SetupError)) throw error
-        problems[id] = error.problem
-        context.logger.warn('dsh-superagent leaves code repo %s out: %s', id, error.message)
+        problems[repoId] = error.problem
+        context.logger.warn('dsh-superagent leaves project repo %s out: %s', id, error.message)
       }
     }
     this.sourceProblems = problems

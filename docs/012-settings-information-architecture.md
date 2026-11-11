@@ -38,7 +38,7 @@
 | --- | --- | --- | --- | --- |
 | 来源 | 顶部「来源」页签是运行状态（[app.tsx:151](../src/client/app.tsx#L151)、[source.tsx:264-278](../src/client/source.tsx#L264-L278)）；设置 →「来源」是配置卡片（[source.tsx:183-191](../src/client/source.tsx#L183-L191)） | `settings.sources`，块 `source:<id>`，新建会重启插件 | 飞书：名称、启用、实例地址、机器人 `lark-cli`、接收的群、其他群、私聊；高级：每页消息数、链接超时；策略：可发起工作的用户、同步群、候选机器人（[feishu.ts:36-90](../src/sources/feishu.ts#L36-L90)） | 新增、编辑、删除、启停、逐字段验证、全部验证、刷新群名、策略同步、丢弃消息查看 |
 | 代码仓库 | 设置 →「代码仓库」 | `settings.codeRepos`，块 `codeRepo:<id>` | 名称、启用、类型；配置：实例地址、认证方式、仓库、自定义远端（高级）、SSH 私钥路径（高级）、CLI（[github.ts:15-31](../src/sources/github.ts#L15-L31)） | 新增、编辑、删除、启停、逐字段验证、全部验证 |
-| 任务来源 | 设置 →「任务来源」 | `settings.taskSources`，块 `taskSource:<id>` | Excel：代码仓库记录 ID、清单文件、工作表、编号/标题/描述/状态/优先级列（[excel.ts:26-38](../src/task-sources/excel.ts#L26-L38)）；飞书知识库：飞书来源记录 ID、知识库链接、五个列字段（[feishu-wiki.ts:18-27](../src/task-sources/feishu-wiki.ts#L18-L27)） | 新增、逐字段验证、全部验证、删除；**没有编辑入口**（[task-sources.tsx:106-133](../src/client/task-sources.tsx#L106-L133)） |
+| 任务来源 | 设置 →「项目」内嵌编辑（[projects.tsx](../src/client/projects.tsx)） | `settings.projects[].taskSource`，类型与配置随项目保存 | Excel：清单文件、工作表、编号/标题/描述/状态/优先级列（[excel.ts:26-38](../src/task-sources/excel.ts#L26-L38)）；飞书知识库：知识库链接、五个列字段（[feishu-wiki.ts:18-27](../src/task-sources/feishu-wiki.ts#L18-L27)） | 新建/编辑项目时逐字段验证；仓库位置与飞书凭据由项目注入 |
 | 项目 | 顶部「项目」页签是运行时列表与详情（[projects.tsx:14-89](../src/client/projects.tsx#L14-L89)）；设置 →「项目」是配置卡片（[projects.tsx:92-257](../src/client/projects.tsx#L92-L257)） | `settings.projects`，块 `project:<id>`，`.strict()`（[kind.ts:8-34](../src/projects/kind.ts#L8-L34)） | 名称、启用、`codeRepo` ID、`taskSource` ID、执行目录、分支、轮询分钟、启动即跑、最大重试、退避秒数、待处理状态、完成状态、失败状态 | 新增（只填名称 + 选两个已有记录）、编辑、删除；启停要进编辑表单才能改 |
 
 ### 1.3 重复与概念重叠
@@ -66,8 +66,8 @@
 1. **同名双层入口**：顶部「来源」是状态，设置「来源」是配置；顶部「项目」是运行时，设置「项目」是配置。用户点两个同名入口看到完全不同的内容，且没有面包屑说明「你在哪一层」。
 2. **导航没有层级**：八个设置项平铺，前六项与「提示词」「部署」只差 10px 上边距，没有「Git 凭据 / 飞书凭据 / 项目 / 系统」这类分组标题，也没有二级导航。移动端直接换成换行按钮，层级信息完全丢失。
 3. **列表与详情关系混乱**：项目有独立的详情页（任务队列），但项目配置只能在内联卡片里展开；代码仓库与任务来源没有详情页，只有卡片；任务来源连编辑都没有。用户无法在一个页面同时看到「配置」与「它现在跑成什么样」。
-4. **保存与验证位置不统一**：`SaveBar` 在每个卡片底部（[source.tsx:179](../src/client/source.tsx#L179)、[code-repos.tsx:173](../src/client/code-repos.tsx#L173)、[projects.tsx:256](../src/client/projects.tsx#L256)），「全部验证」在表单中部，逐字段验证按钮贴在输入框右侧；`VerifyRow` 在三个文件里各写了一遍（[source.tsx:20-31](../src/client/source.tsx#L20-L31)、[code-repos.tsx:11-21](../src/client/code-repos.tsx#L11-L21)、[task-sources.tsx:12-24](../src/client/task-sources.tsx#L12-L24)）。同一动作在不同分区的视觉位置与反馈方式不一致。
-5. **动作位置不一致**：来源的启停与删除在卡片头（[source.tsx:154-163](../src/client/source.tsx#L154-L163)），代码仓库的启停在表单里、删除在卡片头（[code-repos.tsx:117-126](../src/client/code-repos.tsx#L117-L126)、[code-repos.tsx:160-162](../src/client/code-repos.tsx#L160-L162)），项目的启停也在表单里（[projects.tsx:211-213](../src/client/projects.tsx#L211-L213)）。停用项目要「编辑 → 关开关 → 保存」三步。
+4. **保存与验证位置不统一**：`SaveBar` 在每个卡片底部（[source.tsx:179](../src/client/source.tsx#L179)、[projects.tsx](../src/client/projects.tsx)），「全部验证」在表单中部，逐字段验证按钮贴在输入框右侧；`VerifyRow` 在多个文件里各写了一遍（[source.tsx:20-31](../src/client/source.tsx#L20-L31)、`code-repos.tsx`、`task-sources.tsx`，后两者已删除）。同一动作在不同分区的视觉位置与反馈方式不一致。
+5. **动作位置不一致**：来源的启停与删除在卡片头（[source.tsx:154-163](../src/client/source.tsx#L154-L163)），代码仓库的启停与删除原先在 `code-repos.tsx` 内（已删除，并入项目卡片），项目的启停也在表单里（[projects.tsx](../src/client/projects.tsx)）。停用项目要「编辑 → 关开关 → 保存」三步。
 6. **危险操作确认不足**：删除都有 `ConfirmButton`，但停用项目的后果没有任何提示；来源停用会结束未完成工单，只有来源卡片有这段说明（[source.tsx:129-144](../src/client/source.tsx#L129-L144)）。项目停用后队列里已有任务如何处理，界面完全没写。
 7. **空状态无下一步**：没有项目时只有一句提示；新增项目表单检测到没有仓库或任务来源时只显示两行文字（[projects.tsx:124-125](../src/client/projects.tsx#L124-L125)），没有跳转去创建或「在项目内直接创建」的入口。
 8. **验证结果没有汇总**：逐字段结果就地显示，但「全部验证」只把结果合并进同一个字典，没有任何「几项失败、是否阻止保存」的汇总；保存也不要求验证通过。
@@ -598,8 +598,8 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 - 设置外壳与导航：[settings.tsx](../src/client/settings.tsx)、[route.ts](../src/client/route.ts)、[client.css:315-333](../src/client/client.css#L315-L333)
 - 设置视图聚合：[views/settings.ts](../src/app/views/settings.ts)
 - 来源：[source.tsx](../src/client/source.tsx)、[feishu.ts](../src/sources/feishu.ts)、[adapters.ts](../src/sources/adapters.ts)
-- 代码仓库：[code-repos.tsx](../src/client/code-repos.tsx)、[code-repos/kind.ts](../src/code-repos/kind.ts)、[code-repos/types.ts](../src/code-repos/types.ts)、[sources/github.ts](../src/sources/github.ts)
-- 任务来源：[task-sources.tsx](../src/client/task-sources.tsx)、[task-sources/excel.ts](../src/task-sources/excel.ts)、[task-sources/feishu-wiki.ts](../src/task-sources/feishu-wiki.ts)
+- 代码仓库：[code-repos/kind.ts](../src/code-repos/kind.ts)、[code-repos/types.ts](../src/code-repos/types.ts)、[sources/github.ts](../src/sources/github.ts)；编辑界面并入 [projects.tsx](../src/client/projects.tsx)
+- 任务来源：[task-sources/excel.ts](../src/task-sources/excel.ts)、[task-sources/feishu-wiki.ts](../src/task-sources/feishu-wiki.ts)；编辑界面并入 [projects.tsx](../src/client/projects.tsx)
 - 目标新增（未实现，仅设计）：`src/git-credentials/`、`src/feishu-credentials/`、`src/client/git-credentials.tsx`、`src/client/feishu-credentials.tsx`；`src/secrets/` 只放加密与掩码工具，两个凭据模块不共用业务代码。
 - 项目：[projects.tsx](../src/client/projects.tsx)、[projects/kind.ts](../src/projects/kind.ts)
 - 设置保存与一致性校验：[app/settings.ts](../src/app/settings.ts)

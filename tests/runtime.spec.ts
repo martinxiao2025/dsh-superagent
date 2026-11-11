@@ -103,7 +103,6 @@ function seed(store: Store, accounts: Accounts = {}): void {
   const { feishu: _feishu, ...others } = settings.sources
   const feishu = accounts.feishu === null ? undefined : { ...settings.sources.feishu?.config, cli: BOT(), ...accounts.feishu }
   store.saveSettings(SettingsSchema.parse({ ...settings,
-    codeRepos: { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT(), ...accounts.github } } },
     sources: { ...others, ...feishu ? { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: feishu } } : {} } }))
 }
 let restarts: ReturnType<typeof vi.fn<() => void>>
@@ -230,7 +229,7 @@ beforeEach(async () => {
   await runtime.ready
   // 来源类型通常由插件注册，而单元测试中不会加载这些插件。
   runtime.sources.register(feishuKind)
-  runtime.store.saveSettings({ ...runtime.store.settings(), policy: { ...runtime.store.settings().policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT } } }, eval: { ...runtime.store.settings().eval, mode: 'auto' }, sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT(), chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } }, codeRepos: { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT() } } } })
+  runtime.store.saveSettings({ ...runtime.store.settings(), policy: { ...runtime.store.settings().policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT } } }, eval: { ...runtime.store.settings().eval, mode: 'auto' }, sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT(), chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
   deliveries.mockClear()
 })
 afterEach(async () => { expect(controller.prompt).not.toHaveBeenCalled(); await runtime?.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) })
@@ -496,8 +495,8 @@ it('projects read models for the management page and removes thread subscription
   // scripts/dsh-superagent 和 agents 从 GET state 读取健康状态（docs/006，管理 API）；设置及其修订版本有自己的路由。
   expect((await api('GET', 'state')).body).toMatchObject({ health: { runtime: { state: expect.any(String) } }, paused: false, load: { maxWorkers: 3 } })
   expect((await api('GET', 'settings')).body).toMatchObject({ sources: expect.arrayContaining([expect.objectContaining({ id: 'feishu',
-    revision: expect.any(Number), value: expect.objectContaining({ enabled: true }) })]), codeRepos: expect.arrayContaining([expect.objectContaining({ id: 'github',
-    revision: expect.any(Number), value: expect.objectContaining({ enabled: true }) })]), blocks: { policy: { revision: expect.any(Number) } } })
+    revision: expect.any(Number), value: expect.objectContaining({ enabled: true }) })]), projects: [],
+    codeRepoKinds: expect.arrayContaining([expect.objectContaining({ kind: 'github' })]), blocks: { policy: { revision: expect.any(Number) } } })
   expect((await api('POST', `threads/${encodeURIComponent(threadKeyValue)}/unsubscribe`)).body).toMatchObject({ removed: true })
   expect(threadList(viewsOf(runtime), 'subscribed', 0, 20).items).toEqual([])
   expect(agents.get(runtime.masterId)!.inject).toHaveBeenCalled()
@@ -743,69 +742,10 @@ it('leaves waiting and blocked assignments alone after a restart and keeps block
   expect(runtime.store.tickets.get(other.ticket.id)!.assignments.map(item => item.state)).toEqual(['ended', 'pending'])
 })
 
-it('starts with a broken code repository record: the panel works, that record pauses, and other Sources keep running', async () => {
-  const { sessionId } = await acceptedTicket()
-  await runTool(sessionId, 'orchestrator_report', { state: 'failed', summary: 'crashed' })
-  expect(() => runtime.checkSetup()).toThrow('Setup is complete')
-  controller.create.mockClear(); deliveries.mockClear()
-  const next = await restart({}, { github: { cli: '' } })
-  await next.ready
-  next.sources.register(feishuKind)
-  // 记录把 CLI 留空时回退到宿主默认的 `gh`；测试环境里找不到它，因此该记录仍然被排除。
-  const problem = { place: 'github', code: 'agentCliMissing', values: { output: 'gh is not an executable file on PATH' },
-    detail: 'The agent GitHub CLI was not found.\ngh is not an executable file on PATH' }
-  // 机器级部署检查通过：只排除出问题的记录，其余来源照常运行。
-  expect(next.configured()).toBe(true)
-  expect(next.setupProblem).toBeUndefined()
-  expect(next.sourceProblems).toEqual({ github: problem })
-  expect(next.deployment.sources).not.toHaveProperty('github')
-  expect(next.deployment.sources.feishu).toBeDefined()
-  expect(next.health.runtime).toMatchObject({ state: 'ready' })
-  expect((await api('GET', 'state')).body).toMatchObject({ setup: { problem: null, accounts: { repository: '', agent: '' }, machine: { stateDir: directory } } })
-  // 概览和来源接口都说明是哪条记录失败了，而不是把它静默禁用。
-  expect(overviewOf(next).problems[0]).toEqual({ kind: 'setup', ...problem })
-  const sources = (await api('GET', 'sources')).body as { id: string; state: string; problem?: unknown }[]
-  expect(sources.map(source => source.id)).toEqual(['feishu'])
-  // 其他来源照常工作：飞书触发器仍被评估并交给主会话。
-  await receive(feishu('30', '@bot 修一下'), next)
-  expect(relays(next.masterId).some(item => item.trigger_id === feishu('30', '@bot 修一下').id)).toBe(true)
-  // 机器级检查已通过，记录级问题不会让无关的策略保存重启运行时。
-  // 不产生任何改变的保存同样不记录新修订。
-  const revision = next.store.get<number>('settings-revision')
-  expect(await next.settings.save('policy', next.store.settings().policy, next.store.blockRevision('policy'), 'panel')).toMatchObject({ saved: true, restarting: false })
-  expect(next.store.get<number>('settings-revision')).toBe(revision)
-  expect(await next.settings.save('policy', { ...next.store.settings().policy, rules: [] }, next.store.blockRevision('policy'), 'panel')).toMatchObject({ saved: true, restarting: false })
-  expect(restarts).not.toHaveBeenCalled()
-  // 在 dsh-superagent 外部修复后，下一次设置检查会重启运行时并重新解析记录。
-  next.checkSetup()
-  await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(1))
-})
 
-it('reports each setup problem where the operator fixes it, and checks the agent CLI the way worker shells run it', async () => {
-  const needs = async (place: string, code: string, values: Record<string, string>, accounts: Accounts = {}) => {
-    const next = await restart({}, accounts)
-    await next.ready
-    // 机器级问题记在 setupProblem 上并停止全部来源；记录级问题只暂停那条记录。
-    if (place === 'deployment') expect(next.setupProblem).toMatchObject({ place, code, values })
-    else {
-      expect(next.configured()).toBe(true)
-      expect(next.sourceProblems[place]).toMatchObject({ place, code, values })
-    }
-  }
-  answers[`${AGENT()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":false}\n'
-  await needs('github', 'repositoryReadOnly', { account: 'agent-bot', repository: 'acme/widgets' })
-  answers[`${AGENT()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":true}\n'
-  // 智能体 CLI 在 worker 的环境中运行：PATH 上没有垫片，垫片会作为 spawn 环境条目传递。
-  const check = subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; env?: Record<string, string> }).find(spec => spec.argv.includes(AGENT()))!
-  expect(check.argv[0]).toBe(AGENT())
-  expect(check.env!.PATH!.split(delimiter)).not.toContain(join(directory, 'worker-bin'))
-  const valid = { ...answers }
-  // 低于 2.32 的 git 会忽略 GIT_CONFIG_GLOBAL，并读取操作者的配置。
-  answers = { ...valid, [HELPERS]: 'file:/home/me/.gitconfig\0!gh auth git-credential\0' }
-  await needs('deployment', 'gitTooOld', {})
-  await needs('github', 'repositoryUnset', {}, { github: { repository: '' } })
-  // 损坏的飞书机器人会把飞书排除在外并说明原因；GitHub 工作继续。
-  answers = { ...valid, [`${BOT()} config strict-mode`]: 'strict-mode: off (source: profile)' }
+it('excludes only the broken Feishu source and keeps the runtime running', async () => {
+  // 损坏的飞书机器人会把飞书排除在外并说明原因；其余机器级初始化照常完成。
+  answers = { ...answers, [`${BOT()} config strict-mode`]: 'strict-mode: off (source: profile)' }
   const next = await restart()
   await next.ready
   expect(next.configured()).toBe(true)
@@ -826,16 +766,16 @@ it('reports a failure to write the agent environment as environmentFailed and le
   expect(process.env).toEqual(environment)
 })
 
-it('saves a code repository record while another record has a setup problem', async () => {
+it('saves settings while another record has a setup problem', async () => {
   answers = { ...answers, [`${BOT()} config strict-mode`]: 'strict-mode: off (source: profile)' }
   const next = await restart()
   await next.ready
   expect(next.feishuProblem).toMatchObject({ code: 'feishuUserIdentity' })
   next.sources.register(feishuKind)
-  const repo = next.settings.block('codeRepo:github')
-  const value = repo.value as { name: string; enabled: boolean; config: Record<string, unknown> }
-  expect(await next.settings.save('codeRepo:github', { ...value, enabled: false }, repo.revision, 'panel'))
-    .toMatchObject({ saved: true, restarting: true })
+  const block = next.settings.block('executor')
+  const value = block.value as { maxWorkers: number }
+  expect(await next.settings.save('executor', { ...value, maxWorkers: 2 }, block.revision, 'panel'))
+    .toMatchObject({ saved: true })
 })
 
 it('lets only the panel change the execution environment, since it decides what runs as a shell command and which CLIs workers reach', async () => {
@@ -898,7 +838,7 @@ it('pauses and resumes processing as its own action, a setting outside every blo
   expect(runtime.store.settings().paused).toBe(false)
 })
 
-it('runs setup again while the Feishu bot check failed, and restores the process environment when git fails its check', async () => {
+it('runs setup again while the Feishu bot check failed', async () => {
   answers[`${BOT()} config strict-mode`] = 'strict-mode: off (source: profile)'
   const next = await restart()
   await next.ready
@@ -906,12 +846,6 @@ it('runs setup again while the Feishu bot check failed, and restores the process
   expect(next.feishuProblem?.code).toBe('feishuUserIdentity')
   next.checkSetup()
   await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(1))
-  answers[HELPERS] = 'file:/home/me/.gitconfig\0!gh auth git-credential\0'
-  const broken = await restart()
-  await broken.ready
-  expect(broken.setupProblem).toMatchObject({ place: 'deployment', code: 'gitTooOld' })
-  expect(process.env.GIT_CONFIG_GLOBAL).toBeUndefined()
-  expect(process.env.PATH?.split(':')).not.toContain(join(directory, 'worker-bin'))
 })
 
 it('writes worker shims that dispatch by Source record, and restores the environment on stop', async () => {
@@ -920,18 +854,21 @@ it('writes worker shims that dispatch by Source record, and restores the environ
   // 垫片不绑定任何记录：它把命令交给调度器，由调度器按工单目录选择该记录的 CLI。
   expect(readdirSync(bin).sort()).toEqual([shimFile('gh'), shimFile('lark-cli')])
   expect(readFileSync(join(bin, shimFile('lark-cli')), 'utf8')).toContain(workerDispatch(directory))
-  expect(records().clis).toMatchObject({ github: { kind: 'github', cli: AGENT() }, feishu: { kind: 'feishu', cli: BOT() } })
+  expect(records().clis).toMatchObject({ feishu: { kind: 'feishu', cli: BOT() } })
+  expect(records().clis).not.toHaveProperty('github')
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, blockedCommands: ['personal-gh'] } })
   const next = await restart({}, { feishu: null })
   await next.ready
   expect(readdirSync(bin).sort()).toEqual([shimFile('gh'), shimFile('lark-cli'), shimFile('personal-gh')])
-  expect(readFileSync(join(bin, shimFile('personal-gh')), 'utf8')).toContain("personal-gh is blocked in this installation; use gh, which acts on the ticket's Source record.")
+  expect(readFileSync(join(bin, shimFile('personal-gh')), 'utf8')).toContain('personal-gh is blocked in this installation; no GitHub Source is configured.')
   // 没有飞书记录时记录表不再提供 feishu，调度器于是让 lark-cli 以「没有 Feishu Source」失败。
   expect(records().clis).not.toHaveProperty('feishu')
   expect(readFileSync(workerDispatch(directory), 'utf8')).toContain('is unavailable: this installation has no ')
   expect(readFileSync(join(bin, shimFile('gh')), 'utf8')).toContain(workerDispatch(directory))
-  // git 会在引号值中转义反斜杠；反转义它们，以便与捆绑包写入的辅助程序比较。
-  expect(readFileSync(workerGitConfig(directory), 'utf8').replaceAll('\\\\', '\\')).toContain(`[credential "https://github.com"]\n\thelper = "${credentialHelper(directory)}"`)
+  // 没有代码仓库来源时不会为任何主机写凭据助手，但仍会重置全局 helper。
+  const config = readFileSync(workerGitConfig(directory), 'utf8')
+  expect(config).toContain('[credential]\n\thelper =')
+  expect(config).not.toContain('[credential "https://github.com"]')
   expect(process.env).toMatchObject({ GIT_CONFIG_GLOBAL: workerGitConfig(directory), GIT_CONFIG_NOSYSTEM: '1' })
   expect(process.env.GIT_AUTHOR_NAME).toBeUndefined()
   expect(process.env.PATH?.split(delimiter)[0]).toBe(bin)

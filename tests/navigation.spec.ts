@@ -57,13 +57,15 @@ it('reads each page a tab remembered with the parameters it takes, and leaves ou
   expect(parseRoute({ page: 'eval', query: { filter: 'stop', window: '7d' } })).toEqual({ page: 'eval', query: { filter: 'stop' } })
   expect(parseRoute({ page: 'execution', id: 5, query: { filter: 'idle' } })).toEqual({ page: 'execution', query: { filter: 'idle' } })
   expect(parseRoute({ page: 'settings', query: { group: 'policy', source: 'feishu' } }))
-    .toEqual({ page: 'settings', query: { group: 'taskSources', source: 'feishu' } })
-  // 旧版把消息来源配置放在 `source` 分组，现在统一进入任务来源页。
+    .toEqual({ page: 'settings', query: { group: 'projects', source: 'feishu' } })
+  // 旧版把消息来源配置放在 `source` 分组，现在并入项目页。
   expect(parseRoute({ page: 'settings', query: { group: 'source', source: 'feishu' } }))
-    .toEqual({ page: 'settings', query: { group: 'taskSources', source: 'feishu' } })
+    .toEqual({ page: 'settings', query: { group: 'projects', source: 'feishu' } })
   expect([parseRoute('overview'), parseRoute(null)]).toEqual([undefined, undefined])
 })
 it('opens the settings that fix each setup problem: the Deployment group, or the card of the Source it names', () => {
   expect(setupPage('deployment')).toEqual({ page: 'settings', query: { group: 'deployment' } })
-  for (const place of ['github', 'feishu'] as const) expect(setupPage(place)).toEqual({ page: 'settings', query: { group: 'taskSources', source: place } })
+  for (const place of ['github', 'feishu'] as const) expect(setupPage(place)).toEqual({ page: 'settings', query: { group: 'projects', source: place } })
+  // 项目仓库来源标识带 `repo-` 前缀，打开对应项目卡片。
+  expect(setupPage('repo-content')).toEqual({ page: 'settings', query: { group: 'projects', source: 'content' } })
 })

@@ -249,8 +249,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
   const sources = { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT } } }
-  const codeRepos = { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT } } }
-  seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources, codeRepos }))
+  seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
   seed?.(seeded)
   seeded.close()
   const runtime = new Runtime(ctx, testMachine({ stateDir: directory }), vi.fn())
@@ -259,8 +258,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const settings = runtime.store.settings()
   runtime.store.saveSettings({ ...settings, eval: { ...settings.eval, mode: 'auto' },
     policy: { ...settings.policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT } } },
-    sources: { ...sources, feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } },
-    codeRepos })
+    sources: { ...sources, feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
   deliveries.mockClear()
 
   /** 投递到 `sessionId` 的已解析 JSON 载荷。 */

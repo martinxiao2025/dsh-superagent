@@ -8,13 +8,15 @@ import { server } from './fixtures/panel-server.ts'
 usePanel()
 
 const project = {
-  name: '内容运营', enabled: true, codeRepo: 'github', taskSource: 'sheet', gitCredential: '',
+  name: '内容运营', enabled: true,
+  codeRepo: { kind: 'github' as const, config: { repository: 'acme/widgets' } },
+  taskSource: { kind: 'excel', config: {} },
+  gitCredential: '', feishuCredential: '',
   execution: { directory: '', branch: '' },
   schedule: { intervalMinutes: 30, runOnStart: true },
   retry: { maxRetries: 2, retryBackoffSeconds: 60 },
   taskPolicy: { pendingStatuses: ['待处理', 'todo'], doneStatus: '已完成', failedStatus: '失败' },
 }
-const taskSource = { kind: 'excel', name: '内容清单', enabled: true, config: {} }
 
 function queued(state: 'queued' | 'running', extra: Record<string, unknown> = {}) {
   return { id: `q-${state}`, project: 'content', projectName: '内容运营', task: 'T-1', item: 0, title: '写周报', state,
@@ -23,7 +25,7 @@ function queued(state: 'queued' | 'running', extra: Record<string, unknown> = {}
 }
 
 it('lists projects with queue and runtime counts, then opens the project Tasks and queue', async () => {
-  server.settings = { ...server.settings, taskSources: { sheet: taskSource }, projects: { content: project } }
+  server.settings = { ...server.settings, projects: { content: project } }
   server.queueItems = [queued('queued'), queued('running', { ticketId: 't1' })]
   await mount()
   await click(zh['tab.projects'])
@@ -41,7 +43,7 @@ it('lists projects with queue and runtime counts, then opens the project Tasks a
 })
 
 it('sends retry, cancel and clear requests from the project queue', async () => {
-  server.settings = { ...server.settings, taskSources: { sheet: taskSource }, projects: { content: project } }
+  server.settings = { ...server.settings, projects: { content: project } }
   server.queueItems = [
     queued('queued', { id: 'q1' }),
     queued('running', { id: 'q2', ticketId: 't2' }),
@@ -61,8 +63,23 @@ it('sends retry, cancel and clear requests from the project queue', async () => 
   expect(posts.some(path => path.includes('queue/clear'))).toBe(true)
 })
 
+it('leads the task source step with its type and hides fields the type does not need', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
+  await type(field(zh.sourceName), '内容运营')
+  await click(zh.projectNext)
+  await click(zh.projectNext)
+  const wizard = document.querySelector(`[aria-label="${zh.projectWizardTitle}"]`)!
+  // 来源类型是任务来源步骤的第一个下拉，默认 Excel；Excel 不显示飞书凭据。
+  expect(wizard.querySelector('.dt-form select.dt-select')).toBe(field(zh.projectSourceKind, wizard))
+  expect(field<HTMLSelectElement>(zh.projectSourceKind, wizard).value).toBe('excel')
+  expect(() => field(zh.projectFeishuCredentialLabel, wizard)).toThrow()
+  await type(field<HTMLSelectElement>(zh.projectSourceKind, wizard), 'feishu-wiki')
+  expect(field<HTMLSelectElement>(zh.projectFeishuCredentialLabel, wizard).value).toBe('')
+})
+
 it('creates a project through the four-step wizard and saves the full configuration', async () => {
-  server.settings = { ...server.settings, taskSources: { sheet: taskSource } }
   await mount()
   await click(zh['tab.projects'])
   await click(find(zh['tab.settings'], '.dt-status-head button'))
@@ -70,6 +87,7 @@ it('creates a project through the four-step wizard and saves the full configurat
   expect(text()).toContain(zh.projectWizardTitle)
   await type(field(zh.sourceName), '内容运营')
   await click(zh.projectNext)
+  await type(field('代码仓库'), 'acme/content')
   await click(zh.projectNext)
   await click(zh.projectNext)
   await type(field(zh.projectDirectory), '/srv/work/content')
@@ -81,7 +99,8 @@ it('creates a project through the four-step wizard and saves the full configurat
   await click(zh.projectCreate)
   await settle()
   expect(server.settings.projects.project).toMatchObject({
-    name: '内容运营', codeRepo: 'github', taskSource: 'sheet',
+    name: '内容运营', codeRepo: { kind: 'github', config: { repository: 'acme/content' } },
+    taskSource: { kind: 'excel', config: {} }, gitCredential: '', feishuCredential: '',
     execution: { directory: '/srv/work/content', branch: 'main' },
     schedule: { intervalMinutes: 5, runOnStart: true },
     retry: { maxRetries: 4, retryBackoffSeconds: 30 },
@@ -97,14 +116,14 @@ it('creates a project through the four-step wizard and saves the full configurat
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:project'])
 })
 
-it('edits a code repository from its settings section', async () => {
+it('edits the code repository embedded in the project', async () => {
+  server.settings = { ...server.settings, projects: { content: project } }
   await mount()
-  await click(zh['tab.projects'])
-  await click(find(zh['tab.settings'], '.dt-status-head button'))
-  await click(find(zh['settingsGroup.codeRepos'], '.dt-settings-link'))
-  expect(text()).toContain('GitHub')
+  await click(zh['tab.settings'])
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await click(zh.edit)
-  await click(zh.projectEnabled)
+  await type(field('代码仓库'), 'acme/next')
   await click(zh.save)
-  expect(server.settings.codeRepos.github?.enabled).toBe(false)
+  expect(server.settings.projects.content?.codeRepo).toEqual({ kind: 'github', config: { repository: 'acme/next' } })
+  expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:content'])
 })

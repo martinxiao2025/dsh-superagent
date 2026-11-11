@@ -24,7 +24,7 @@
 
 | # | 文件与位置 | 内容 | 理由 | 影响面 | 删除后验证 |
 | --- | --- | --- | --- | --- | --- |
-| A1 | [task-sources.tsx:12-21](../src/client/task-sources.tsx#L12-L21) | 重复定义的 `VerifyRow` | 与 [source.tsx:20-31](../src/client/source.tsx#L20-L31) 同构，样式与语义已经分叉（`task-sources.tsx` 版本不带 `scope`） | 仅任务来源卡片 | 抽到共享组件后删除重复定义；跑 `tests/panel-settings.spec.ts`（若覆盖）与 `pnpm typecheck` |
+| A1 | `task-sources.tsx:12-21`（已删除） | 重复定义的 `VerifyRow` | 与 [source.tsx:20-31](../src/client/source.tsx#L20-L31) 同构，样式与语义已经分叉（`task-sources.tsx` 版本不带 `scope`） | 仅任务来源卡片 | 已随任务来源页删除；项目卡片内的 `VerifyRow` 与来源页仍各自保留 |
 | A2 | [dsh.ts:223](../src/executor/dsh.ts#L223) | `export function projectOfTicket` 去掉 `export` | 只在同文件 [dsh.ts:259](../src/executor/dsh.ts#L259) 使用，属于多余导出 | 无 | `pnpm typecheck`（外部无引用） |
 | A3 | [execution-environment.ts:11](../src/app/execution-environment.ts#L11) | `EXECUTOR_VARIABLES` 去掉 `export` | 同文件 70、84 行使用 | 无 | `pnpm typecheck` |
 | A4 | [code-repos/kind.ts:8-18](../src/code-repos/kind.ts#L8-L18) | `CodeRepoKind` / `CodeRepoRecord` 的类型导出 | 零外部引用；记录类型随 P2 退场 | 仅类型 | `pnpm typecheck` |
@@ -63,7 +63,7 @@
 | C3 | [core/engine.ts](../src/core/engine.ts)、[app/cards.ts](../src/app/cards.ts)、[app/views/*](../src/app/views) | `core ↔ app` 运行时环 | 引擎需要视图/卡片做投递 | 把跨层契约抽到 `core/contracts.ts`（纯类型），app 只实现 | 环消除后再决定是否拆 `cards.ts` |
 | C4 | [deployment.ts](../src/deployment.ts)、[infra/environment.ts](../src/infra/environment.ts) | GitHub / GitLab / 飞书三类解析混在一个 185 行模块，且与 infra 成环 | 被设置、启动、执行多处调用 | 按凭据类型拆 `deployment/git.ts`、`deployment/feishu.ts`，infra 只保留环境探测 | 拆分完成后 `deployment.ts` 只做聚合 |
 | C5 | [sources/github.ts](../src/sources/github.ts)、[sources/gitlab.ts](../src/sources/gitlab.ts) | 名字在 `sources/`，实际是代码仓库类型 | 被 `code-repos/types.ts`、`deployment.ts` 引用 | 搬移到 `src/code-repos/types/` 并更新 007 模块表 | 搬移后删除来源目录下的同名文件 |
-| C6 | [client/code-repos.tsx](../src/client/code-repos.tsx)、[client/task-sources.tsx](../src/client/task-sources.tsx) | P2 后页面消失，但表单字段要进项目表单 | 当前仍是唯一编辑入口 | 先把仓库组、任务来源组抽成项目表单子组件 | 抽完并验收后删除两个页面与路由 |
+| C6 | `client/code-repos.tsx`、`client/task-sources.tsx`（已删除） | P2 后页面消失，表单字段进项目表单 | 仓库与来源已内嵌到项目表单 | 已完成：`RepoEditor` / `SourceEditor` 并入 [projects.tsx](../src/client/projects.tsx) | 已删除两个页面与路由，`pnpm check` 通过 |
 | C7 | `src/app/migration.ts`（已完成，文件已删除） | 历史迁移分支与基线建表混在一处 | 新库仍需要「建表 + 写基线版本」 | 删除全部版本升级分支，只保留基线建表 | 已收敛：基线建表移入 `src/app/store.ts`，历史分支全删 |
 | C8 | [views/settings.ts](../src/app/views/settings.ts) | 聚合下发多类记录 | 设置页唯一数据源 | 拆成 `settings/projects.ts`、`settings/credentials.ts` | 拆完后删除旧聚合字段 |
 

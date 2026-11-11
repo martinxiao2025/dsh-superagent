@@ -13,6 +13,7 @@ import { runAsWorker, shellArgv, verifyDirectory } from '../infra/environment.ts
 import { recordTicketSource } from '../infra/worker-sources.ts'
 import { materializeWorkspace, removeWorkspace } from '../code-repos/workspace.ts'
 import type { Settings } from '../policy.ts'
+import { projectRepoId } from '../projects/kind.ts'
 import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
 import { executionRoot, projectDirectory, ticketDirectoryName, type Variable } from '../app/execution-environment.ts'
@@ -284,12 +285,12 @@ export class DshExecutor implements Executor {
     const basis = ticket.mandate.basis
     const projectId = basis.via === 'scheduled' ? basis.project : undefined
     const project = projectId ? settings.projects[projectId] : undefined
-    const repo = project?.codeRepo
-    const checkout = (args: string[], cwd: string) => this.host.commands.scope(repo!).git(args, cwd)
+    const repo = projectId ? projectRepoId(projectId) : ''
+    const checkout = (args: string[], cwd: string) => this.host.commands.scope(repo).git(args, cwd)
     await mkdir(dirname(directory), { recursive: true })
     const workspace = repo
       ? await materializeWorkspace({ git: checkout, stateDir: this.host.machine.stateDir, repo, directory,
-        branch: project.execution.branch, signal: this.host.lifetime })
+        branch: project!.execution.branch, signal: this.host.lifetime })
       : undefined
     const command = settings.executor.prepare.trim()
     const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))

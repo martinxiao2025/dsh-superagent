@@ -134,6 +134,8 @@ export interface ResolvedGithubSource {
   readonly remote: string
   /** SSH 私钥路径；空表示使用本机默认 SSH 配置。 */
   readonly sshKey: string
+  /** 项目选择的 Git 凭据 ID；仅项目仓库来源携带。 */
+  readonly gitCredential?: string
 }
 /** 已解析的 GitLab 来源记录。 */
 export interface ResolvedGitlabSource {
@@ -150,6 +152,8 @@ export interface ResolvedGitlabSource {
   readonly auth: RepoAuth
   readonly remote: string
   readonly sshKey: string
+  /** 项目选择的 Git 凭据 ID；仅项目仓库来源携带。 */
+  readonly gitCredential?: string
 }
 /** 已解析的飞书来源记录：一个记录一个机器人。 */
 export interface ResolvedFeishuSource {

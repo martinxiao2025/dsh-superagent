@@ -191,20 +191,14 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
     eval: { value: server.settings.eval, revision: server.revisions.eval ?? 0 },
     executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 } },
   sources: sourceSettings(),
-  codeRepos: Object.entries(server.settings.codeRepos).sort(([a], [b]) => a.localeCompare(b)).map(([id, record]) => ({ id, kind: record.kind,
-    name: record.name, enabled: record.enabled, title: codeRepoType(record.kind)?.title, fields: codeRepoType(record.kind)?.fields ?? [],
-    value: { name: record.name, enabled: record.enabled, config: record.config },
-    revision: server.revisions[`codeRepo:${id}`] ?? 0 })),
-  codeRepoKinds: CODE_REPO_TYPES.map(type => ({ kind: type.kind, title: type.title, description: type.description, fields: type.fields })),
-  taskSources: Object.entries(server.settings.taskSources).map(([id, record]) => ({ id, kind: record.kind, name: record.name,
-    enabled: record.enabled, title: { zh: record.name, en: record.name }, fields: [],
-    value: { name: record.name, enabled: record.enabled, config: record.config }, revision: server.revisions[`taskSource:${id}`] ?? 0 })),
+  codeRepoKinds: CODE_REPO_TYPES.map(type => ({ kind: type.kind, title: type.title, description: type.description,
+    fields: type.fields.filter(field => field.key !== 'auth' && field.key !== 'sshKey') })),
   projects: Object.entries(server.settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
-    codeRepo: project.codeRepo, taskSource: project.taskSource, value: project, revision: server.revisions[`project:${id}`] ?? 0 })),
+    value: project, revision: server.revisions[`project:${id}`] ?? 0 })),
   taskSourceKinds: [
-    { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, fields: [] },
-    { kind: 'feishu-im', title: { zh: '飞书消息', en: 'Feishu messages' }, description: { zh: '群消息', en: 'Chat messages' }, fields: [] },
-    { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, fields: [] },
+    { kind: 'feishu-im', title: { zh: '飞书消息', en: 'Feishu messages' }, description: { zh: '群消息', en: 'Chat messages' }, needsFeishuCredential: true, fields: [] },
+    { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, needsFeishuCredential: true, fields: [] },
+    { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, needsFeishuCredential: false, fields: [] },
   ],
   environment: { root: '/srv/dsh-superagent/work', variables: [
     { owner: 'executor', enabled: true, variables: [{ key: 'DSH_SUPERAGENT_DIR', description: { zh: '工单的执行目录',
@@ -274,7 +268,6 @@ function initial(): PanelServer {
       rules: [{ id: 'copy', name: '文案修改', enabled: true, instruction: '修正明确的文案错误' }] },
     sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: 'lark-bot', chats: [{ chatId: 'oc_team', listen: 'mentions' }],
       directMessages: true } } },
-    codeRepos: { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: 'gh-agent' } } },
     executor: { blockedCommands: ['gh-personal'] },
   })
   const ended = ticketSummary({ id: 't0', title: '旧工单', state: 'ended', actions: { retry: false, stop: false },
@@ -360,9 +353,10 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     const project = server.settings.projects[params.id]
     if (!project) return refuse(404, 'Project not found')
     const items = server.queueItems.filter(item => item.project === params.id)
+    const repoText = project.codeRepo.config.repository ?? project.codeRepo.config.project ?? project.codeRepo.config.remote
     return { project: { id: params.id, name: project.name, enabled: project.enabled,
-      codeRepo: { id: project.codeRepo, name: server.settings.codeRepos[project.codeRepo]?.name ?? project.codeRepo },
-      taskSource: { id: project.taskSource, name: server.settings.taskSources[project.taskSource]?.name ?? project.taskSource },
+      codeRepo: { kind: project.codeRepo.kind, name: typeof repoText === 'string' && repoText ? repoText : project.codeRepo.kind },
+      taskSource: { kind: project.taskSource.kind, name: project.taskSource.kind },
       execution: project.execution, schedule: project.schedule, retry: project.retry, taskPolicy: project.taskPolicy },
       at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
       queued: items.filter(item => item.state === 'queued').length,
@@ -385,12 +379,6 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     server.revisions[`source:${id}`] = 0
     return { id, revision: 0, restarting: true }
   } },
-  'POST code-repos': { body: true, answer: ({ body }) => {
-    const id = body.id ?? body.kind
-    server.settings = { ...server.settings, codeRepos: { ...server.settings.codeRepos,
-      [id]: { kind: body.kind, name: body.name, enabled: true, config: (body.config ?? {}) as Record<string, unknown> } } }
-    return { id, revision: 0, restarting: false as const }
-  } },
   // 代码仓库预检：测试里返回可预期的结果；真实探测（含空仓库）由宿主实现。
   'POST code-repos/verify': { body: true, answer: ({ body }) => {
     const field = body.field ?? 'all'
@@ -412,22 +400,6 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       values: values[name] ?? {} })
     const keyFields = body.kind === 'gitlab' ? ['auth', 'project', 'remote', 'sshKey', 'cli'] : ['auth', 'repository', 'remote', 'sshKey', 'cli']
     return { checks: field === 'all' ? ['name', 'kind', 'id', ...keyFields].map(ok) : [ok(field)] }
-  } },
-  'DELETE code-repos/:id': { answer: ({ params }) => {
-    const { [params.id]: _record, ...codeRepos } = server.settings.codeRepos
-    server.settings = { ...server.settings, codeRepos }
-    return { removed: true as const, restarting: false as const }
-  } },
-  'POST task-sources': { body: true, answer: ({ body }) => {
-    const id = body.id ?? body.kind
-    server.settings = { ...server.settings, taskSources: { ...server.settings.taskSources,
-      [id]: { kind: body.kind, name: body.name, enabled: true, config: (body.config ?? {}) as Record<string, unknown> } } }
-    return { id, revision: 0, restarting: false as const }
-  } },
-  'DELETE task-sources/:id': { answer: ({ params }) => {
-    const { [params.id]: _record, ...taskSources } = server.settings.taskSources
-    server.settings = { ...server.settings, taskSources }
-    return { removed: true as const, restarting: false as const }
   } },
   'POST task-sources/verify': { body: true, answer: ({ body }) => {
     const field = body.field ?? 'all'
@@ -629,13 +601,9 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'PUT settings/:block': { body: true, answer: ({ params: { block }, body }) => {
     const record = block.startsWith('source:') ? server.settings.sources[block.slice('source:'.length)] : undefined
     const source = record ? KINDS.find(kind => kind.kind === record.kind) : undefined
-    const codeRepoId = block.startsWith('codeRepo:') ? block.slice('codeRepo:'.length) : undefined
-    const codeRepo = codeRepoId ? server.settings.codeRepos[codeRepoId] : undefined
-    const taskSourceId = block.startsWith('taskSource:') ? block.slice('taskSource:'.length) : undefined
-    const taskSource = taskSourceId ? server.settings.taskSources[taskSourceId] : undefined
     const projectId = block.startsWith('project:') ? block.slice('project:'.length) : undefined
     const project = projectId ? server.settings.projects[projectId] : undefined
-    if (!['policy', 'eval', 'executor'].includes(block) && !record && !codeRepo && !taskSource && !project) {
+    if (!['policy', 'eval', 'executor'].includes(block) && !record && !project) {
       return block.includes(':') ? refuse(404, 'Record not found') : refuse(400, 'Invalid settings: block')
     }
     if (body.revision !== (server.revisions[block] ?? 0)) return refuse(409, 'Settings changed. Reload before saving.')
@@ -643,15 +611,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     if (block === 'policy') server.settings = { ...server.settings, policy: PolicyConfigSchema.parse(body.value) }
     else if (block === 'executor') server.settings = { ...server.settings, executor: ExecutorConfigSchema.parse(body.value) }
     else if (block === 'eval') server.settings = { ...server.settings, eval: EvalConfigSchema.parse(body.value) }
-    else if (codeRepo && codeRepoId) {
-      const { name, enabled, config } = SourceSave.parse(body.value)
-      server.settings = { ...server.settings, codeRepos: { ...server.settings.codeRepos,
-        [codeRepoId]: { ...codeRepo, name, enabled, config: config as Record<string, unknown> } } }
-    } else if (taskSource && taskSourceId) {
-      const { name, enabled, config } = SourceSave.parse(body.value)
-      server.settings = { ...server.settings, taskSources: { ...server.settings.taskSources,
-        [taskSourceId]: { ...taskSource, name, enabled, config: config as Record<string, unknown> } } }
-    } else if (project && projectId) {
+    else if (project && projectId) {
       server.settings = { ...server.settings, projects: { ...server.settings.projects, [projectId]: ProjectSchema.parse(body.value) } }
     } else if (record && source) {
       const { name, enabled, config: value } = SourceSave.parse(body.value)

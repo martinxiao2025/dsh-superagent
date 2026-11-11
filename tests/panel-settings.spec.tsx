@@ -99,7 +99,7 @@ it('shows save and discard only while a settings block has edits, at the end of 
   await click(save)
   expect(all('.dt-savebar')).toHaveLength(0)
   expect(document.activeElement).toBe(workers.form)
-  await click(find(zh['settingsGroup.taskSources'], '.dt-settings-link'))
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   expect(all('.dt-savebar')).toHaveLength(0)
   const feishu = document.getElementById('dt-source-feishu')!
   const cli = field<HTMLInputElement>('机器人的 lark-cli', feishu)
@@ -125,37 +125,36 @@ it('gives the focus back to the field that had it once a block\'s save ends', as
   expect(document.activeElement).toBe(input)
 })
 
-it('builds the TaskSource kind dropdown from the driver catalog and reports a missing name', async () => {
+it('builds the task source kind dropdown from the driver catalog inside the project wizard', async () => {
   await mount()
   await click(zh['tab.settings'])
-  await click(find(zh['settingsGroup.taskSources'], '.dt-settings-link'))
-  expect(all(`[aria-label="${zh.taskSourceAddTitle}"] .dt-select option`).map(option => option.textContent))
-    .toEqual(['Excel 文件', '飞书消息', '飞书知识库'])
-  // 消息来源与任务清单在同一页分区展示。
-  expect(text()).toContain(zh.sourceMessageTitle)
-  expect(text()).toContain(zh.sourceTaskListTitle)
-  await click(document.querySelector(`[aria-label="${zh.taskSourceAddTitle}"] [aria-label="${zh.verify} · ${zh.sourceName}"]`) as HTMLElement)
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
+  await type(field(zh.sourceName), '内容运营')
+  await click(zh.projectNext)
+  await click(zh.projectNext)
   await settle()
-  expect(document.querySelector(`[aria-label="${zh.taskSourceAddTitle}"] .dt-error.dt-check`)?.textContent)
-    .toBe(zh['check.sourceNameRequired'])
+  expect(all('.dt-add-grid select.dt-select option').map(option => option.textContent))
+    .toEqual(expect.arrayContaining(['Excel 文件', '飞书消息', '飞书知识库']))
 })
 
-it('renders the code repository auth fields and verifies them with the draft value', async () => {
+it('offers a Git credential for the project repository instead of auth fields', async () => {
   await mount()
   await click(zh['tab.settings'])
-  await click(find(zh['settingsGroup.codeRepos'], '.dt-settings-link'))
-  // 记录默认折叠；编辑后按类型描述渲染字段，认证方式用分段按钮呈现。
-  await click(find(zh.edit, 'button'))
-  expect(all('.dt-field-segmented button').slice(0, 2).map(button => button.textContent)).toEqual(['HTTPS + 智能体凭据', 'SSH + 本机密钥'])
-  await click(document.querySelector(`[aria-label="${zh.verify} · 认证方式"]`) as HTMLElement)
+  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
+  // 仓库认证统一由项目选择的 Git 凭据决定，认证方式与 SSH key 字段不再出现。
+  await type(field(zh.sourceName), '内容运营')
+  await click(zh.projectNext)
+  expect(field<HTMLSelectElement>(zh.projectGitCredentialLabel).value).toBe('')
+  expect(document.querySelector(`[aria-label="${zh.projectWizardTitle}"] .dt-field-segmented`)).toBeNull()
+  await click(document.querySelector(`[aria-label="${zh.verify} · ${zh.projectGitCredentialLabel}"]`) as HTMLElement)
   await settle()
-  expect(document.querySelector('.dt-check')?.textContent).toBe('使用 HTTPS 与智能体 CLI 凭据')
-  // 切到 SSH 后再次预检，说明不再依赖 gh，且私钥留空时使用默认 key。
-  await click(find('SSH + 本机密钥', '.dt-field-segmented button'))
-  await click(document.querySelector(`[aria-label="${zh.verify} · 认证方式"]`) as HTMLElement)
+  expect(server.requests.filter(request => request.path === 'code-repos/verify').map(request => request.method)).toEqual(['POST'])
+  // 预检只读取草稿，不创建项目，也不写入设置。
+  expect(server.requests.filter(request => request.path === 'projects')).toEqual([])
+  expect(server.settings.projects).toEqual({})
   await settle()
-  expect(document.querySelector('.dt-check')?.textContent).toBe('使用 SSH 与本机密钥，不需要 gh / glab')
-  expect(server.requests.filter(request => request.path === 'code-repos/verify').map(request => request.method)).toEqual(['POST', 'POST'])
+  expect(document.querySelector('.dt-check')).not.toBeNull()
+  expect(server.requests.filter(request => request.path === 'code-repos/verify').map(request => request.method)).toEqual(['POST'])
 })
 
 it('creates, verifies and deletes a Git credential on its own settings page', async () => {
@@ -262,10 +261,10 @@ it('lists the settings groups stages first, opens each stage\'s group from its s
   await mount()
   await click(tab(zh['tab.settings']))
   const tag = zh['settingsGroupTag']
-  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['Git 凭据', '飞书凭据', '代码仓库', '任务来源',
+  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['Git 凭据', '飞书凭据',
     `项目${tag}`, `评估${tag}`, `执行${tag}`, '提示词', '部署'])
-  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['settingsGroup.taskSources'])
-  for (const [tab, group] of [['任务来源', '任务来源'], ['项目', `项目${tag}`], ['评估', `评估${tag}`],
+  expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(`项目${tag}`)
+  for (const [tab, group] of [['项目', `项目${tag}`], ['评估', `评估${tag}`],
     ['执行', `执行${tag}`]] as [string, string][]) {
     await click(find(tab, '[role="tab"]'))
     await click(find(zh['tab.settings'], '.dt-status-head button'))

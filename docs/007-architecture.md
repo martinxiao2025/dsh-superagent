@@ -413,9 +413,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/route.ts` | 标签页、设置分组、由 `parseRoute` 读取的带类型路由，以及记住上次打开的设置分组的路由记忆 |
 | `src/client/overview.tsx` | 概览 |
 | `src/client/source.tsx`、`trigger.tsx`、`eval.tsx`、`execution.tsx` | 每个阶段一个文件：其状态，以及有设置时的设置 |
-| `src/client/task-sources.tsx` | 任务来源设置：类型下拉来自驱动注册表，新增前逐字段验证 |
 | `src/client/git-credentials.tsx`、`feishu-credentials.tsx` | Git 与飞书凭据设置页：两页各自独立增删改查，只显示掩码与指纹，绝不下发材料 |
-| `src/client/code-repos.tsx` | 代码仓库设置：类型目录与字段、启停与删除；只用于克隆与同步 |
 | `src/client/projects.tsx` | 项目标签页：项目列表与运行时概览、单项目的任务与队列详情，以及项目设置分区 |
 | `src/client/thread.tsx`、`ticket.tsx` | 记录页面：带时间线的线程，以及带授权、输入和派工的工单 |
 | `src/client/settings.tsx` | 设置标签页：分组导航和屏幕上的分组 |

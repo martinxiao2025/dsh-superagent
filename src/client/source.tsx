@@ -183,7 +183,8 @@ function SourceCard({ source, records }: { source: SourceView; records: readonly
 export function SourceSettings({ focus }: { focus?: string }) {
   const { sources } = useSettings().settings
   useEffect(() => { if (focus) document.getElementById(`dt-source-${focus}`)?.scrollIntoView?.({ block: 'start' }) }, [focus])
-  return <div className="dt-form">
+  // 与项目向导同页时用独立类名区分两处「新增」表单。
+  return <div className="dt-form dt-source-settings">
     <AddSource />
     {sources.map(source => <SourceCard key={source.id} source={source} records={sources} />)}
     <ConfigHistory blocks={['source:']} />
@@ -237,7 +238,7 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
       </div>
       {problem && <p className="dt-error">
         <SetupMessage problem={problem} lead /> <button type="button" className="dt-textlink"
-          onClick={() => navigate(settingsRoute('taskSources', { source: source.id }))}>
+          onClick={() => navigate(settingsRoute('projects'))}>
           {t('sourceOpenSettings')}
         </button>
       </p>}
@@ -281,28 +282,24 @@ export function SourceHealth() {
 export function SourceStatus() {
   const { t, call } = usePanel()
   const settings = usePoll(() => call('GET settings'), [])
-  const taskSources = settings.data?.taskSources ?? []
   const projects = settings.data?.projects ?? []
   return <div className="dt-form">
-    <StatusHead hint={t('sourceStatusIntro')} settings="taskSources" />
+    <StatusHead hint={t('sourceStatusIntro')} settings="projects" />
     <SourceHealth />
     <Section title={t('sourceTaskListTitle')} hint={t('sourceTaskListHint')}
-      count={settings.data ? taskSources.length : undefined}>
+      count={settings.data ? projects.length : undefined}>
       <LoadState error={settings.error} loading={!settings.data} />
-      {settings.data && (taskSources.length === 0 ? <Hint>{t('taskSourceNone')}</Hint>
-        : <ul className="dt-list">{taskSources.map(source => {
-          const bound = projects.filter(project => project.value.taskSource === source.id)
-          return <li className="dt-row" key={source.id}>
-            <div className="dt-row-main">
-              <div className="dt-row-title"><span className="dt-row-name">{source.name}</span><Tag>{source.kind}</Tag></div>
-              <div className="dt-row-meta">
-                <span>{source.title ? localized(t, source.title) : source.kind}</span>
-                <span>{t('sourceTaskBoundProjects', { count: bound.length })}</span>
-                {bound.map(project => <span key={project.id}>{project.name}</span>)}
-              </div>
+      {settings.data && (projects.length === 0 ? <Hint>{t('projectNone')}</Hint>
+        : <ul className="dt-list">{projects.map(project => <li className="dt-row" key={project.id}>
+          <div className="dt-row-main">
+            <div className="dt-row-title"><span className="dt-row-name">{project.name}</span>
+              <Tag>{project.value.taskSource.kind}</Tag></div>
+            <div className="dt-row-meta">
+              <LabelValue label={t('projectCodeRepoLabel')} value={project.value.codeRepo.kind} />
+              <LabelValue label={t('projectInterval')} value={project.value.schedule.intervalMinutes} />
             </div>
-          </li>
-        })}</ul>)}
+          </div>
+        </li>)}</ul>)}
     </Section>
   </div>
 }

@@ -33,8 +33,8 @@ function ProblemLine({ problem, onChanged }: { problem: Problem; onChanged: () =
     case 'setup': return row(t(problem.place === 'feishu' ? 'problemSetupFeishu' : 'problemSetup'), <p className="dt-error"><SetupMessage
       problem={problem} /></p>,
       setupPage(problem.place), t(`problemSetupFix.${problem.place === 'deployment' ? 'deployment' : 'source'}`), <CheckSetupButton />)
-    case 'no-source': return row(t('problemNoSource'), undefined, settingsRoute('taskSources'), undefined, go(t('actionOpenSources'),
-      settingsRoute('taskSources')))
+    case 'no-source': return row(t('problemNoSource'), undefined, settingsRoute('projects'), undefined, go(t('actionOpenSources'),
+      settingsRoute('projects')))
     case 'no-allowed': return row(t('problemNoAllowed'), undefined, settingsRoute('eval'), undefined, go(t('actionAddAllowed'),
       settingsRoute('eval')))
     case 'executor-paused': return row(t('problemPaused'), undefined, { page: 'execution' }, undefined,

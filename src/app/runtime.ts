@@ -15,7 +15,6 @@ import { join } from 'node:path'
 import { lockSync } from 'proper-lockfile'
 import { Engine, key, reasonText, type EngineForSettings, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
 import { allowedSender, settingsPolicy, type Settings as SettingsSnapshot } from '../policy.ts'
-import { FeishuWikiTaskSourceSchema } from '../task-sources/feishu-wiki.ts'
 import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
 import { firstSource, type Deployment, type Machine } from '../deployment.ts'
@@ -139,7 +138,8 @@ export class Runtime extends Service implements SourceHost {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart,
-        feishuWiki: credential => this.wikiOf(credential), feishuIm: credential => this.imOf(credential) })
+        feishuWiki: credential => this.wikiOf(credential), feishuIm: credential => this.imOf(credential),
+        gitCredential: id => this.gitCredentials.metaOf(id), gitAuth: id => this.gitCredentials.authOf(id) })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')
@@ -229,7 +229,8 @@ export class Runtime extends Service implements SourceHost {
         engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
         executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
         effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime, feishuWiki: credential => this.wikiOf(credential),
-        feishuIm: credential => this.imOf(credential), health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
+        feishuIm: credential => this.imOf(credential), gitAuth: id => this.gitCredentials.authOf(id),
+        health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
       // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
       effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
       // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
@@ -355,8 +356,8 @@ export class Runtime extends Service implements SourceHost {
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
       checkSetup: () => { setup.check() },
       checkSource: (kind, config, field, meta) => setup.checkSource(kind, config, field, sources, meta),
-      checkCodeRepo: (kind, config, field, meta) => setup.checkCodeRepo(kind, config, field, store.settings(), meta),
-      checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, store.settings(), meta),
+      checkCodeRepo: (kind, config, field, meta) => setup.checkCodeRepo(kind, config, field, meta),
+      checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, meta),
       requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
       reset: () => runtime.reset() }
   }
@@ -412,11 +413,7 @@ export class Runtime extends Service implements SourceHost {
   }
 }
 
-/** 收集飞书知识库任务来源引用的凭据 ID；删除凭据时按它统计引用。 */
+/** 收集项目引用的飞书凭据 ID；删除凭据时按它统计引用。 */
 export function feishuCredentialReferences(settings: SettingsSnapshot): string[] {
-  return Object.values(settings.taskSources).flatMap(record => {
-    if (record.kind !== 'feishu-wiki') return []
-    const parsed = FeishuWikiTaskSourceSchema.safeParse(record.config)
-    return parsed.success && parsed.data.feishuCredential ? [parsed.data.feishuCredential] : []
-  })
+  return Object.values(settings.projects).flatMap(project => project.feishuCredential ? [project.feishuCredential] : [])
 }
