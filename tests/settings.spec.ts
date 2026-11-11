@@ -1,9 +1,13 @@
 /** 设置保存、暂停切换和策略同步的并发、重试与校验测试。 */
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { UserError, threadKey } from '../src/core/index.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { Setup } from '../src/app/setup.ts'
 import { SettingsConflict } from '../src/app/settings.ts'
+import { policyHistory } from '../src/app/settings-history.ts'
 import { feishu, startRuntime, type Host } from './fixtures/host.ts'
 
 let h: Host | undefined
@@ -31,14 +35,14 @@ it('refuses a save of a block that another save changed during its model or acco
   // 被同一来源的另一次保存抢先的账户检查同样会被拒绝。
   const accounts = deferred<void>()
   vi.spyOn(Setup.prototype, 'checkAccounts').mockImplementationOnce(() => accounts.promise)
-  const github = settings.block('source:github')
-  const value = github.value as { enabled: boolean; config: Record<string, unknown> }
-  const moved = settings.save('source:github', { ...value, config: { ...value.config, cli: '/opt/bin/gh-other' } }, github.revision,
+  const source = settings.block('source:feishu')
+  const value = source.value as { enabled: boolean; config: Record<string, unknown> }
+  const moved = settings.save('source:feishu', { ...value, config: { ...value.config, cli: '/opt/bin/lark-other' } }, source.revision,
     'panel')
-  await settings.save('source:github', { ...value, config: { ...value.config, pollSeconds: 90 } }, github.revision, 'panel')
+  await settings.save('source:feishu', { ...value, config: { ...value.config, directMessages: false } }, source.revision, 'panel')
   accounts.resolve()
   await expect(moved).rejects.toThrow(SettingsConflict)
-  expect(store.settings().sources.github!.config).toMatchObject({ cli: value.config.cli, pollSeconds: 90 })
+  expect(store.settings().sources.feishu!.config).toMatchObject({ cli: value.config.cli, directMessages: false })
 })
 
 it('refuses a Policy sync that a Policy save outran, reports it on sync:feishu, and keeps the save', async () => {
@@ -125,15 +129,125 @@ it('refuses to delete a Source with unfinished Tickets, and deletes an unused re
     count: '1' }))
   expect(store.settings().sources.feishu).toBeDefined()
   // 新记录按 kind-2 生成；显式重复 ID 被拒绝。
-  expect(await settings.createSource('github', undefined, {}, 'panel')).toMatchObject({ id: 'github-2', restarting: true })
-  expect(store.settings().sources['github-2']).toBeDefined()
-  await expect(settings.createSource('github', 'github', {}, 'panel')).rejects.toThrow(new UserError('sourceExists',
-    { source: 'github' }))
+  expect(await settings.createSource('feishu', undefined, {}, 'panel', '支付重构')).toMatchObject({ id: 'feishu-2', restarting: true })
+  expect(store.settings().sources['feishu-2']).toBeDefined()
+  await expect(settings.createSource('feishu', 'feishu', {}, 'panel', '另一个项目')).rejects.toThrow(new UserError('sourceExists',
+    { source: 'feishu' }))
   const policy = store.settings().policy
-  await settings.save('policy', { ...policy, sources: { ...policy.sources, 'github-2': { allowed: [], admission: {} } } },
+  await settings.save('policy', { ...policy, sources: { ...policy.sources, 'feishu-2': { allowed: [], admission: {} } } },
     store.blockRevision('policy'), 'panel')
-  expect(store.settings().policy.sources['github-2']).toBeDefined()
-  expect(await settings.removeSource('github-2', 'panel')).toEqual({ removed: true, restarting: true })
-  expect(store.settings().sources['github-2']).toBeUndefined()
-  expect(store.settings().policy.sources['github-2']).toBeUndefined()
+  expect(store.settings().policy.sources['feishu-2']).toBeDefined()
+  expect(await settings.removeSource('feishu-2', 'panel')).toEqual({ removed: true, restarting: true })
+  expect(store.settings().sources['feishu-2']).toBeUndefined()
+  expect(store.settings().policy.sources['feishu-2']).toBeUndefined()
+})
+it('prechecks candidate Source fields with real probes without writing settings', async () => {
+  h = await startRuntime()
+  const { setup, sources, store } = h.runtime
+  const feishuConfig = store.settings().sources.feishu!.config as Record<string, unknown>
+  const before = JSON.stringify(store.settings())
+  // 名称必填；记录 ID 只做登记检查。
+  expect(await setup.checkSource('feishu', feishuConfig, 'name', sources))
+    .toMatchObject([{ ok: false, code: 'sourceNameRequired' }])
+  expect(await setup.checkSource('feishu', feishuConfig, 'name', sources, { name: '  支付重构 ' }))
+    .toEqual([{ field: 'name', ok: true, scope: 'check', code: 'sourceNameOk', values: { name: '支付重构' } }])
+  expect(await setup.checkSource('feishu', feishuConfig, 'name', sources, { name: 'x'.repeat(81) }))
+    .toMatchObject([{ ok: false, code: 'sourceNameTooLong' }])
+  expect(await setup.checkSource('feishu', feishuConfig, 'id', sources, { id: 'feishu' }))
+    .toMatchObject([{ ok: false, code: 'sourceIdTaken' }])
+  expect(await setup.checkSource('feishu', feishuConfig, 'id', sources, { id: 'Bad_ID' }))
+    .toMatchObject([{ ok: false, code: 'sourceIdInvalid' }])
+  // 已安装字段运行真实 CLI：机器人账号可用。
+  expect(await setup.checkSource('feishu', feishuConfig, 'cli', sources))
+    .toMatchObject([{ ok: true, code: 'feishuAccountOk' }])
+  expect(await setup.checkSource('nope', feishuConfig, 'kind', sources)).toMatchObject([{ ok: false, code: 'sourceKindUnknown' }])
+  // 任务来源属于任务侧：Excel/CSV 必须真实可读，且必须是绝对路径。
+  const dir = mkdtempSync(join(tmpdir(), 'check-source-'))
+  const file = join(dir, 'tasks.csv')
+  writeFileSync(file, 'id,title,description,status\n1,登录,,待处理\n', 'utf8')
+  // 任务来源驱动走同一条预检通道：名称必填优先，Excel 真实读清单，飞书缺来源时明确报错。
+  expect(await setup.checkTaskSource('excel', { file }, 'name', store.settings(), { name: '' }))
+    .toMatchObject([{ ok: false, code: 'sourceNameRequired' }])
+  expect(await setup.checkTaskSource('excel', { file }, 'file', store.settings()))
+    .toMatchObject([{ ok: true, code: 'taskFileOk', values: { rows: '1' } }])
+  expect(await setup.checkTaskSource('excel', { file: join(dir, 'missing.csv') }, 'file', store.settings()))
+    .toMatchObject([{ ok: false, code: 'taskFileMissing' }])
+  expect(await setup.checkTaskSource('excel', { file: 'tasks.csv' }, 'file', store.settings()))
+    .toMatchObject([{ ok: false, code: 'taskFileRelative' }])
+  expect(await setup.checkTaskSource('feishu-wiki', { url: 'https://x.feishu.cn/wiki/wikcn1' }, 'url', store.settings()))
+    .toMatchObject([{ ok: false, code: 'feishuSourceUnset' }])
+  // 预检不写设置、不重启。
+  expect(JSON.stringify(store.settings())).toBe(before)
+})
+it('refuses a Source record without a name now that record names are required', async () => {
+  h = await startRuntime()
+  const { store } = h.runtime
+  const current = store.settings()
+  const { name: _name, ...legacy } = current.sources.feishu!
+  expect(legacy).not.toHaveProperty('name')
+  expect(() => store.saveSettings({ ...current, sources: { ...current.sources, feishu: legacy } })).toThrow()
+})
+it('records a project name change in settings history', async () => {
+  h = await startRuntime()
+  const { settings, sources, store } = h.runtime
+  const block = 'source:feishu'
+  const value = settings.block(block).value as { enabled: boolean; config: unknown }
+  await settings.save(block, { ...value, name: '支付重构' }, settings.block(block).revision, 'panel')
+  expect(store.settings().sources.feishu!.name).toBe('支付重构')
+  expect(policyHistory(store, sources, '').items[0]!.changes).toContainEqual({ code: 'sourceRenamed', source: 'feishu', from: '飞书', to: '支付重构' })
+})
+it('creates, reads and removes code repos, task sources and projects, and refuses to remove a record a project uses', async () => {
+  h = await startRuntime()
+  const { settings, store } = h.runtime
+  const repo = await settings.createCodeRepo('github', 'repo-main', { repository: 'acme/widgets' }, 'panel', '主仓库')
+  expect(repo).toMatchObject({ id: 'repo-main', restarting: false })
+  const tasks = await settings.createTaskSource('excel', undefined, { file: '/tasks.csv' }, 'panel', '任务表')
+  expect(tasks).toMatchObject({ id: 'excel' })
+  const project = await settings.createProject(undefined, { name: '支付重构', codeRepo: 'repo-main', taskSource: 'excel' }, 'panel')
+  expect(project).toMatchObject({ id: 'project' })
+  expect(settings.view().codeRepos.find(item => item.id === 'repo-main')).toMatchObject({ id: 'repo-main', kind: 'github', name: '主仓库', enabled: true,
+    read: 'settings/codeRepo:repo-main' })
+  expect(settings.view().taskSources).toMatchObject([{ id: 'excel', kind: 'excel', name: '任务表', enabled: true, read: 'settings/taskSource:excel' }])
+  expect(settings.view().projects).toMatchObject([{ id: 'project', name: '支付重构', enabled: true, codeRepo: 'repo-main', taskSource: 'excel',
+    read: 'settings/project:project' }])
+  expect(settings.block('codeRepo:repo-main').value).toEqual({ name: '主仓库', enabled: true, config: { repository: 'acme/widgets' } })
+  // 项目仍引用这两条记录时，两者都不能删除。
+  await expect(settings.removeCodeRepo('repo-main', 'panel')).rejects.toThrow(new UserError('codeRepoInUse', { repo: 'repo-main', count: '1' }))
+  await expect(settings.removeTaskSource('excel', 'panel')).rejects.toThrow(new UserError('taskSourceInUse', { source: 'excel', count: '1' }))
+  // 项目改名通过项目块保存，记录自身的类型保持不变。
+  const block = settings.block('project:project')
+  await settings.save('project:project', { ...(block.value as object), name: '支付重构二期' }, block.revision, 'panel')
+  expect(store.settings().projects.project!.name).toBe('支付重构二期')
+  expect(await settings.removeProject('project', 'panel')).toMatchObject({ removed: true, restarting: false })
+  expect(await settings.removeCodeRepo('repo-main', 'panel')).toMatchObject({ removed: true, restarting: false })
+  expect(await settings.removeTaskSource('excel', 'panel')).toMatchObject({ removed: true, restarting: false })
+  expect([store.settings().projects, store.settings().taskSources]).toEqual([{}, {}])
+  expect(store.settings().codeRepos['repo-main']).toBeUndefined()
+})
+
+it('refuses a project whose code repo differs from the repo its Excel task source reads', async () => {
+  h = await startRuntime()
+  const { settings, store } = h.runtime
+  await settings.createCodeRepo('github', 'main', { repository: 'acme/widgets' }, 'panel', '主仓库')
+  await settings.createCodeRepo('github', 'other', { repository: 'acme/other' }, 'panel', '另一个仓库')
+  await settings.createTaskSource('excel', 'tasks', { repo: 'main', file: 'tasks/backlog.csv' }, 'panel', '任务表')
+  await expect(settings.createProject('p1', { name: '支付重构', codeRepo: 'other', taskSource: 'tasks' }, 'panel'))
+    .rejects.toThrow(new UserError('projectRepoMismatch', { project: 'p1', source: 'tasks', repo: 'other', taskRepo: 'main' }))
+  expect(store.settings().projects.p1).toBeUndefined()
+  await expect(settings.createProject('p1', { name: '支付重构', codeRepo: 'main', taskSource: 'tasks' }, 'panel'))
+    .resolves.toMatchObject({ id: 'p1' })
+})
+
+it('refuses a task source save whose repo no longer matches a project that reads through it', async () => {
+  h = await startRuntime()
+  const { settings, store } = h.runtime
+  await settings.createCodeRepo('github', 'main', { repository: 'acme/widgets' }, 'panel', '主仓库')
+  await settings.createCodeRepo('github', 'other', { repository: 'acme/other' }, 'panel', '另一个仓库')
+  await settings.createTaskSource('excel', 'tasks', { repo: 'main', file: 'tasks/backlog.csv' }, 'panel', '任务表')
+  await settings.createProject('p1', { name: '支付重构', codeRepo: 'main', taskSource: 'tasks' }, 'panel')
+  const block = settings.block('taskSource:tasks')
+  const value = block.value as { enabled: boolean; config: Record<string, unknown> }
+  await expect(settings.save('taskSource:tasks', { ...value, config: { ...value.config, repo: 'other' } }, block.revision, 'panel'))
+    .rejects.toThrow(new UserError('taskSourceRepoMismatch', { project: 'p1', source: 'tasks', repo: 'main', taskRepo: 'other' }))
+  expect(store.settings().taskSources.tasks!.config).toMatchObject({ repo: 'main' })
 })

@@ -1,6 +1,6 @@
 /** 后续消息路由：已订阅线程上的人类消息直接交给工单执行器，并在不启动评估的情况下通知主会话。 */
 import { afterEach, expect, it, vi } from 'vitest'
-import { CHAT, feishu, startRuntime, type Host } from './fixtures/host.ts'
+import { CHAT, feishu, feishuFrom, startRuntime, type Host } from './fixtures/host.ts'
 import { repliedTo } from '../src/app/links.ts'
 import { inputMessage } from '../src/executor/dsh.ts'
 
@@ -48,7 +48,8 @@ it('leaves a delivered follow-up to its ticket\'s worker: the main Session may s
   async () => {
   h = await startRuntime()
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
-  const other = await h.acceptedTicket(feishu('3', '@bot 另一件事'))
+  await h.addFeishuSource('feishu-work')
+  const other = await h.acceptedTicket(feishuFrom('feishu-work', '3', '@bot 另一件事'))
   const settle = async (id: string, text: string, sender?: string) => {
     const message = followup(id, text, sender ? { sender_id: sender } : {})
     h!.runtime.receive(message); await h!.runtime.idle()

@@ -52,15 +52,12 @@ it('evaluates a message that arrives on a thread while an earlier candidate\'s c
   expect(h.candidates()).toEqual([b1.id, a1.id, b2.id])
 })
 
-it('delivers nothing to a ticket a person stopped while an earlier ticket\'s delivery waited', async () => {
+it('delivers nothing to a ticket a person stopped while its delivery waited', async () => {
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
-  const two = await h.acceptedTicket(feishu('5', '@bot 修二'))
   await h.runtime.settings.pause(true, 'panel')
   h.runtime.receive(feishu('2', '一的补充', { mentions: [], root_id: 'om_1', sender_id: 'ou_guest' }))
-  h.runtime.receive(feishu('6', '二的补充', { mentions: [], root_id: 'om_5', sender_id: 'ou_guest' }))
-  // 工单按从新到旧处理，因此阻塞第二个工单会在第一个工单被投递前暂停本轮。
   const gate = deferred()
-  const held = holdSession(two.sessionId, gate.promise)
+  const held = holdSession(one.sessionId, gate.promise)
   const resumed = h.runtime.settings.pause(false, 'panel')
   await waitUntil(held)
   await h.runtime.engine.stopTicket(one.ticket.id)
@@ -85,28 +82,26 @@ it('drops a delivery whose ticket a person stopped while it waited for the worke
   expect(h.runtime.store.tickets.get(one.ticket.id)).not.toHaveProperty('delivery')
 })
 
-it('runs prepare commands in the background, side by side, while accepts, intake and passes go on', async () => {
+it('runs a prepare command in the background while accepts, intake and passes go on', async () => {
   const settings = h.runtime.store.settings()
   h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, prepare: 'git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR"' } })
   const prepare = deferred()
   h.hooks.prepare = prepare.promise
   const prepares = () => h.subprocess.spawn.mock.calls.filter(([spec]) => spec.argv[0] === shellArgv('')[0]).length
-  const first = [feishu('1', '@bot 修一'), feishu('2', '@bot 修二')]
-  for (const trigger of first) h.runtime.receive(trigger)
+  const first = feishu('1', '@bot 修一')
+  h.runtime.receive(first)
   await h.runtime.idle()
-  for (const [index, trigger] of first.entries()) {
-    const accepted = await h.route({ kind: 'accept', trigger_id: trigger.id, title: 'fix', worktree_name: `fix-${index}`, acknowledgement: '收到。' })
-    expect(accepted).toMatchObject({ decision: 'accept', ticket: { state: 'working/queued' } })
-  }
-  await waitUntil(() => prepares() === 2)
-  // 来源循环的下一条消息立即存储，两个 prepare 命令仍在运行时，一轮就会转发它。
+  const accepted = await h.route({ kind: 'accept', trigger_id: first.id, title: 'fix', worktree_name: 'fix-one', acknowledgement: '收到。' })
+  expect(accepted).toMatchObject({ decision: 'accept', ticket: { state: 'working/queued' } })
+  await waitUntil(() => prepares() === 1)
+  // 来源循环的下一条消息立即存储，prepare 命令仍在运行时，一轮就会转发它。
   const later = feishu('3', '@bot 修三')
   expect(h.runtime.receive(later)).toBe('stored')
   await h.runtime.pump()
-  expect(h.candidates()).toEqual([...first, later].map(trigger => trigger.id))
+  expect(h.candidates()).toEqual([first, later].map(trigger => trigger.id))
   prepare.resolve()
   await h.runtime.idle()
-  expect(h.runtime.store.tickets.list().map(ticket => ticket.assignments.at(-1)!.state)).toEqual(['running', 'running'])
+  expect(h.runtime.store.tickets.list().map(ticket => ticket.assignments.at(-1)!.state)).toEqual(['running'])
 })
 
 it('keeps a launch that a pause cut short queued, and finishes it once processing resumes', async () => {
@@ -147,7 +142,7 @@ it('wakes an idle worker for a bot\'s Input only when a worker slot is free, and
   expect(h.agents.get(one.sessionId)!.status).toBe('running')
 })
 
-it('wakes an idle worker for a person\'s message at once, in the slot kept beyond the limit', async () => {
+it('counts a person\'s message in a normal slot, so it waits while the only slot is taken and wakes once it frees', async () => {
   const settings = h.runtime.store.settings()
   h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 1 } })
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
@@ -155,6 +150,12 @@ it('wakes an idle worker for a person\'s message at once, in the slot kept beyon
   const two = await h.acceptedTicket(feishu('5', '@bot 修二'))
   expect(h.agents.get(two.sessionId)!.status).toBe('running')
   h.runtime.receive(feishu('2', '一的补充', { mentions: [], root_id: 'om_1', sender_id: 'ou_guest' })); await h.runtime.idle()
+  // 人的消息没有额外槽位，第二个工单占着唯一槽位时它留在待投递里。
+  expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toHaveLength(1)
+  expect(h.agents.get(one.sessionId)!.status).toBe('idle')
+  h.agents.get(two.sessionId)!.status = 'idle'
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6000 })
+  try { await h.runtime.pump(); await h.runtime.idle() } finally { vi.useRealTimers() }
   expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toEqual([])
   expect(h.agents.get(one.sessionId)!.status).toBe('running')
 })
@@ -181,19 +182,24 @@ it('counts a launch under way against maxWorkers, so a bot\'s Input for an idle 
   expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toHaveLength(1)
 })
 
-it('holds a launch that would exceed its project\'s slots while the global limit still has room, and starts it once the limit is raised', async () => {
+it('holds a launch that would exceed its project\'s single slot while the global limit still has room, and starts it once that slot frees', async () => {
   const settings = h.runtime.store.settings()
-  h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 3, projectWorkers: 1 } })
+  h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 3 } })
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
   const two = await h.acceptedTicket(feishu('5', '@bot 修二'))
   expect(h.agents.get(one.sessionId)!.status).toBe('running')
-  // 同一项目的第二张工单在项目配额用完时排队，尽管全局 3 个槽位还有空。
+  // 同一项目的第二张工单在项目唯一的槽位被占用时排队，尽管全局 3 个槽位还有空。
   expect(h.runtime.store.tickets.get(two.ticket.id)!.assignments).toEqual([expect.objectContaining({ state: 'pending' })])
   expect(h.agents.has(two.sessionId)).toBe(false)
   expect(h.runtime.effects.pending('launch')).toBe(true)
-  // 调大单项目上限后，排队中的启动在下一次重试时开始，无需重启。
-  h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 3, projectWorkers: 2 } })
+  // 放宽全局上限不会让同项目的第二个工单开始：项目的串行上限固定为 1。
+  h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 4 } })
   vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6000 })
+  try { await h.runtime.pump(); await h.runtime.idle() } finally { vi.useRealTimers() }
+  expect(h.agents.has(two.sessionId)).toBe(false)
+  // 项目槽位随第一个工单的工作单元空闲而释放后，排队中的启动继续。
+  h.agents.get(one.sessionId)!.status = 'idle'
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 })
   try { await h.runtime.pump(); await h.runtime.idle() } finally { vi.useRealTimers() }
   expect(h.agents.get(two.sessionId)!.status).toBe('running')
   expect(h.runtime.store.tickets.get(two.ticket.id)!.assignments).toEqual([expect.objectContaining({ state: 'running' })])
@@ -797,7 +803,7 @@ it('reports nothing for a worker whose turn ends while it waits out the backoff 
   expect(latestAssignment(h.runtime.store.tickets.get(one.ticket.id)!)?.report).toBeUndefined()
   expect(h.relays(h.runtime.masterId)).toHaveLength(relayed)
 })
-it('wakes an idle worker for a status request in the slot kept for a person, while every other slot is taken', async () => {
+it('holds a status request in a normal slot while every other slot is taken', async () => {
   const settings = h.runtime.store.settings()
   h.runtime.store.saveSettings({ ...settings, executor: { ...settings.executor, maxWorkers: 1 } })
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
@@ -808,6 +814,12 @@ it('wakes an idle worker for a status request in the slot kept for a person, whi
   const two = await h.acceptedTicket(feishu('5', '@bot 修二'))
   expect(h.agents.get(two.sessionId)!.status).toBe('running')
   expect(h.runtime.engine.requestStatus(one.ticket.id)).toBe(true); await h.runtime.idle()
+  // 状态请求与人工跟进一样占普通槽位：唯一槽位被第二个工单占用，它留在待投递里。
+  expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toHaveLength(1)
+  expect(h.agents.get(one.sessionId)!.status).toBe('idle')
+  h.agents.get(two.sessionId)!.status = 'idle'
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6000 })
+  try { await h.runtime.pump(); await h.runtime.idle() } finally { vi.useRealTimers() }
   expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toEqual([])
   expect(h.agents.get(one.sessionId)!.status).toBe('running')
 })
@@ -874,7 +886,8 @@ it('ends a worker\'s turn only when the stop that ended its Assignment commits',
 
 describe('ticket workspace directories', () => {
   /** 用给定来源记录构造设置，来源只有 id 与类型，足以决定项目目录。 */
-  const settingsOf = (sources: Record<string, Record<string, unknown>>) => SettingsSchema.parse({ sources })
+  const settingsOf = (records: Record<string, Record<string, unknown>>) => SettingsSchema.parse({ sources:
+    Object.fromEntries(Object.entries(records).map(([id, record]) => [id, { name: id, ...record }])) })
   const ticketOf = (id: string) => ({ id, origin: { triggerId: 'tr1', triggerIds: [] },
     mandate: { strength: 'explicit', policyVersion: 'v1', basis: {}, actor: { source: 'feishu', id: 'alice' }, scope: '' } }) as unknown as Ticket
   /** 接受一张工单，返回它固定的项目名与执行目录。 */
@@ -935,44 +948,40 @@ describe('the Executor\'s parts', () => {
     slots.reserve('t4', 'launch')
     expect(slots.used()).toBe(3)
   })
-  it('wakes a worker for a person\'s message in the one slot beyond the limit, and ahead of launches once a slot frees up', () => {
+  it('wakes a worker for a person\'s message in a normal slot, never beyond the limit', () => {
     const running = ['t1', 't2', 't3']
     const slots = new WorkerSlots(() => running, () => 3)
-    expect(() => slots.reserve('t4', 'launch')).toThrow(Later)
-    expect(() => slots.reserve('t4', 'wake')).toThrow(Later)
-    slots.reserve('t5', 'person')
-    expect(slots.used()).toBe(4)
-    expect(slots.launches()).toBeLessThanOrEqual(0)
-    // 没有第二个人的唤醒能超过限制；一旦某个 worker 结束就可以，而启动仍在等待。
-    expect(() => slots.reserve('t6', 'person')).toThrow(Later)
+    // 人工跟进没有额外槽位：全局上限是唯一硬上限。
+    expect(() => slots.reserve('t4', 'person')).toThrow(Later)
     running.splice(0, 1)
-    expect(() => slots.reserve('t7', 'launch')).toThrow(Later)
-    slots.reserve('t6', 'person')
-    expect(slots.used()).toBe(4)
+    slots.reserve('t5', 'person')
+    expect(slots.used()).toBe(3)
   })
-  it('limits each project to its own slots, by default half the global limit, and keeps room for other projects', () => {
+  it('limits each project to one running task even when the global limit has room', () => {
     const running = ['a1', 'a2']
     const project: Record<string, string> = { a1: 'alpha', a2: 'alpha', a3: 'alpha', b1: 'beta' }
     const slots = new WorkerSlots(() => running, () => 4, id => project[id])
-    // 自动上限为全局 4 的一半：alpha 已占 2 个，它的下一张工单等待，beta 仍可启动。
+    // alpha 已占满自己的唯一槽位，beta 仍可启动。
     expect(() => slots.reserve('a3', 'launch')).toThrow(Later)
     slots.reserve('b1', 'launch')
     expect(slots.used()).toBe(3)
-    // 人工跟进不受项目上限限制。
-    slots.reserve('a3', 'person')
-    expect(slots.used()).toBe(4)
   })
-  it('takes an explicit per-project limit, capped by the global limit', () => {
+  it('runs one task per project even when the global limit has room, including a person\'s message', () => {
     const running = ['a1']
     const project: Record<string, string> = { a1: 'alpha', a2: 'alpha', a3: 'alpha', b1: 'beta' }
-    const slots = new WorkerSlots(() => running, () => 3, id => project[id], () => 2)
-    slots.reserve('a2', 'launch')
-    expect(() => slots.reserve('a3', 'wake')).toThrow(Later)
-    expect(() => slots.reserve('b1', 'launch')).not.toThrow()
-    // 配置值大于全局上限时按全局上限封顶。
-    const capped = new WorkerSlots(() => running, () => 2, id => project[id], () => 9)
-    capped.reserve('a2', 'launch')
-    expect(() => capped.reserve('b1', 'launch')).toThrow(Later)
+    const slots = new WorkerSlots(() => running, () => 4, id => project[id])
+    expect(() => slots.reserve('a2', 'launch')).toThrow(Later)
+    expect(() => slots.reserve('a2', 'person')).toThrow(Later)
+    slots.reserve('b1', 'launch')
+    expect(slots.used()).toBe(2)
+  })
+  it('counts a person\'s message in a normal slot and never beyond the limit', () => {
+    const running = ['t1', 't2', 't3']
+    const slots = new WorkerSlots(() => running, () => 3)
+    expect(() => slots.reserve('t5', 'person')).toThrow(Later)
+    running.splice(0, 1)
+    slots.reserve('t6', 'person')
+    expect(slots.used()).toBe(3)
   })
   it('words an assignment, and the limits an inferred mandate sets, from the ticket alone', () => {
     const settings = SettingsSchema.parse({ policy: { rules: [{ id: 'copy', name: 'Copy fixes', enabled: true,

@@ -34,7 +34,7 @@ it('keeps a message waiting for a Source record whose kind is not installed yet,
     schema: z.object({}).strict(), fields: [],
     channel: { send: async (_host, message) => { sent.push(message); return 'sent' }, link: () => ({ url: '', label: { zh: '探针', en: 'Probe' } }) } }
   const { store } = h.runtime
-  store.saveSettings(SettingsSchema.parse({ ...store.settings(), sources: { ...store.settings().sources, probe: { kind: 'probe', enabled: true, config: {} } } }))
+  store.saveSettings(SettingsSchema.parse({ ...store.settings(), sources: { ...store.settings().sources, probe: { kind: 'probe', name: 'Probe', enabled: true, config: {} } } }))
   h.runtime.outbox.send({ id: 'waiting', channel: { source: 'probe', thread: 'probe:1', address: {} }, text: 'Done', kind: 'reply' })
   await h.runtime.sendReplies()
   expect([h.runtime.outbox.status('waiting'), h.runtime.health.reply?.state]).toEqual(['pending', 'ready'])

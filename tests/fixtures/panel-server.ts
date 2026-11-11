@@ -16,10 +16,7 @@ import { SETUP_FIELDS } from '../../src/deployment.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema } from '../../src/policy.ts'
 import { SetupError, type SetupCode } from '../../src/setup.ts'
 import { feishuChannel } from '../../src/sources/feishu-trigger.ts'
-import { githubChannel } from '../../src/sources/github-trigger.ts'
 import { feishuKind } from '../../src/sources/feishu.ts'
-import { githubKind } from '../../src/sources/github.ts'
-import { pipelineKind } from '../../src/pipeline/pipeline.ts'
 import type { Health } from '../../src/sources/host.ts'
 import type { SourceKind } from '../../src/sources/kind.ts'
 import { testDeployment, testFeishu, testGithub, testGitlab } from './deployment.ts'
@@ -74,14 +71,15 @@ export const promptVersion = (revision: number, config: PromptsView['current']['
 export const droppedReply = (id: string, hoursAgo: number, source: 'feishu' | 'github', reason: DroppedReply['dropped']['reason'],
   { ticket, thread }: { ticket?: DroppedReply['ticket']; thread?: false } = {}): DroppedReply => ({
   id, preview: `Reply ${id}`, kind: 'reply',
-  channel: source === 'feishu' ? feishuChannel('feishu', 'oc_1', 'om_root') : githubChannel('github', 42),
+  channel: source === 'feishu' ? feishuChannel('feishu', 'oc_1', 'om_root')
+    : { source: 'github', title: { zh: 'GitHub', en: 'GitHub' }, url: 'https://github.com/acme/widgets/pull/42' } as unknown as DroppedReply['channel'],
   dropped: { at: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(), reason }, ...ticket ? { ticket } : {},
   ...thread === false ? {} : { thread: source === 'feishu' ? 'feishu:oc_1:om_root' : 'github:42' },
 })
 const dayAgo = () => new Date(Date.now() - 86_400_000).toISOString()
 export const problemOf = (code: SetupCode, values: Record<string, string> = {}) => new SetupError(code, values).problem
 // 这些类型的配置不同，伪实现只把它们当作视图所携带的记录来读取。
-const KINDS = [feishuKind, githubKind, pipelineKind] as unknown as SourceKind[]
+const KINDS = [feishuKind] as unknown as SourceKind[]
 export const MACHINE = { stateDir: '/srv/dsh-superagent', promptMaxChars: 100000, admissionContextMaxPages: 10,
   admissionContextTimeoutMs: 15000 }
 
@@ -144,8 +142,9 @@ function sourceSettings(): SourceView[] {
       health: server.health[`sync:${id}`] }
     const policy = kind.policy && { fields: kind.policy.fields, explicit: kind.policy.explicit, ...kind.policy.rows
       ? { rows: kind.policy.rows(config) } : {}, ...sync ? { sync } : {} }
-    return { id, kind: record.kind, title: kind.title, description: kind.description, installed: true,
-      value: { enabled: record.enabled, config }, revision: server.revisions[`source:${id}`] ?? 0,
+    const title = { zh: record.name, en: record.name }
+    return { id, kind: record.kind, name: record.name, title, description: kind.description, installed: true,
+      value: { name: record.name, enabled: record.enabled, config }, revision: server.revisions[`source:${id}`] ?? 0,
       restarts: SETUP_FIELDS[record.kind] ?? [], fields: kind.fields, facts: kind.facts?.(resolved()?.sources[id]) ?? {},
       labels: record.kind === 'feishu' ? { oc_team: '团队群', oc_other: '另一个群', ...server.joined } : {}, openTickets: server.openTickets[id] ?? 0,
       ...problem ? { problem } : {}, ...policy ? { policy } : {} }
@@ -160,10 +159,11 @@ function sourceStatuses(): SourceStatusRow[] {
     const state = !enabled ? 'off' : problem || health.some(item => item.state === 'error') ? 'error' : server.setup.problem ? 'setup'
       : health.some(item => item.state === 'starting') ? 'starting' : health.some(item => item.state === 'paused') ? 'paused' : 'ready'
     const feishu = kind.kind === 'feishu'
-    return { id, title: kind.title, installed: true, enabled, state, health, ...problem ? { problem } : {},
+    return { id, title: { zh: record.name, en: record.name }, installed: true, enabled, state, health,
+      ...problem ? { problem } : {},
       stats: { received: feishu ? 12 : 0, filtered: feishu ? 2 : 0, lastAt: '2026-09-23T00:00:00Z' },
-      filtered: feishu ? [] : [{ id: 'e9', at: '2026-09-23T00:02:00Z', actor: actor('github', 'someone'), preview: 'looks wrong',
-        reason: { code: 'source_disabled' } }],
+      filtered: feishu ? [{ id: 'e9', at: '2026-09-23T00:02:00Z', actor: actor('feishu', 'ou_someone'), preview: 'looks wrong',
+        reason: { code: 'source_disabled' } }] : [],
       dropped: server.dropped.filter(item => item.channel.source === id && item.dropped.at >= dayAgo()) }
   })
 }
@@ -175,11 +175,19 @@ const stateView = (): StateView => ({
 })
 const settingsView = (): ApiResponse<'GET settings'> => ({
   policyVersion: 'abcdef1234567890',
-  kinds: KINDS.map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description })),
+  kinds: KINDS.map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
   blocks: { policy: { value: server.settings.policy, revision: server.revisions.policy ?? 0 },
     eval: { value: server.settings.eval, revision: server.revisions.eval ?? 0 },
     executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 } },
   sources: sourceSettings(),
+  codeRepos: Object.entries(server.settings.codeRepos).sort(([a], [b]) => a.localeCompare(b)).map(([id, record]) => ({ id, kind: record.kind,
+    name: record.name, enabled: record.enabled, value: { name: record.name, enabled: record.enabled, config: record.config },
+    revision: server.revisions[`codeRepo:${id}`] ?? 0 })),
+  taskSources: [], projects: [],
+  taskSourceKinds: [
+    { kind: 'excel', title: { zh: 'Excel 文件', en: 'Excel file' }, description: { zh: '仓库清单', en: 'Repository list' }, fields: [] },
+    { kind: 'feishu-wiki', title: { zh: '飞书知识库', en: 'Feishu wiki' }, description: { zh: '飞书文档', en: 'Feishu document' }, fields: [] },
+  ],
   environment: { root: '/srv/dsh-superagent/work', variables: [
     { owner: 'executor', enabled: true, variables: [{ key: 'DSH_SUPERAGENT_DIR', description: { zh: '工单的执行目录',
       en: 'The ticket directory' } },
@@ -244,12 +252,11 @@ function threadPage(key: string, { before, around }: { before?: string; around?:
 }
 function initial(): PanelServer {
   const settings = SettingsSchema.parse({
-    policy: { sources: { feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }], syncChat: 'oc_team' },
-      github: { allowed: [{ id: 'alice' }] } },
+    policy: { sources: { feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }], syncChat: 'oc_team' } },
       rules: [{ id: 'copy', name: '文案修改', enabled: true, instruction: '修正明确的文案错误' }] },
-    sources: { feishu: { kind: 'feishu', enabled: true, config: { cli: 'lark-bot', chats: [{ chatId: 'oc_team', listen: 'mentions' }],
-      directMessages: true } },
-      github: { kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: 'gh-agent' } } },
+    sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: 'lark-bot', chats: [{ chatId: 'oc_team', listen: 'mentions' }],
+      directMessages: true } } },
+    codeRepos: { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: 'gh-agent' } } },
     executor: { blockedCommands: ['gh-personal'] },
   })
   const ended = ticketSummary({ id: 't0', title: '旧工单', state: 'ended', actions: { retry: false, stop: false },
@@ -259,7 +266,7 @@ function initial(): PanelServer {
   const defaults = { revision: 0, previousRevision: null, savedAt: '', source: 'defaults' }
   return {
     health: {}, down: false, pending: 0, opened: [], requests: [], misuse: [], queued: new Set(), dropped: [], failing: [], openTickets: {},
-    setup: { machine: MACHINE, problem: null, feishuProblem: null, gitlabProblem: null,
+    setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
         name: 'Widgets Bot' }, gitlab: null } },
     settings, revisions: { policy: 3, eval: 1, executor: 0 },
@@ -299,7 +306,7 @@ type Route<K extends keyof Api> = { query?: readonly Query<K>[]; answer: (reques
 const page = <T>(items: T[]) => ({ items, total: items.length, next_offset: null })
 const ticketOf = (id: string) =>
   [...server.tickets.open, ...server.person, ...server.tickets.ended].find(ticket => ticket.id === id) ?? server.ticketDetails[id]
-const SourceSave = z.object({ enabled: z.boolean(), config: z.unknown() })
+const SourceSave = z.object({ name: z.string().trim().min(1), enabled: z.boolean(), config: z.unknown() })
 
 const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET state': { answer: stateView },
@@ -310,6 +317,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     return { tickets: [], threads: server.search.threads, items: server.search.items.filter(item => item.preview.includes(q)) }
   } },
   'GET sources': { answer: sourceStatuses },
+  'GET queue': { answer: () => ({ at: '', maxWorkers: 0, used: 0, items: [] }) },
   'POST sources': { body: true, answer: ({ body }) => {
     const kind = KINDS.find(item => item.kind === body.kind)
     if (!kind) return refuse(404, `Unknown Source kind: ${body.kind}`, { code: 'sourceKindUnknown', values: { kind: body.kind } })
@@ -321,9 +329,75 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       id = `${kind.kind}-${suffix}`
     }
     const config = kind.schema.parse(body.config ?? {})
-    server.settings = { ...server.settings, sources: { ...server.settings.sources, [id]: { kind: kind.kind, enabled: true, config } } }
+    server.settings = { ...server.settings, sources: { ...server.settings.sources,
+      [id]: { kind: kind.kind, name: body.name, enabled: true, config } } }
     server.revisions[`source:${id}`] = 0
     return { id, revision: 0, restarting: true }
+  } },
+  'POST code-repos': { body: true, answer: ({ body }) => {
+    const id = body.id ?? body.kind
+    server.settings = { ...server.settings, codeRepos: { ...server.settings.codeRepos,
+      [id]: { kind: body.kind, name: body.name, enabled: true, config: (body.config ?? {}) as Record<string, unknown> } } }
+    return { id, revision: 0, restarting: false as const }
+  } },
+  'DELETE code-repos/:id': { answer: ({ params }) => {
+    const { [params.id]: _record, ...codeRepos } = server.settings.codeRepos
+    server.settings = { ...server.settings, codeRepos }
+    return { removed: true as const, restarting: false as const }
+  } },
+  'POST task-sources': { body: true, answer: ({ body }) => {
+    const id = body.id ?? body.kind
+    server.settings = { ...server.settings, taskSources: { ...server.settings.taskSources,
+      [id]: { kind: body.kind, name: body.name, enabled: true, config: (body.config ?? {}) as Record<string, unknown> } } }
+    return { id, revision: 0, restarting: false as const }
+  } },
+  'DELETE task-sources/:id': { answer: ({ params }) => {
+    const { [params.id]: _record, ...taskSources } = server.settings.taskSources
+    server.settings = { ...server.settings, taskSources }
+    return { removed: true as const, restarting: false as const }
+  } },
+  'POST task-sources/verify': { body: true, answer: ({ body }) => {
+    const field = body.field ?? 'all'
+    if (field === 'name' && !String(body.name ?? '').trim()) {
+      return { checks: [{ field, ok: false, scope: 'check' as const, code: 'sourceNameRequired', values: {} }] }
+    }
+    return { checks: [{ field, ok: true, scope: 'check' as const, code: field === 'name' ? 'sourceNameOk' : 'sourceKindOk',
+      values: { kind: String(body.kind ?? ''), name: String(body.name ?? '') } }] }
+  } },
+  'POST projects': { body: true, answer: ({ body }) => {
+    const id = body.id ?? 'project'
+    server.settings = { ...server.settings, projects: { ...server.settings.projects, [id]: { name: body.name, enabled: true,
+      codeRepo: body.codeRepo, taskSource: body.taskSource, execution: { directory: '', branch: '' },
+      schedule: { intervalMinutes: 30, runOnStart: true }, retry: { maxRetries: 2, retryBackoffSeconds: 60 },
+      taskPolicy: { pendingStatuses: ['待处理', 'todo', 'pending', 'open'], doneStatus: '已完成', failedStatus: '失败' } } } }
+    return { id, revision: 0, restarting: false as const }
+  } },
+  'DELETE projects/:id': { answer: ({ params }) => {
+    const { [params.id]: _record, ...projects } = server.settings.projects
+    server.settings = { ...server.settings, projects }
+    return { removed: true as const, restarting: false as const }
+  } },
+  // 预检在测试脚本里按字段返回可预期的成功结果；真实探测由宿主实现。
+  'POST sources/verify': { body: true, answer: ({ body }) => {
+    const field = body.field ?? 'all'
+    if (field === 'name' && String(body.name ?? '').length > 80) {
+      return { checks: [{ field, ok: false, scope: 'check' as const, code: 'sourceNameTooLong', values: { limit: '80' } }] }
+    }
+    if (field === 'repository' && !(body.config as { repository?: string } | undefined)?.repository) {
+      return { checks: [{ field, ok: false, scope: 'check' as const, code: 'checkFailed', values: { output: 'HTTP 404' } }] }
+    }
+    const codes: Record<string, string> = { name: 'sourceNameOk', id: 'sourceIdOk', kind: 'sourceKindOk',
+      instanceUrl: body.kind === 'feishu' ? 'feishuInstanceOk' : 'githubInstanceOk', repository: 'githubRepositoryOk',
+      project: 'gitlabProjectOk', cli: body.kind === 'feishu' ? 'feishuAccountOk' : 'githubAccountOk' }
+    const values: Record<string, Record<string, string>> = { name: { name: String(body.name ?? '') }, id: { id: String(body.id ?? '') },
+      instanceUrl: { host: body.kind === 'feishu' ? 'feishu.cn' : 'github.com' }, repository: { repository: 'acme/widgets', login: 'agent-bot' },
+      project: { project: 'acme/widgets', login: 'agent-bot' },
+      cli: body.kind === 'feishu' ? { name: '飞书' } : { login: 'agent-bot' } }
+    const ok = (name: string) => ({ field: name, ok: true, scope: 'check' as const, code: codes[name] ?? 'sourceKindOk',
+      values: values[name] ?? {} })
+    const keyFields: Record<string, string[]> = { github: ['instanceUrl', 'repository', 'cli'], gitlab: ['instanceUrl', 'project', 'cli'],
+      feishu: ['instanceUrl', 'cli'] }
+    return { checks: field === 'all' ? ['name', 'kind', 'id', ...keyFields[body.kind] ?? []].map(ok) : [ok(field)] }
   } },
   'DELETE sources/:id': { answer: ({ params }) => {
     if (!server.settings.sources[params.id]) return refuse(404, 'Source not found')
@@ -395,7 +469,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     else if (block === 'executor') server.settings = { ...server.settings, executor: ExecutorConfigSchema.parse(body.value) }
     else if (block === 'eval') server.settings = { ...server.settings, eval: EvalConfigSchema.parse(body.value) }
     else if (record && source) {
-      const { enabled, config: value } = SourceSave.parse(body.value)
+      const { name, enabled, config: value } = SourceSave.parse(body.value)
       const config = source.schema.parse(value)
       // 与服务器上一样，更改后的 CLI 若未通过检查，会以设置问题拒绝保存。
       if (config.cli === 'lark-broken') {
@@ -404,7 +478,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       }
       const id = block.slice('source:'.length)
       restarting = (config.cli ?? '') !== (record.config.cli ?? '')
-      server.settings = { ...server.settings, sources: { ...server.settings.sources, [id]: { kind: record.kind, enabled, config } } }
+      server.settings = { ...server.settings, sources: { ...server.settings.sources, [id]: { kind: record.kind, name, enabled, config } } }
     }
     server.revisions[block] = (server.revisions[block] ?? 0) + 1
     return { restarting, revision: server.revisions[block] }

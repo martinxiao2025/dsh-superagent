@@ -127,6 +127,12 @@ div.dt-preview-head { color: var(--dsw-alias-label-secondary); }
 .dt-card { display: flex; flex-direction: column; gap: 12px; padding: 16px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: 16px; min-width: 0; }
 .dt-source-add { display: flex; flex-direction: column; gap: 8px; padding: 16px; border: 0.5px dashed var(--dsw-alias-border-l3); border-radius: 16px; min-width: 0; }
 .dt-source-add .dt-row-buttons { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin-top: 0; }
+.dt-add-grid, .dt-add-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; align-items: start; }
+.dt-verify-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dt-verify-row { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.dt-verify-row > .dt-field { flex: 1 1 auto; min-width: 0; }
+.dt-verify-row > .dt-btn { flex: none; }
+.dt-check { margin: 0; overflow-wrap: anywhere; }
 .dt-card-head { display: flex; align-items: center; gap: 12px; min-height: 28px; }
 .dt-card-head .dt-row-main { flex: 1 1 0; min-width: 64px; }
 .dt-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -22,7 +22,6 @@ import { credentialHelper, workerGitConfig } from '../src/infra/environment.ts'
 import { IM_WORDS, NOTE_WORDS, checkedImText } from '../src/infra/text.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind, feishuTrigger } from '../src/sources/feishu.ts'
-import { githubKind } from '../src/sources/github.ts'
 import { testMachine } from './fixtures/deployment.ts'
 
 type Role = 'orchestrator' | 'worker'
@@ -61,7 +60,9 @@ const BANNED: [rule: string, where: RegExp, phrase: RegExp][] = [
 const KNOWN_FAILURES: [owner: string, failure: string][] = []
 
 const MEMBER = 'ou_alice', CHAT = 'oc_team'
-const feishu = (id: string, text: string, overrides: Record<string, unknown> = {}) => feishuTrigger('feishu', { message_id: `om_${id}`, chat_id: CHAT,
+const feishu = (id: string, text: string, overrides: Record<string, unknown> = {}) => feishuFrom('feishu', id, text, overrides)
+/** 来自另一条飞书记录，因此属于另一个项目。 */
+const feishuFrom = (source: string, id: string, text: string, overrides: Record<string, unknown> = {}) => feishuTrigger(source, { message_id: `om_${id}`, chat_id: CHAT,
   chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, mentions: [{ id: 'ou_bot' }],
   create_time: String(Date.parse('2026-09-09T00:00:00Z') + Number(id) * 1000), ...overrides }, 'ou_bot', 'cli_bot')!
 const sentences = (text: string) => text.split(/(?<=[。！？])|(?<=[.!?])\s+|\n+/)
@@ -138,17 +139,18 @@ async function start() {
     webServer: { host: '127.0.0.1', port: 3082, register: () => () => {} } }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   const seed = new Store(join(directory, 'orchestrator.sqlite'))
-  const github = { kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }
-  seed.saveSettings(SettingsSchema.parse({ ...seed.settings(), sources: { github, feishu: { kind: 'feishu', enabled: true, config: { cli: BOT } } } }))
+  const github = { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }
+  seed.saveSettings(SettingsSchema.parse({ ...seed.settings(), sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT } } },
+    codeRepos: { github } }))
   seed.close()
   const runtime = new Runtime(ctx, testMachine({ stateDir: directory }), () => {})
   await runtime.ready
-  runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
+  runtime.sources.register(feishuKind)
   const settings = runtime.store.settings()
-  const allowed = { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } }
-  const feishuSource = { kind: 'feishu', enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } }
+  const allowed = { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, 'feishu-work': { allowed: [{ id: MEMBER, name: 'Alice' }] } }
+  const feishuSource = { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } }
   runtime.store.saveSettings({ ...settings, policy: { ...settings.policy, sources: allowed }, eval: { ...settings.eval, mode: 'auto' },
-    sources: { ...settings.sources, feishu: feishuSource } })
+    sources: { ...settings.sources, feishu: feishuSource, 'feishu-work': { ...feishuSource, name: '飞书工作' } } })
   const run = async (sessionId: string, name: string, args: unknown) =>
     await tools.get(sessionId)!.get(name)!.execute(args, { signal: new AbortController().signal }) as Record<string, unknown>
   const stop = async () => { await runtime.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) }
@@ -173,7 +175,7 @@ async function drive(host: Host) {
   const a = routed.results[0]!.ticket!.ticket_id
   const answer = { trigger_id: request.id, purpose: 'answer', text: '是配置。' }
   const refusal = await run(master, 'orchestrator_reply', answer).then(() => '', (error: Error) => error.message)
-  const proposal = feishu('5', '把副标题改成“浏览网页”', { mentions: [] })
+  const proposal = feishuFrom('feishu-work', '5', '把副标题改成“浏览网页”', { mentions: [] })
   await runtime.receive(proposal)
   vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ items: [{ message_id: 'om_5', chat_id: CHAT }] })
   await run(master, 'orchestrator_eval', { trigger_id: proposal.id })

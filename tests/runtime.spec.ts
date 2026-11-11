@@ -23,14 +23,11 @@ import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/polic
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
 import type { SourceAdapter } from '../src/sources/kind.ts'
-import { githubKind, pollRound } from '../src/sources/github.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
-import { UserError, key, runningAssignment, said, threadKey, waitsForPerson, type Trigger } from '../src/core/index.ts'
+import { UserError, key, said, threadKey, waitsForPerson, type Trigger } from '../src/core/index.ts'
 import { feishuTrigger } from '../src/sources/feishu.ts'
 import { feishuChannel } from '../src/sources/feishu-trigger.ts'
-import { commentTrigger, githubChannel } from '../src/sources/github-trigger.ts'
 import { IM_WORDS } from '../src/infra/text.ts'
-import { observePull, pullOf } from '../src/sources/github-pull.ts'
 import { credentialHelper, workerGitConfig } from '../src/infra/environment.ts'
 import { workerDispatch } from '../src/infra/worker-sources.ts'
 import { policyHistory } from '../src/app/settings-history.ts'
@@ -105,7 +102,9 @@ function seed(store: Store, accounts: Accounts = {}): void {
   const settings = store.settings()
   const { feishu: _feishu, ...others } = settings.sources
   const feishu = accounts.feishu === null ? undefined : { ...settings.sources.feishu?.config, cli: BOT(), ...accounts.feishu }
-  store.saveSettings(SettingsSchema.parse({ ...settings, sources: { ...others, github: { kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: AGENT(), ...accounts.github } }, ...feishu ? { feishu: { kind: 'feishu', enabled: true, config: feishu } } : {} } }))
+  store.saveSettings(SettingsSchema.parse({ ...settings,
+    codeRepos: { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT(), ...accounts.github } } },
+    sources: { ...others, ...feishu ? { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: feishu } } : {} } }))
 }
 let restarts: ReturnType<typeof vi.fn<() => void>>
 async function restart(machine: Partial<Machine> = {}, accounts: Accounts = {}): Promise<Runtime> {
@@ -123,7 +122,19 @@ const relays = (sessionId: string) => deliveries.mock.calls.map(([call]) => call
 const MEMBER = 'ou_alice'
 const CHAT = 'oc_team'
 function feishu(id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
-  return feishuTrigger('feishu', { message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000), mentions: [{ id: 'ou_bot' }], ...overrides }, 'ou_bot', 'cli_bot')!
+  return feishuFrom('feishu', id, text, overrides)
+}
+/** 与 `feishu` 相同，但来自另一条飞书记录，因此属于另一个项目。 */
+function feishuFrom(source: string, id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
+  return feishuTrigger(source, { message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000), mentions: [{ id: 'ou_bot' }], ...overrides }, 'ou_bot', 'cli_bot')!
+}
+/** 新增一条飞书记录与它的策略，使它的工单属于另一个项目。 */
+async function addFeishuSource(id: string) {
+  const current = runtime.store.settings()
+  runtime.store.saveSettings({ ...current,
+    policy: { ...current.policy, sources: { ...current.policy.sources, [id]: { allowed: [{ id: MEMBER, name: 'Alice' }] } } },
+    sources: { ...current.sources, [id]: { kind: 'feishu', name: id, enabled: true, config: { ...current.sources.feishu!.config } } } })
+  await runtime.idle()
 }
 const worktreeName = 'fix-regression'
 /** 用主会话的 orchestrator_route 路由一个决定并返回其结果；被拒绝的会抛出原因。 */
@@ -142,7 +153,7 @@ async function acceptedTicket(trigger = feishu('1', '@bot 修一下回归')) {
 }
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), 'orchestrator-runtime-'))
-  vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' } : args[1]?.includes('/pulls/') ? { state: 'open', user: { login: 'agent-bot' }, html_url: 'https://github.com/acme/widgets/pull/' + args[1].split('/').at(-1), head: { ref: `agent/${String(runtime.store.tickets.list()[0]?.execution?.name)}`, sha: 'head-1', repo: { full_name: 'acme/widgets' } } } : { default_branch: 'master', permissions: { push: true } })
+  vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' } : { default_branch: 'master', permissions: { push: true } })
   vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ users: [{ member_id: MEMBER, name: 'Alice' }], has_more: false })
   vi.spyOn(Commands.prototype, 'git').mockResolvedValue('')
   vi.spyOn(Commands.prototype, 'run').mockResolvedValue('{"ok":true,"data":{}}')
@@ -151,7 +162,9 @@ beforeEach(async () => {
     [`git -C ${directory} rev-parse --show-toplevel`]: `${directory}\n`,
     [`git -C ${directory} remote get-url --push origin`]: 'https://github.com/acme/widgets.git\n',
     [`${AGENT()} api user`]: '{"login":"agent-bot","id":7}', [`${AGENT()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`]: '{"name":"acme/widgets","push":true}\n',
-    [`${OTHER()} api user`]: '{"login":"agent-bot","id":7}', [`${OTHER()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`]: '{"name":"acme/widgets","push":true}\n',
+    [`${OTHER()} auth status`]: JSON.stringify({ appId: 'cli_bot', brand: 'feishu', identities: { bot: { status: 'ready' } } }),
+    [`${OTHER()} config strict-mode`]: 'strict-mode: bot (source: profile)',
+    [`${OTHER()} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
     [`${BOT()} auth status`]: JSON.stringify({ appId: 'cli_bot', brand: 'feishu', identities: { bot: { status: 'ready' } } }),
     [`${BOT()} config strict-mode`]: 'strict-mode: bot (source: profile)',
     [`${BOT()} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
@@ -216,8 +229,8 @@ beforeEach(async () => {
   runtime = new Runtime(ctx, testMachine({ stateDir: directory }), restarts)
   await runtime.ready
   // 来源类型通常由插件注册，而单元测试中不会加载这些插件。
-  runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
-  runtime.store.saveSettings({ ...runtime.store.settings(), policy: { ...runtime.store.settings().policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } } }, eval: { ...runtime.store.settings().eval, mode: 'auto' }, sources: { github: { kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: AGENT() } }, feishu: { kind: 'feishu', enabled: true, config: { cli: BOT(), chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
+  runtime.sources.register(feishuKind)
+  runtime.store.saveSettings({ ...runtime.store.settings(), policy: { ...runtime.store.settings().policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT } } }, eval: { ...runtime.store.settings().eval, mode: 'auto' }, sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT(), chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } }, codeRepos: { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT() } } } })
   deliveries.mockClear()
 })
 afterEach(async () => { expect(controller.prompt).not.toHaveBeenCalled(); await runtime?.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) })
@@ -324,7 +337,7 @@ it('accepts silently under a rule that says so, gives the worker the rule proced
   expect(await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'result', text: '看到这个问题我试了一下，能复现，修复需要较大改动，已记在 #123。' })).toEqual({ status: 'sent' })
 })
 
-it('records worker reports, binds the task PR, ends the ticket on ready without a PR, and relays attention', async () => {
+it('records worker reports, relays attention, and ends the ticket on ready', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   deliveries.mockClear()
   expect(await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'started' })).toMatchObject({ notification: 'internal_only' })
@@ -334,35 +347,19 @@ it('records worker reports, binds the task PR, ends the ticket on ready without 
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'worker_attention', ticket: { ticket_id: ticket.id, attention: { question: 'Desktop too?' } } })
   await expect(runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'attention', human_action: 'other', text: 'x' })).rejects.toThrow('current attention question')
   expect(await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'attention', human_action: 'Desktop too?', text: '要不要也改桌面端？' })).toEqual({ status: 'sent' })
-  await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42, human_action: null })
-  const bound = runtime.store.tickets.get(ticket.id)!
-  expect(pullOf(bound)).toBe(42)
-  expect(bound.attention).toBeUndefined()
-  expect(runtime.store.threads.get('github:42')?.subscriptions).toEqual([ticket.id])
+  await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'working', human_action: null })
+  expect(runtime.store.tickets.get(ticket.id)!.attention).toBeUndefined()
   await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'reviewed' })
-  expect(runtime.store.tickets.get(ticket.id)!.ended).toBeUndefined()
+  expect(runtime.store.tickets.get(ticket.id)!.ended).toMatchObject({ by: 'executor', outcome: 'completed' })
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'worker_report', state: 'ready' })
-  expect(await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'result', text: '已提交 PR #42，待 review。' })).toEqual({ status: 'sent' })
-  const mergedAt = new Date().toISOString()
-  const merged = { number: 42, state: 'closed', merged: true, merged_at: mergedAt, html_url: 'https://github.com/acme/widgets/pull/42',
-    user: { login: 'agent-bot' }, head: { sha: 'abc', ref: 'agent/x', repo: { full_name: 'acme/widgets' } } }
-  await observePull(runtime.context(githubKind, 'github'), merged)
-  const ended = runtime.store.tickets.get(ticket.id)!
-  expect(ended).toMatchObject({ ended: expect.objectContaining({ by: 'executor', outcome: 'merged' }) })
-  // 已结束的工单保留其对 PR 的订阅，因此之后那里的人类评论会恢复它。
-  expect(runtime.store.threads.get('github:42')?.subscriptions).toEqual([ticket.id])
-  // 其 worker 的最后话语是就绪报告，因此其回合不会被取消：由它自己结束。
-  expect(agents.get(sessionId)!.cancel).not.toHaveBeenCalled()
-  const notice = runtime.store.receipts.waiting().find(item => item.kind === 'notice')
-  expect(notice ?? runtime.store.replyStatus(key('pr-terminal', '42', 'feishu', JSON.stringify({ chatId: CHAT, messageId: 'om_1' }), 'merged'))).toBeTruthy()
+  expect(await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'result', text: '已完成修改。' })).toEqual({ status: 'sent' })
 })
 
 it('lists each ticket with the Threads it subscribes to, as their Sources describe them', async () => {
-  const { sessionId, ticket } = await acceptedTicket()
-  await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })
+  const { ticket } = await acceptedTicket()
+  subscribe(ticket.id, { source: 'github', id: '42' })
   const line = () => ticketList(viewsOf(runtime), 'working', 0, 20).items.find(item => item.id === ticket.id)!
   runtime.store.threads.describe('github:42', { label: '#42 Fix the margin', facts: { number: { value: '#42' }, ci: { label: 'CI', value: { zh: '通过', en: 'passed' } } } })
-  expect(line()).not.toHaveProperty('prNumber')
   expect(line().threads).toContainEqual(expect.objectContaining({ key: 'github:42', source: 'github', title: '#42 Fix the margin', facts: { number: { value: '#42' }, ci: { label: 'CI', value: { zh: '通过', en: 'passed' } } } }))
   runtime.store.threads.describe('github:42', { facts: { ci: null } })
   expect(line().threads.find(thread => thread.key === 'github:42')!.facts).toEqual({ number: { value: '#42' } })
@@ -461,72 +458,6 @@ it('acknowledges a follow-up from the worker once and rejects events outside the
   expect(runtime.store.tickets.get(ticket.id)!.inputs.map(input => input.kind)).toEqual(['trigger'])
 })
 
-it('treats GitHub comments through the same gate: mentions by members are explicit, others need an existing task', async () => {
-  const stranger = commentTrigger('github', { id: 1, body: 'looks wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-1', created_at: '2026-09-09T00:00:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
-  await receive(stranger)
-  expect(runtime.store.decisions.byThread('github:7')).toEqual([expect.objectContaining({ kind: 'ignore', reason: [expect.objectContaining({ code: 'not_a_member' })] })])
-  const mention = commentTrigger('github', { id: 2, body: '@agent-bot please fix', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-2', created_at: '2026-09-09T00:01:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
-  await receive(mention)
-  expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'candidate', strength: 'explicit', trigger_id: mention.id })
-  const result = await route({ kind: 'accept', trigger_id: mention.id, title: 'Fix PR 7', worktree_name: 'fix-pr', acknowledgement: 'On it: fixing the review finding.' })
-  const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
-  expect(ticket.channels).toEqual([expect.objectContaining({ source: 'github', address: expect.objectContaining({ number: '7' }) })])
-  // PR 的 head 是工单执行环境中的变量；prepare 命令可以获取它。
-  expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_SOURCE: 'github', DSH_SUPERAGENT_GITHUB_NUMBER: '7', DSH_SUPERAGENT_GITHUB_PR_HEAD: 'refs/pull/7/head' })
-  const ci = { ...stranger, id: 'ci-1', human: false, text: 'GitHub PR #7 CI: failing', meta: { ci: true } }
-  await receive(ci)
-  expect(runtime.store.tickets.get(ticket.id)!.inputs).toEqual([expect.objectContaining({ triggerId: 'ci-1' })])
-})
-
-it('relays an allowed sender\'s mention in a new Issue as an explicit candidate from the poll that reads its notification', async () => {
-  const issue = { id: 1012, number: 12, title: 'Login fails', body: '@agent-bot please fix the login', state: 'open',
-    created_at: '2026-09-09T00:00:00Z', html_url: 'https://github.com/acme/widgets/issues/12', user: { login: 'alice', type: 'User' } }
-  const notification = { id: 'n1', updated_at: issue.created_at, reason: 'mention', repository: { full_name: 'acme/widgets' },
-    subject: { url: 'https://api.github.com/repos/acme/widgets/issues/12', type: 'Issue', title: issue.title } }
-  vi.spyOn(Commands.prototype, 'run').mockResolvedValue(`HTTP/2.0 200 OK\r\nX-Poll-Interval: 60\r\n\r\n${JSON.stringify([notification])}`)
-  vi.spyOn(Commands.prototype, 'gh').mockResolvedValue(issue)
-  vi.spyOn(Commands.prototype, 'pages').mockResolvedValue([])
-  runtime.store.set('github-since:github', '2026-09-08T23:59:00.000Z')
-  await pollRound(runtime.context(githubKind, 'github'))
-  await runtime.idle()
-  const candidate = relays(runtime.masterId).at(-1)
-  expect(candidate).toMatchObject({ kind: 'candidate', strength: 'explicit', trigger_id: key('github-issue', '12'), thread: 'github:12' })
-})
-
-it('ignores an allowed sender\'s new Issue that does not mention the agent, and an unlisted sender\'s mention, from the poll that reads them', async () => {
-  const poll = async (number: number, body: string, login: string) => {
-    const issue = { id: 1000 + number, number, title: 'Login fails', body, state: 'open', created_at: '2026-09-09T00:00:00Z', html_url: `https://github.com/acme/widgets/issues/${number}`, user: { login, type: 'User' } }
-    const notification = { id: `n${number}`, updated_at: issue.created_at, reason: 'subscribed', repository: { full_name: 'acme/widgets' },
-      subject: { url: `https://api.github.com/repos/acme/widgets/issues/${number}`, type: 'Issue', title: issue.title } }
-    vi.spyOn(Commands.prototype, 'run').mockResolvedValue(`HTTP/2.0 200 OK\r\nX-Poll-Interval: 60\r\n\r\n${JSON.stringify([notification])}`)
-    vi.spyOn(Commands.prototype, 'gh').mockResolvedValue(issue)
-    vi.spyOn(Commands.prototype, 'pages').mockResolvedValue([])
-    runtime.store.set('github-since:github', '2026-09-08T23:59:00.000Z')
-    await pollRound(runtime.context(githubKind, 'github'))
-    await runtime.idle()
-  await runtime.idle()
-    return key('github-issue', String(number))
-  }
-  const quiet = await poll(12, 'The login page fails after the update', 'alice')
-  expect(runtime.store.decisions.byThread('github:12')).toEqual([expect.objectContaining({ kind: 'ignore', reason: [{ code: 'no_mention', triggerId: quiet }] })])
-  const stranger = await poll(13, '@agent-bot please fix the login', 'mallory')
-  expect(runtime.store.decisions.byThread('github:13')).toEqual([expect.objectContaining({ kind: 'ignore', reason: [{ code: 'not_a_member', triggerId: stranger }] })])
-  expect(relays(runtime.masterId).filter(item => item.kind === 'candidate')).toEqual([])
-})
-
-it('keeps Issue Triggers stored before Issues arrived through notifications readable on their Thread', async () => {
-  const stored: Trigger = { id: key('github-issue', '5'), source: 'github-issue', threads: [{ source: 'github', id: '5' }],
-    actor: { source: 'github', id: 'alice' }, human: true, at: '2026-09-01T00:00:00Z', text: 'Bug\n\ndetails',
-    url: 'https://github.com/acme/widgets/issues/5', meta: { number: 5, isPr: false, eligibleAt: '2026-09-02T00:00:00.000Z' } }
-  runtime.store.triggers.save(stored)
-  runtime.store.threads.save({ key: 'github:5', ref: { source: 'github', id: '5' }, createdAt: stored.at, subscriptions: [], correlated: [],
-    pending: [], meta: {} })
-  const read = await runTool(runtime.masterId, 'orchestrator_read', { resource: `trigger/${stored.id}` })
-  expect(read).toMatchObject({ trigger_id: stored.id, source: 'github-issue', text: 'Bug\n\ndetails' })
-  const thread = (await api('GET', 'threads/github:5')).body
-  expect(thread).toMatchObject({ timeline: [expect.objectContaining({ id: stored.id, source: 'github-issue' })] })
-})
-
 it('relaunches running assignments after a restart with a recovery note', async () => {
   const { ticket } = await acceptedTicket()
   runtime.executor.resume()
@@ -564,7 +495,8 @@ it('projects read models for the management page and removes thread subscription
   expect((await api('GET', 'state')).body).not.toHaveProperty('tickets')
   // scripts/dsh-superagent 和 agents 从 GET state 读取健康状态（docs/006，管理 API）；设置及其修订版本有自己的路由。
   expect((await api('GET', 'state')).body).toMatchObject({ health: { runtime: { state: expect.any(String) } }, paused: false, load: { maxWorkers: 3 } })
-  expect((await api('GET', 'settings')).body).toMatchObject({ sources: expect.arrayContaining([expect.objectContaining({ id: 'github',
+  expect((await api('GET', 'settings')).body).toMatchObject({ sources: expect.arrayContaining([expect.objectContaining({ id: 'feishu',
+    revision: expect.any(Number), value: expect.objectContaining({ enabled: true }) })]), codeRepos: expect.arrayContaining([expect.objectContaining({ id: 'github',
     revision: expect.any(Number), value: expect.objectContaining({ enabled: true }) })]), blocks: { policy: { revision: expect.any(Number) } } })
   expect((await api('POST', `threads/${encodeURIComponent(threadKeyValue)}/unsubscribe`)).body).toMatchObject({ removed: true })
   expect(threadList(viewsOf(runtime), 'subscribed', 0, 20).items).toEqual([])
@@ -591,17 +523,17 @@ it('lets an Executor drop only its own ticket from a thread it finds unrelated, 
 })
 
 it('reports a Source that was switched on as starting until its next pass reports its health', async () => {
-  const save = (enabled: boolean) => runtime.settings.save('source:github', { enabled, config: runtime.store.settings().sources.github!.config }, runtime.store.blockRevision('source:github'), 'panel')
-  const github = async () => ((await api('GET', 'sources')).body as { id: string; health: unknown[] }[]).find(source => source.id === 'github')!.health
+  const save = (enabled: boolean) => runtime.settings.save('source:feishu', { name: runtime.store.settings().sources.feishu!.name, enabled, config: runtime.store.settings().sources.feishu!.config }, runtime.store.blockRevision('source:feishu'), 'panel')
+  const feishu = async () => ((await api('GET', 'sources')).body as { id: string; health: unknown[] }[]).find(source => source.id === 'feishu')!.health
   await save(false)
-  runtime.context(githubKind, 'github').report('github', { state: 'paused', detail: 'Off', code: 'sourceOff' })
+  runtime.context(feishuKind, 'feishu').report('feishu', { state: 'paused', detail: 'Off', code: 'sourceOff' })
   await save(true)
-  expect(await github()).toEqual([{ name: 'github', state: 'starting', detail: '' }])
+  expect(await feishu()).toEqual([{ name: 'feishu', state: 'starting', detail: '' }, { name: 'feishu:history', state: 'starting', detail: '' }])
   // 报告其他内容的部件（例如缺失的 CLI）会保留其报告：不会有轮次来替换它。
   await save(false)
-  runtime.context(githubKind, 'github').report('github', { state: 'paused', detail: 'x', code: 'feishuCliUnset' })
+  runtime.context(feishuKind, 'feishu').report('feishu', { state: 'paused', detail: 'x', code: 'feishuCliUnset' })
   await save(true)
-  expect(await github()).toEqual([expect.objectContaining({ code: 'feishuCliUnset' })])
+  expect((await feishu())[0]).toEqual(expect.objectContaining({ code: 'feishuCliUnset' }))
 })
 
 it('records each settings save with its policy change and the open tickets told about it', async () => {
@@ -610,7 +542,7 @@ it('records each settings save with its policy change and the open tickets told 
   await runtime.settings.save('executor', { ...settings.executor, maxWorkers: 5 }, runtime.store.blockRevision('executor'), 'panel')
   // 来源接收什么由它自己的配置决定，而不是策略；在那里谁可以发起工作由策略决定。
   const feishu = runtime.sources.instance('feishu')!
-  await runtime.settings.save('source:feishu', { enabled: true, config: { ...feishu.config, directMessages: false } }, runtime.store.blockRevision('source:feishu'), 'panel')
+  await runtime.settings.save('source:feishu', { name: runtime.store.settings().sources.feishu!.name, enabled: true, config: { ...feishu.config, directMessages: false } }, runtime.store.blockRevision('source:feishu'), 'panel')
   const policy = runtime.store.settings().policy
   await runtime.settings.save('policy', { ...policy, sources: { ...policy.sources, feishu: { ...policy.sources.feishu!, allowed: [...policy.sources.feishu!.allowed, { id: 'ou_bob', name: 'Bob' }] } } }, runtime.store.blockRevision('policy'), 'panel')
   await expect(runtime.settings.save('executor', settings.executor, 0, 'panel')).rejects.toThrow('Settings changed')
@@ -721,16 +653,13 @@ it('retries only a failed, blocked or undelivered ticket with a new assignment, 
   expect(unjudged()).toEqual([])
 })
 
-it('links Channels and Threads for people, finds tickets by a bare PR number, and keeps ended subscriptions out of the default Thread filter', async () => {
+it('links Channels and Threads for people and keeps ended subscriptions out of the default Thread filter', async () => {
   const { ticket } = await acceptedTicket(feishu('1', '@_user_1 修一下回归', { mentions: [{ id: 'ou_bot', key: '@_user_1', name: 'dsh-superagent' }] }))
   const home = `feishu:${CHAT}:om_1`
   expect(runtime.store.triggers.get(key('feishu', 'om_1'))!.text).toBe('@dsh-superagent 修一下回归')
   const chatLink = `https://applink.feishu.cn/client/chat/open?openChatId=${CHAT}`
   expect(ticketDetail(viewsOf(runtime), ticket.id)!.channels).toEqual([expect.objectContaining({ source: 'feishu', url: chatLink })])
   expect(threadDetail(viewsOf(runtime), home, undefined, 10)!.url).toBe(chatLink)
-  // 工单打开的拉取请求是它作为自己追随的线程。
-  runtime.store.tickets.save({ ...runtime.store.tickets.get(ticket.id)!, follows: [{ thread: 'github:4996', own: true }] })
-  expect(search(viewsOf(runtime), '4996', new TextCache(0)).tickets).toEqual([expect.objectContaining({ id: ticket.id })])
   expect(threadList(viewsOf(runtime), 'subscribed', 0, 10).items.map(thread => thread.key)).toEqual([home])
   runtime.engine.stopTicket(ticket.id)
   expect(threadList(viewsOf(runtime), 'subscribed', 0, 10).items).toEqual([])
@@ -750,24 +679,24 @@ it('counts every step of the day\'s flow over the same arriving messages and lis
 })
 
 it('queues a requeued trigger visibly and tells the orchestrator', async () => {
-  const stranger = commentTrigger('github', { id: 3, body: 'looks wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/8#issuecomment-3', created_at: '2026-09-09T00:00:00Z' }, { number: 8, isPr: true }, 'conversation', 'agent-bot')
+  const stranger = feishu('3', '随便说说', { mentions: [], sender_id: 'ou_guest' })
   await receive(stranger)
   runtime.store.saveSettings({ ...runtime.store.settings(), paused: true })
   expect(runtime.engine.reevaluate(stranger.id)).toBe(true)
-  expect(threadDetail(viewsOf(runtime), 'github:8', undefined, 50)!.timeline[0]!.disposition).toMatchObject({ queued: true })
+  expect(threadDetail(viewsOf(runtime), `feishu:${CHAT}:om_3`, undefined, 50)!.timeline[0]!.disposition).toMatchObject({ queued: true })
   await vi.waitFor(() => expect(agents.get(runtime.masterId)!.inject).toHaveBeenCalled())
 })
 
 it('asks a question where the human message that raised it was written, not in the ticket\'s original conversation', async () => {
   const { ticket, trigger, sessionId } = await acceptedTicket()
-  subscribe(ticket.id, { source: 'github', id: '42' })
-  const review = commentTrigger('github', { id: 5, body: 'Can you add the reason?', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/42#pullrequestreview-5', created_at: '2026-09-09T00:02:00Z' }, { number: 42, isPr: true }, 'review', 'agent-bot')
+  const review = feishu('5', 'Can you add the reason?', { mentions: [], root_id: 'om_review', sender_id: 'ou_guest' })
+  subscribe(ticket.id, { source: 'feishu', id: `${CHAT}:om_review` })
   await receive(review)
   await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'x', question_for_trigger_id: review.id })).rejects.toThrow('needs the question it raised')
   await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'x', human_action: 'Keep it?', question_for_trigger_id: 'unknown' })).rejects.toThrow('the person\'s message that raised it')
-  await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'no stop reason is recorded', human_action: 'Keep the PR and record the reason in a follow-up?', question_for_trigger_id: review.id })
+  await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'no stop reason is recorded', human_action: 'Keep the change and record the reason in a follow-up?', question_for_trigger_id: review.id })
   const queued = vi.spyOn(runtime.outbox, 'send')
-  await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'attention', human_action: 'Keep the PR and record the reason in a follow-up?', text: 'Keep the PR and record the reason in a follow-up?' })
+  await runTool(runtime.masterId, 'orchestrator_reply', { ticket_id: ticket.id, purpose: 'attention', human_action: 'Keep the change and record the reason in a follow-up?', text: 'Keep the change and record the reason in a follow-up?' })
   expect(queued.mock.calls.at(-1)![0].channel).toEqual(review.channel)
   // 关于整个工单的问题仍会送到工单开始的地方。
   await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'y', human_action: 'Desktop too?' })
@@ -775,11 +704,7 @@ it('asks a question where the human message that raised it was written, not in t
   expect(queued.mock.calls.at(-1)![0].channel).toEqual(trigger.channel)
 })
 
-it('finds triggers by #PR number, GitHub link prefix and Feishu message id', async () => {
-  const comment = commentTrigger('github', { id: 4, body: 'please check', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/9#issuecomment-4', created_at: '2026-09-09T00:00:00Z' }, { number: 9, isPr: true }, 'conversation', 'agent-bot')
-  await receive(comment)
-  expect(search(viewsOf(runtime), '#9', new TextCache(0)).threads).toEqual([expect.objectContaining({ key: 'github:9' })])
-  expect(search(viewsOf(runtime), 'https://github.com/acme/widgets/pull/9', new TextCache(0)).items.map(item => item.id)).toContain(comment.id)
+it('finds triggers by Feishu message id', async () => {
   const message = feishu('30', '随便说说', { mentions: [] })
   await receive(message)
   expect(search(viewsOf(runtime), 'https://x/y?id=om_30', new TextCache(0)).items.map(item => item.id)).toContain(message.id)
@@ -811,20 +736,21 @@ it('leaves waiting and blocked assignments alone after a restart and keeps block
   runtime.executor.resume()
   expect(runtime.store.tickets.get(ticket.id)!.assignments).toHaveLength(1)
   expect(waitsForPerson(runtime.store.tickets.get(ticket.id)!)).toBe(true)
-  const other = await acceptedTicket(feishu('12', '@bot 另一个', { root_id: undefined }))
+  await addFeishuSource('feishu-work')
+  const other = await acceptedTicket(feishuFrom('feishu-work', '12', '@bot 另一个', { root_id: undefined }))
   await runTool(other.sessionId, 'orchestrator_report', { state: 'progress', summary: 'midway' })
   runtime.executor.resume()
   expect(runtime.store.tickets.get(other.ticket.id)!.assignments.map(item => item.state)).toEqual(['ended', 'pending'])
 })
 
-it('starts with a broken GitHub record: the panel works, that record pauses, and other Sources keep running', async () => {
+it('starts with a broken code repository record: the panel works, that record pauses, and other Sources keep running', async () => {
   const { sessionId } = await acceptedTicket()
   await runTool(sessionId, 'orchestrator_report', { state: 'failed', summary: 'crashed' })
   expect(() => runtime.checkSetup()).toThrow('Setup is complete')
   controller.create.mockClear(); deliveries.mockClear()
   const next = await restart({}, { github: { cli: '' } })
   await next.ready
-  next.sources.register(feishuKind); next.sources.register(githubKind)
+  next.sources.register(feishuKind)
   const problem = { place: 'github', code: 'agentCliUnset', values: {}, detail: 'The agent GitHub CLI is not set.' }
   // 机器级部署检查通过：只排除出问题的记录，其余来源照常运行。
   expect(next.configured()).toBe(true)
@@ -837,7 +763,7 @@ it('starts with a broken GitHub record: the panel works, that record pauses, and
   // 概览和来源接口都说明是哪条记录失败了，而不是把它静默禁用。
   expect(overviewOf(next).problems[0]).toEqual({ kind: 'setup', ...problem })
   const sources = (await api('GET', 'sources')).body as { id: string; state: string; problem?: unknown }[]
-  expect(sources.find(source => source.id === 'github')).toMatchObject({ state: 'error', problem })
+  expect(sources.map(source => source.id)).toEqual(['feishu'])
   // 其他来源照常工作：飞书触发器仍被评估并交给主会话。
   await receive(feishu('30', '@bot 修一下'), next)
   expect(relays(next.masterId).some(item => item.trigger_id === feishu('30', '@bot 修一下').id)).toBe(true)
@@ -898,16 +824,15 @@ it('reports a failure to write the agent environment as environmentFailed and le
   expect(process.env).toEqual(environment)
 })
 
-it('checks only the account a Source save changes, so a problem setup has elsewhere does not refuse it', async () => {
+it('saves a code repository record while another record has a setup problem', async () => {
   answers = { ...answers, [`${BOT()} config strict-mode`]: 'strict-mode: off (source: profile)' }
   const next = await restart()
   await next.ready
   expect(next.feishuProblem).toMatchObject({ code: 'feishuUserIdentity' })
-  next.sources.register(feishuKind); next.sources.register(githubKind)
-  answers[`${OTHER()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":true}\n'
-  const github = next.settings.block('source:github')
-  const value = github.value as { enabled: boolean; config: Record<string, unknown> }
-  expect(await next.settings.save('source:github', { ...value, config: { ...value.config, cli: OTHER() } }, github.revision, 'panel'))
+  next.sources.register(feishuKind)
+  const repo = next.settings.block('codeRepo:github')
+  const value = repo.value as { name: string; enabled: boolean; config: Record<string, unknown> }
+  expect(await next.settings.save('codeRepo:github', { ...value, enabled: false }, repo.revision, 'panel'))
     .toMatchObject({ saved: true, restarting: true })
 })
 
@@ -924,26 +849,26 @@ it('lets only the panel change the execution environment, since it decides what 
 })
 
 it('checks a changed account CLI before saving it, restarts after the save, and lets only the panel change it', async () => {
-  const save = (config: Record<string, unknown>, origin: SettingsOrigin = 'panel') => runtime.settings.save('source:github',
-    { enabled: true, config: { ...runtime.store.settings().sources.github!.config, ...config } }, runtime.store.blockRevision('source:github'), origin)
+  const save = (config: Record<string, unknown>, origin: SettingsOrigin = 'panel') => runtime.settings.save('source:feishu',
+    { name: runtime.store.settings().sources.feishu!.name, enabled: true, config: { ...runtime.store.settings().sources.feishu!.config, ...config } }, runtime.store.blockRevision('source:feishu'), origin)
   await expect(save({ cli: OTHER() }, 'tool')).rejects.toThrow('can only be changed in the management panel')
-  answers[`${OTHER()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":false}\n'
-  await expect(save({ cli: OTHER() })).rejects.toMatchObject({ code: 'repositoryReadOnly', values: { account: 'agent-bot' } })
+  answers[`${OTHER()} config strict-mode`] = 'strict-mode: off (source: profile)'
+  await expect(save({ cli: OTHER() })).rejects.toMatchObject({ code: 'feishuUserIdentity', values: { mode: 'off' } })
   expect(restarts).not.toHaveBeenCalled()
-  answers[`${OTHER()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":true}\n'
+  answers[`${OTHER()} config strict-mode`] = 'strict-mode: bot (source: profile)'
   expect(await save({ cli: OTHER() })).toMatchObject({ saved: true, restarting: true })
   await vi.waitFor(() => expect(restarts).toHaveBeenCalledTimes(1))
   // 来源的其他字段无需重启即可生效。
-  expect(await save({ pollSeconds: 120 })).toMatchObject({ saved: true, restarting: false })
+  expect(await save({ directMessages: false })).toMatchObject({ saved: true, restarting: false })
   expect(restarts).toHaveBeenCalledTimes(1)
   expect((await runtime.settings.save('executor', { ...runtime.store.settings().executor, prepare: 'true' }, runtime.store.blockRevision('executor'), 'panel')).restarting).toBe(false)
   // 账户检查期间对另一个块的保存会被保留：先运行检查，然后保存合并。
-  const pending = save({ cli: AGENT() })
+  const pending = save({ cli: BOT() })
   await runtime.settings.save('policy', { ...runtime.store.settings().policy, rules: [] }, runtime.store.blockRevision('policy'), 'panel')
   await pending
   expect(runtime.store.settings().policy.rules).toEqual([])
-  expect(runtime.store.settings().sources.github!.config).toMatchObject({ cli: AGENT() })
-  const feishuSave = (cli: string) => runtime.settings.save('source:feishu', { enabled: true, config: { ...runtime.store.settings().sources.feishu!.config, cli } },
+  expect(runtime.store.settings().sources.feishu!.config).toMatchObject({ cli: BOT() })
+  const feishuSave = (cli: string) => runtime.settings.save('source:feishu', { name: runtime.store.settings().sources.feishu!.name, enabled: true, config: { ...runtime.store.settings().sources.feishu!.config, cli } },
     runtime.store.blockRevision('source:feishu'), 'panel')
   expect(await feishuSave('')).toMatchObject({ restarting: true })
   answers[`${BOT()} config strict-mode`] = 'strict-mode: off (source: profile)'
@@ -1039,8 +964,7 @@ it('tells both roles the execution environment through a generated prompt sectio
   const preview = runtime.prompts.preview(runtime.prompts.current().config)
   const section = preview.parts.worker.at(-1)!
   expect(section.name).toBe('runtime/environment')
-  for (const line of ['- DSH_SUPERAGENT_GITHUB_REPOSITORY = "acme/widgets"', '- DSH_SUPERAGENT_GITHUB_ACCOUNT = "agent-bot"', '- DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL = "7+agent-bot@users.noreply.github.com"']) expect(section.text).toContain(line)
-  expect(section.text).not.toContain('MERGE_ACCOUNT')
+  expect(section.text).toContain('DSH_SUPERAGENT_FEISHU_BOT')
   // 工单之外没有工单目录。
   expect(section.text).not.toContain('DSH_SUPERAGENT_DIR')
   // 主会话的策略部分紧随其后。
@@ -1087,18 +1011,6 @@ it('passes team text with template braces to every Session literally, without re
   }
 })
 
-it('leaves auto-merge to the delivery requirements, with the agent\'s own gh and the line threshold', async () => {
-  const { ticket } = await acceptedTicket()
-  expect(runtime.ticketEnvironment(ticket).map(variable => variable.key)).not.toContain('DSH_SUPERAGENT_GITHUB_MERGE_ACCOUNT')
-  expect(ticket.mandate).not.toHaveProperty('autoMergeLineLimit')
-  const delivery = runtime.prompts.current().config.delivery
-  expect(delivery).toContain('改动少于 200 行（新增数加删除数）；')
-  // 自动合并从不以智能体账户启用；只有该部分点名的合并 CLI 才能启用它。
-  expect(delivery).toContain('绝不要以 agent 账户启用自动合并')
-  expect(delivery).toContain('<merge CLI> pr merge <number> --auto --merge --match-head-commit <sha>')
-  expect(runtime.prompts.preview(runtime.prompts.current().config).worker).not.toContain('gh-merge')
-})
-
 it('runs the prepare command once for a new ticket, in its project directory with the ticket\'s environment, and fails the ticket with its output', async () => {
   const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
   const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; cwd: string; env?: Record<string, string> }).filter(spec => spec.argv[0] === shellArgv('')[0])
@@ -1114,10 +1026,11 @@ it('runs the prepare command once for a new ticket, in its project directory wit
   expect(runs()).toHaveLength(1)
   answers[shellArgv('exit 3').join(' ')] = new Error('fatal: no such clone')
   prepare('exit 3')
-  // 同项目的另一张工单有自己的子目录，因此它的准备失败会让工单失败，而不受前一张工单影响。
-  const failed = await acceptedTicket(feishu('9', '@bot 修一下标题'))
+  // 另一条飞书记录属于另一个项目，因此它的准备失败会让工单失败，而不受前一张工单占用项目槽位的影响。
+  await addFeishuSource('feishu-work')
+  const failed = await acceptedTicket(feishuFrom('feishu-work', '9', '@bot 修一下标题'))
   await runtime.idle()
-  expect(failed.ticket.execution!.directory).toBe(join(directory, 'work', 'feishu', failed.ticket.id))
+  expect(failed.ticket.execution!.directory).toBe(join(directory, 'work', 'feishu-work', failed.ticket.id))
   expect(runtime.store.tickets.get(failed.ticket.id)!.assignments.at(-1)).toMatchObject({ report: expect.objectContaining({ state: 'failed', summary: expect.stringContaining('The prepare command failed: fatal: no such clone') }) })
   expect(waitsForPerson(runtime.store.tickets.get(failed.ticket.id)!)).toBe(true)
 })
@@ -1135,27 +1048,6 @@ it('counts a ticket whose directory the host prepared before prepare commands ex
   expect(subprocess.spawn.mock.calls.some(([spec]) => spec.argv[0] === shellArgv('')[0])).toBe(false)
   expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)!.state).toBe('running')
 })
-
-it('runs a GitHub-only deployment: the GitHub part of the Policy decides alone, and the Feishu part has nothing to sync', async () => {
-  const next = await restart({}, { feishu: null })
-  await next.ready
-  expect(next.health).not.toHaveProperty('feishu')
-  expect(next.health).not.toHaveProperty('sync:feishu')
-  const problems = () => overviewOf(next).problems
-  const unregister = next.sources.register(githubKind)
-  expect(next.health.github).toEqual({ state: 'starting', detail: '' })
-  const policy = next.store.settings().policy
-  await next.settings.save('policy', { ...policy, sources: {} }, next.store.blockRevision('policy'), 'panel')
-  expect(problems()).toContainEqual({ kind: 'no-allowed' })
-  await next.settings.save('policy', { ...policy, sources: { github: { allowed: [{ id: 'bob' }] } } }, next.store.blockRevision('policy'), 'panel')
-  expect(next.store.settings().policy.sources).toEqual({ github: { allowed: [{ id: 'bob' }], admission: {} } })
-  expect(problems()).not.toContainEqual({ kind: 'no-allowed' })
-  await expect(next.settings.save('policy', { ...next.store.settings().policy, sources: { github: { allowed: [{ name: 'Nobody' }] } } }, next.store.blockRevision('policy'), 'panel')).rejects.toThrow()
-  await expect(next.settings.sync('feishu')).rejects.toThrow('nothing to sync from')
-  unregister()
-  expect(next.health).not.toHaveProperty('github')
-})
-
 
 it('credits each human reviewer once in the default delivery requirements on every commit of the PR, never with an empty commit', async () => {
   const delivery = runtime.prompts.current().config.delivery
@@ -1211,13 +1103,12 @@ describe('the order of a Ticket\'s messages to one conversation', () => {
     await runtime.sendReplies()
     refused.delete('ack-a')
     runtime.outbox.send(message('result-a', 'a'))
-    // 同一聊天中的另一个工单，以及 Issue 中的同一工单，是其他订单。
+    // 同一聊天中的另一个工单是其他订单。
     runtime.outbox.send(message('ack-b', 'b', feishuChannel('feishu', CHAT, 'om_2')))
-    runtime.outbox.send(message('issue-a', 'a', githubChannel('github', 7)))
     await runtime.sendReplies()
-    expect([runtime.outbox.status('result-a'), sent]).toEqual(['pending', ['ack-b', 'issue-a']])
+    expect([runtime.outbox.status('result-a'), sent]).toEqual(['pending', ['ack-b']])
     await at(5000)
-    expect(sent).toEqual(['ack-b', 'issue-a', 'ack-a', 'result-a'])
+    expect(sent).toEqual(['ack-b', 'ack-a', 'result-a'])
   })
   it('stops holding a Ticket\'s later messages behind one that failed three times, which the overview shows', async () => {
     refused.add('ack-a')
@@ -1252,10 +1143,20 @@ it('resumes several ended tickets on one thread from one message without the lau
   await receive(another)
   await runTool(first.sessionId, 'orchestrator_trigger_handback', { trigger_id: another.id, reason: 'Another change.' })
   const second = await acceptedTicket(another)
-  for (const ticket of [first, second]) await runTool(ticket.sessionId, 'orchestrator_report', { state: 'dropped', summary: 'nothing to do' })
+  await runTool(first.sessionId, 'orchestrator_report', { state: 'dropped', summary: 'nothing to do' })
+  // 同一项目串行：第一个工单交回并让出槽位后，第二个工单才开始。
+  const firstAgent = agents.get(first.sessionId)! as { status: string }
+  firstAgent.status = 'idle'
+  ;(runtime as unknown as { ctx: Context }).ctx.emit('agent/status', { agent: firstAgent, status: 'idle' } as never)
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6000 })
+  try { await runtime.pump(); await runtime.idle() } finally { vi.useRealTimers() }
+  await runTool(second.sessionId, 'orchestrator_report', { state: 'dropped', summary: 'nothing to do' })
   await receive(feishu('32', '还有问题', { mentions: [], root_id: 'om_1', sender_id: 'ou_guest' }))
   await vi.waitFor(() => expect([first, second].map(ticket => runtime.store.tickets.get(ticket.ticket.id)!.ended)).toEqual([undefined, undefined]), { timeout: 3000 })
-  await vi.waitFor(() => expect([first, second].map(ticket => runtime.store.tickets.get(ticket.ticket.id)!.assignments.at(-1)!.state)).toEqual(['running', 'running']), { timeout: 3000 })
+  // 同一项目串行，因此只有一张工单能真正开始；关键是消息没有卡在启动等待上。
+  await vi.waitFor(() => expect([first, second].map(ticket => runtime.store.tickets.get(ticket.ticket.id)!.assignments.at(-1)!.state)).toContain('running'), { timeout: 3000 })
+  expect([first, second].map(ticket => runtime.store.tickets.get(ticket.ticket.id)!.assignments.at(-1)!.state)
+    .every(state => state === 'running' || state === 'pending')).toBe(true)
 })
 
 it('attaches a message to an ended ticket and so resumes it', async () => {
@@ -1337,8 +1238,8 @@ it('refuses a settings save with an unknown model or a Source kind that is not i
   expect(await request('PUT', 'settings/eval', { value: evalBlock, revision: runtime.store.blockRevision('eval') }))
     .toMatchObject({ status: 400, body: { code: 'modelUnavailable', values: { block: 'eval', error: 'unknown provider nowhere' } } })
   const stored = runtime.store.settings()
-  runtime.store.saveSettings({ ...stored, sources: { ...stored.sources, slack: { kind: 'slack', enabled: false, config: {} } } })
-  expect(await request('PUT', 'settings/source:slack', { value: { enabled: true, config: {} }, revision: 0 }))
+  runtime.store.saveSettings({ ...stored, sources: { ...stored.sources, slack: { kind: 'slack', name: 'Slack', enabled: false, config: {} } } })
+  expect(await request('PUT', 'settings/source:slack', { value: { name: 'Slack', enabled: true, config: {} }, revision: 0 }))
     .toMatchObject({ status: 400, body: { code: 'sourceNotInstalled', values: { source: 'slack' } } })
   const huge = { ...runtime.prompts.current().config, delivery: 'x'.repeat(runtime.machine.promptMaxChars.get()) }
   expect(await request('POST', 'prompts/preview', huge)).toMatchObject({ status: 400, body: { code: 'promptTooLong' } })
@@ -1350,28 +1251,8 @@ it('refuses a settings save with an unknown model or a Source kind that is not i
   expect(await request('GET', 'threads/%E0%A4%A')).toEqual({ status: 400, body: { error: 'A path segment has a malformed escape' } })
 })
 
-it('records a report, the PR it binds and its relay together, or none of them', async () => {
-  const { ticket, sessionId } = await acceptedTicket()
-  deliveries.mockClear()
-  const before = runtime.store.tickets.get(ticket.id)!
-  // 引擎拒绝的报告不会绑定任何 PR，尽管 PR 本身可以被绑定。
-  await expect(runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'done', pr_number: 42, human_action: 'Ship it?' })).rejects.toThrow()
-  // 拉取请求规则拒绝的 PR 不会记录任何报告。
-  vi.mocked(Commands.prototype.gh).mockImplementation(async args => args[1]?.includes('/pulls/')
-    ? { state: 'open', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/7', head: { ref: 'feature/other', sha: 'h', repo: { full_name: 'acme/widgets' } } }
-    : { default_branch: 'master', permissions: { push: true } })
-  await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 7, human_action: 'Desktop too?' })).rejects.toThrow()
-  const after = runtime.store.tickets.get(ticket.id)!
-  expect(after).not.toHaveProperty('follows')
-  expect(after).not.toHaveProperty('attention')
-  expect(after.assignments).toEqual(before.assignments)
-  await runtime.idle()
-  expect(relays(runtime.masterId)).toEqual([])
-})
-
 it('tells the main Session of each requeue of the same Trigger', async () => {
-  const stranger = commentTrigger('github', { id: 4, body: 'still wrong', user: { login: 'someone' }, html_url: 'https://github.com/acme/widgets/pull/8#issuecomment-4', created_at: '2026-09-09T00:00:00Z' },
-    { number: 8, isPr: true, url: 'https://github.com/acme/widgets/pull/8' }, 'conversation', 'agent-bot')
+  const stranger = feishu('4', 'still wrong', { mentions: [], sender_id: 'ou_guest' })
   await receive(stranger)
   const requeued = () => agents.get(runtime.masterId)!.inject.mock.calls.filter(([message]) => JSON.stringify(message).includes('trigger_requeued')).length
   expect(runtime.engine.reevaluate(stranger.id)).toBe(true)
@@ -1443,29 +1324,6 @@ it('releases the database and the state directory lock when it fails to start, s
   expect(runtime.store.get(KV.store.schema)).toBe(SCHEMA_VERSION)
 })
 
-it('tells the conversation that the PR merged when work a restart recovered ends with it later', async () => {
-  const { ticket, sessionId } = await acceptedTicket()
-  await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })
-  // 宿主在 worker 工作中途重启：其派工会带着恢复说明重新开始。
-  const before = runtime.store.tickets.get(ticket.id)!
-  runtime.engine.assignmentInterrupted(ticket.id, runningAssignment(before)!.id)
-  await runtime.idle()
-  expect(runtime.store.tickets.get(ticket.id)!.assignments).toHaveLength(2)
-  // PR 在重启前已合并；恢复的工作继续，但暂不说明任何内容。
-  const merged = { number: 42, state: 'closed', merged: true, merged_at: before.assignments[0]!.createdAt, html_url: 'https://github.com/acme/widgets/pull/42',
-    user: { login: 'agent-bot' }, head: { sha: 'abc', ref: 'agent/x', repo: { full_name: 'acme/widgets' } } }
-  await observePull(runtime.context(githubKind, 'github'), merged)
-  expect(runtime.store.tickets.get(ticket.id)).not.toHaveProperty('ended')
-  const id = key('pr-terminal', '42', 'feishu', JSON.stringify({ chatId: CHAT, messageId: 'om_1' }), 'merged')
-  expect(runtime.store.replyStatus(id)).toBeUndefined()
-  // 其就绪报告会随 PR 结束工单，而会话会得知合并一次。
-  await runTool(sessionId, 'orchestrator_report', { state: 'ready', summary: 'Recovered and verified' })
-  expect(runtime.store.tickets.get(ticket.id)!.ended).toMatchObject({ outcome: 'merged' })
-  expect(runtime.store.replyStatus(id)).toBeDefined()
-  // 结束工单的报告是 worker 自己的：其回合不会在该工具调用内被取消。
-  expect(agents.get(sessionId)!.cancel).not.toHaveBeenCalled()
-})
-
 it('restarts a worker that was mid-work when the host stopped with the recovery note, and records no end of its turn', async () => {
   const { ticket, sessionId } = await acceptedTicket()
   await runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'halfway' })
@@ -1519,17 +1377,17 @@ it('fails a ticket at once on a worker error that is not passing, and relays it'
 
 it('runs one polling loop per source record and ends them all on shutdown', async () => {
   const started: string[] = []
-  const adapter = { kind: githubKind, async watch(_host: unknown, id: string, signal: AbortSignal) {
+  const adapter = { kind: feishuKind, async watch(_host: unknown, id: string, signal: AbortSignal) {
     started.push(id)
     await new Promise<void>(resolve => signal.aborted ? resolve() : signal.addEventListener('abort', () => resolve()))
   } } as SourceAdapter
   const current = runtime.store.settings()
-  runtime.store.saveSettings({ ...current, sources: {
-    'github-a': { kind: 'github', enabled: true, config: { repository: 'acme/one' } },
-    'github-b': { kind: 'github', enabled: true, config: { repository: 'acme/two' } },
+  runtime.store.saveSettings({ ...current, sources: { ...current.sources,
+    'feishu-a': { kind: 'feishu', name: 'Feishu A', enabled: true, config: current.sources.feishu!.config },
+    'feishu-b': { kind: 'feishu', name: 'Feishu B', enabled: true, config: current.sources.feishu!.config },
   } })
   runtime.startSources([adapter])
-  await vi.waitFor(() => expect([...started].sort()).toEqual(['github-a', 'github-b']))
+  await vi.waitFor(() => expect([...started].sort()).toEqual(['feishu', 'feishu-a', 'feishu-b']))
   await runtime.stop()
 })
 
@@ -1690,7 +1548,7 @@ it('shows the settings history when one revision holds values its Source kind no
   const revision = runtime.store.get(KV.settings.revision)!
   const stored = runtime.store.get(KV.settings.version(revision - 1))!
   runtime.store.set(KV.settings.version(revision - 1), { ...stored, settings: { ...stored.settings,
-    sources: { ...stored.settings.sources, feishu: { kind: 'feishu', enabled: true, config: { readPageSize: 'many' } } } } })
+    sources: { ...stored.settings.sources, feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { readPageSize: 'many' } } } } })
   const history = policyHistory(runtime.store, runtime.sources, policyVersion(runtime.store.settings()))
   expect(history.items.slice(0, 2)).toEqual([expect.objectContaining({ revision, changes: null }), expect.objectContaining({ revision: revision - 1, changes: null })])
   expect(history.items[2]).toMatchObject({ revision: revision - 2 })

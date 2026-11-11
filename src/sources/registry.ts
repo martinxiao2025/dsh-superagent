@@ -69,7 +69,8 @@ export class SourceRegistry implements SourceScope {
   instances(settings = this.settings()): (SourceInstance & { installed: boolean })[] {
     return Object.entries(settings.sources).sort(([a], [b]) => a.localeCompare(b)).map(([id, stored]) => {
       const kind = this.kinds.get(stored.kind)
-      return kind ? { ...this.resolve(id, kind, stored), installed: true } : { id, kind: stored.kind, enabled: stored.enabled, config: stored.config, installed: false }
+      return kind ? { ...this.resolve(id, kind, stored), installed: true }
+        : { id, kind: stored.kind, name: stored.name, enabled: stored.enabled, config: stored.config, installed: false }
     })
   }
   /** 已安装适配器的类型目录，供面板新增来源时选择。 */
@@ -80,13 +81,13 @@ export class SourceRegistry implements SourceScope {
     const kind = this.kinds.get(record.kind)
     return kind ? this.resolve(id, kind, record) as SourceInstance<C> : undefined
   }
-  /** 按记录所属适配器校验提交的 `{ enabled, config }`；记录或适配器缺失时抛出可读错误。 */
-  validate(id: string, value: { enabled: boolean; config: unknown }): { enabled: boolean; config: Record<string, unknown> } {
+  /** 按记录所属适配器校验提交的 `{ name, enabled, config }`；记录或适配器缺失时抛出可读错误。 */
+  validate(id: string, value: { name: string; enabled: boolean; config: unknown }): { name: string; enabled: boolean; config: Record<string, unknown> } {
     const record = this.settings().sources[id]
     if (!record) throw new UserError('sourceNotInstalled', { source: id })
     const kind = this.kinds.get(record.kind)
     if (!kind) throw new UserError('sourceNotInstalled', { source: id })
-    return { enabled: value.enabled, config: kind.schema.parse(value.config) }
+    return { name: value.name.trim(), enabled: value.enabled, config: kind.schema.parse(value.config) }
   }
   /** 根据记录对应的种类校验提交策略中每个来源的部分；未安装适配器的记录保持存储时的原样。 */
   validatePolicy(parts: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown> & { allowed: { id: string; name?: string }[] }> {
@@ -177,8 +178,9 @@ export class SourceRegistry implements SourceScope {
     return kind.scope ? kind.scope({ meta: input.meta }, instance.config) : { listened: true, observed: false }
   }
   /** 存储的配置校验失败时回退到 schema 默认值，并在运行时按停用处理；已保存的启用状态不变。 */
-  private resolve(id: string, kind: SourceKind, stored: { enabled: boolean; config: Record<string, unknown> }): SourceInstance {
+  private resolve(id: string, kind: SourceKind, stored: { name: string; enabled: boolean; config: Record<string, unknown> }): SourceInstance {
     const parsed = kind.schema.safeParse(stored.config ?? {})
-    return { id, kind: kind.kind, enabled: parsed.success && stored.enabled, config: parsed.success ? parsed.data : kind.schema.parse({}) }
+    return { id, kind: kind.kind, name: stored.name, enabled: parsed.success && stored.enabled,
+      config: parsed.success ? parsed.data : kind.schema.parse({}) }
   }
 }

@@ -3,15 +3,12 @@ import { z } from 'zod'
 import { CliError, Commands, commandError } from '../src/infra/commands.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { feishuChannel } from '../src/sources/feishu-trigger.ts'
-import { githubKind } from '../src/sources/github.ts'
-import { githubChannel } from '../src/sources/github-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { key, type OutboundMessage } from '../src/core/index.ts'
 import { testDeployment, testFeishu, testGithub, testGitlab } from './fixtures/deployment.ts'
-const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} },
-  feishu: { kind: 'feishu', enabled: true, config: {} } } }))
-sources.register(feishuKind); sources.register(githubKind)
+const sources = new SourceRegistry(() => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: {} } } }))
+sources.register(feishuKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)
 const deployment = testDeployment({ github: testGithub({ cli: '/path/agent-gh' }) })
 const REPOSITORY = testGithub().repository
@@ -19,7 +16,7 @@ const REPOSITORY = testGithub().repository
 const commandsOf = (value = deployment, record = 'github') => new Commands(() => value, {}, new AbortController().signal).scope(record)
 /** 绑定到默认飞书记录的命令。 */
 const feishuCommands = (value = deployment) => commandsOf(value, 'feishu')
-const reply = { id: 'stable-operation', channel: githubChannel('github', 8), text: 'Done', kind: 'reply' as const }
+const reply = { id: 'stable-operation', channel: feishuChannel('feishu', 'oc_1', 'om_1'), text: 'Done', kind: 'reply' as const }
 describe('account-isolated operations', () => {
   it('uses the agent account\'s GitHub CLI and preserves literal shell metacharacters in argv', async () => {
     const commands = commandsOf(); const run = vi.spyOn(commands,'run').mockResolvedValue('{}')
@@ -62,30 +59,9 @@ describe('account-isolated operations', () => {
   it('refuses Feishu commands when the deployment has no Feishu bot', async () => {
     await expect(feishuCommands(testDeployment({ feishu: undefined })).lark(['im', '+chat-list'])).rejects.toThrow('The Feishu Source has no working bot CLI')
   })
-  it('reconciles an uncertain GitHub send with its stable marker', async () => {
-    const commands = commandsOf()
-    vi.spyOn(commands,'pages').mockResolvedValue([{ body:'<!-- dsh-superagent:stable-operation -->',user:{login:'agent-bot'} }])
-    const gh = vi.spyOn(commands,'gh')
-    await send(commands, reply); expect(gh).not.toHaveBeenCalled()
-  })
-  it('posts the reply as the model wrote it, only to the fixed repository', async () => {
-    const commands = commandsOf(); vi.spyOn(commands,'pages').mockResolvedValue([])
-    const gh = vi.spyOn(commands,'gh').mockResolvedValue({})
-    await send(commands, reply)
-    // 披露行属于提示词文本：由模型写入，宿主不添加任何内容。
-    expect(gh).toHaveBeenCalledWith(['api',`repos/${REPOSITORY}/issues/8/comments`,'--method','POST','-f',expect.stringMatching(/^body=Done\n\n<!-- dsh-superagent:stable-operation -->$/)])
-    await expect(commandsOf().pages(z.unknown(),
-      '../../someone/else/issues')).rejects.toThrow()
-  })
-  it('routes review-comment replies to the root review comment', async () => {
-    const commands = commandsOf(); vi.spyOn(commands,'pages').mockResolvedValue([])
-    const gh = vi.spyOn(commands,'gh').mockResolvedValueOnce({ id: 7, in_reply_to_id: 3 }).mockResolvedValueOnce({})
-    await send(commands, { ...reply, channel: githubChannel('github', 8, `https://github.com/${REPOSITORY}/pull/8#discussion_r7`) })
-    expect(gh.mock.calls[1]![0]).toEqual(['api', `repos/${REPOSITORY}/pulls/8/comments/3/replies`, '--method', 'POST', '-f', expect.stringContaining('Done')])
-  })
   it('uses Feishu bot identity and one idempotency key on retries', async () => {
     const commands = feishuCommands(); const run = vi.spyOn(commands,'run').mockResolvedValue('{"ok":true,"data":{}}')
-    await send(commands, { ...reply, channel: feishuChannel('feishu', 'oc_1', 'om_1') })
+    await send(commands, reply)
     expect(run.mock.calls[0]![1]).toEqual(expect.arrayContaining(['--as','bot','--idempotency-key','stable-operation','--message-id','om_1']))
   })
 })
@@ -118,40 +94,9 @@ describe('Channels', () => {
     vi.spyOn(value, 'run').mockRejectedValueOnce(commandError(timedOut, 'lark-bot'))
     await expect(send(value, { ...feishu, text: 'The change was withdrawn' })).rejects.toThrow('lark-bot timed out after 90 s')
   })
-  it('drop a GitHub reply to an Issue that is deleted or locked, and keep others for a retry', async () => {
-    const value = commandsOf()
-    vi.spyOn(value, 'pages').mockResolvedValue([])
-    const gh = vi.spyOn(value, 'gh')
-    for (const stderr of ['gh: This issue was deleted (HTTP 410)', 'gh: Unable to create comment because issue is locked. (HTTP 403)']) {
-      gh.mockRejectedValueOnce(commandError({ stderr, code: 1 }))
-      expect(await send(value, reply)).toBe('gone')
-    }
-    // 对于代理已失去访问权限的私有仓库，GitHub 也会返回 404，因此 404 会重试而不是丢弃。
-    for (const stderr of ['gh: Not Found (HTTP 404)', 'gh: Server Error (HTTP 500)']) {
-      gh.mockRejectedValueOnce(commandError({ stderr, code: 1 }))
-      await expect(send(value, reply)).rejects.toThrow(stderr)
-    }
-  })
-  it('reply on the PR\'s conversation when the review comment a reply points at is gone', async () => {
-    const value = commandsOf()
-    const pages = vi.spyOn(value, 'pages').mockResolvedValue([])
-    const gh = vi.spyOn(value, 'gh')
-      .mockRejectedValueOnce(commandError({ stderr: 'gh: Not Found (HTTP 404)', code: 1 })).mockResolvedValueOnce({})
-    expect(await send(value, { ...reply, channel: githubChannel('github', 8, `https://github.com/${REPOSITORY}/pull/8#discussion_r7`) })).toBe('sent')
-    expect((pages.mock.calls[0] as unknown[])[1]).toBe('issues/8/comments')
-    const post = ['api', `repos/${REPOSITORY}/issues/8/comments`, '--method', 'POST', '-f', expect.stringContaining('Done')]
-    expect(gh.mock.calls[1]![0]).toEqual(post)
-  })
-  it('link each address to its page with its label', () => {
-    const links = { github: testGithub({ repository: REPOSITORY }), feishu: testFeishu() }
-    expect(githubKind.channel!.link(githubChannel('github', 8).address, links)).toEqual({ url: `https://github.com/${REPOSITORY}/issues/8`,
-      label: { zh: 'GitHub #8', en: 'GitHub #8' } })
-    const review = `https://github.com/${REPOSITORY}/pull/8#discussion_r7`
-    expect(githubKind.channel!.link(githubChannel('github', 8, review).address, links))
-      .toEqual({ url: review, label: { zh: 'GitHub #8 的 review 讨论', en: 'Review discussion on GitHub #8' } })
-    expect(githubKind.channel!.link(githubChannel('github', 8).address, {}).url).toBe('')
+  it('link a Feishu message address to its chat with its label', () => {
     const message = feishuChannel('feishu', 'oc_1', 'om_1').address
-    expect(feishuKind.channel!.link(message, links)).toEqual({ url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1',
+    expect(feishuKind.channel!.link(message, { feishu: testFeishu() })).toEqual({ url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1',
       label: { zh: '飞书消息', en: 'Feishu message' }, triggerId: key('feishu', 'om_1') })
   })
 })

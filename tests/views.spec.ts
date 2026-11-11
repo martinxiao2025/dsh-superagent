@@ -6,7 +6,6 @@ import { Store } from '../src/app/store.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
-import { githubKind } from '../src/sources/github.ts'
 import { snapshot, threadSummary, ticketSummary, triggerView } from '../src/app/views/records.ts'
 import { basisFacts, ticketDetail } from '../src/app/views/tickets.ts'
 import { threadDetail } from '../src/app/views/threads.ts'
@@ -17,8 +16,6 @@ import { policyHistory } from '../src/app/settings-history.ts'
 import { KV } from '../src/kv.ts'
 import { feishuLink } from '../src/sources/feishu-channel.ts'
 import { feishuChannel, feishuTriggerId } from '../src/sources/feishu-trigger.ts'
-import { githubLink } from '../src/sources/github-channel.ts'
-import { githubChannel } from '../src/sources/github-trigger.ts'
 import { followupOwners, type ChannelRef } from '../src/core/index.ts'
 
 let directory: string
@@ -28,7 +25,7 @@ beforeEach(() => {
   store = new Store(join(directory, 'orchestrator.sqlite'))
 })
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }) })
-const links = (channel: ChannelRef) => (channel.source === 'feishu' ? feishuLink : githubLink)(channel.address, {})
+const links = (channel: ChannelRef) => feishuLink(channel.address, {})
 const drop = (id: string, channel: ChannelRef, ticketId?: string) => {
   const message = { id, channel, text: id, kind: 'reply' as const, ...ticketId ? { ticketId } : {} }
   store.receipts.add(message)
@@ -39,23 +36,22 @@ it('names the Thread of each dropped message: the one of the Trigger its Channel
   // 飞书渠道标明其群聊；它所回复的消息属于话题根消息所在的线程。
   store.triggers.save({ id: feishuTriggerId('feishu', 'om_reply'), source: 'feishu', threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
     actor: { source: 'feishu', id: 'ou_a' }, human: true, at: new Date().toISOString(), text: 'please', meta: {} })
-  store.threads.save({ key: 'github:42', ref: { source: 'github', id: '42' }, createdAt: '', subscriptions: [], correlated: [], pending: [],
+  store.threads.save({ key: 'feishu:oc_3', ref: { source: 'feishu', id: 'oc_3' }, createdAt: '', subscriptions: [], correlated: [], pending: [],
     meta: {} })
   drop('a', feishuChannel('feishu', 'oc_1', 'om_reply'))
-  drop('b', githubChannel('github', 42))
+  drop('b', feishuChannel('feishu', 'oc_3', 'om_other'))
   // 触发器与线程在存储中都已不存在的消息不会链接到任何地方。
   drop('c', feishuChannel('feishu', 'oc_2', 'om_gone'))
   expect(Object.fromEntries(droppedReplies({ store, links }).map(item => [item.id, item.thread])))
-    .toEqual({ a: 'feishu:oc_1:om_root', b: 'github:42', c: undefined })
+    .toEqual({ a: 'feishu:oc_1:om_root', b: 'feishu:oc_3', c: undefined })
 })
 
 function views() {
-  store.saveSettings(SettingsSchema.parse({ policy: { sources: { feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }] },
-    github: { allowed: [{ id: 'alice' }] } },
+  store.saveSettings(SettingsSchema.parse({ policy: { sources: { feishu: { allowed: [{ id: 'ou_alice', name: 'Alice' }] } },
     rules: [{ id: 'copy', name: 'Copy fixes', enabled: true, instruction: 'Fix copy' }] },
-  sources: { feishu: { kind: 'feishu', enabled: true, config: {} }, github: { kind: 'github', enabled: true, config: {} } } }))
+  sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: {} } } }))
   const sources = new SourceRegistry(() => store.settings())
-  sources.register(feishuKind); sources.register(githubKind)
+  sources.register(feishuKind)
   return { store, sources, links }
 }
 const at = new Date().toISOString()
@@ -69,15 +65,11 @@ const message = (id: string, actor: { source: string; id: string }, human = true
 
 it('names each sender as the Policy lists it, by its id where the id is readable, and as its kind names one it does not list', () => {
   const view = snapshot(views())
-  expect([view.actor({ source: 'feishu', id: 'OU_ALICE' }), view.actor({ source: 'github', id: 'alice' }), view.actor({ source: 'github',
-    id: 'bob' }),
-    view.actor({ source: 'feishu', id: 'ou_bob' }), view.actor({ source: 'feishu', id: 'ou_bot' }, false), view.actor({ source: 'feishu',
-      id: '' })])
-    .toEqual([{ source: 'feishu', id: 'OU_ALICE', name: { zh: 'Alice', en: 'Alice' } }, { source: 'github', id: 'alice',
-      name: { zh: 'alice', en: 'alice' } },
-      { source: 'github', id: 'bob', name: { zh: 'bob', en: 'bob' } }, { source: 'feishu', id: 'ou_bob',
-        name: feishuKind.policy!.unnamed!.person },
-      { source: 'feishu', id: 'ou_bot', name: feishuKind.policy!.unnamed!.bot }, { source: 'feishu', id: '' }])
+  expect([view.actor({ source: 'feishu', id: 'OU_ALICE' }), view.actor({ source: 'feishu', id: 'ou_bob' }),
+    view.actor({ source: 'feishu', id: 'ou_bot' }, false), view.actor({ source: 'feishu', id: '' })])
+    .toEqual([{ source: 'feishu', id: 'OU_ALICE', name: { zh: 'Alice', en: 'Alice' } }, { source: 'feishu', id: 'ou_bob',
+      name: feishuKind.policy!.unnamed!.person },
+    { source: 'feishu', id: 'ou_bot', name: feishuKind.policy!.unnamed!.bot }, { source: 'feishu', id: '' }])
   expect(view.rule('copy')).toEqual({ id: 'copy', name: 'Copy fixes' })
   expect(view.rule('gone')).toEqual({ id: 'gone', name: 'gone' })
 })
@@ -103,30 +95,29 @@ it('states each Source by the first state that holds', () => {
   const host = views()
   const states = (setup: Parameters<typeof sourcesStatus>[2], health: Parameters<typeof sourcesStatus>[1] = {}) =>
     Object.fromEntries(sourcesStatus(host, health, setup).map(source => [source.id, source.state]))
-  expect(states({})).toEqual({ feishu: 'starting', github: 'starting' })
-  expect(states({}, { feishu: { state: 'ready', detail: '' }, 'feishu:history': { state: 'paused', detail: '' }, github: { state: 'error',
-    detail: 'x' } }))
-    .toEqual({ feishu: 'paused', github: 'error' })
+  expect(states({})).toEqual({ feishu: 'starting' })
+  expect(states({}, { feishu: { state: 'ready', detail: '' }, 'feishu:history': { state: 'paused', detail: '' } }))
+    .toEqual({ feishu: 'paused' })
+  // 错误优先于暂停。
+  expect(states({}, { feishu: { state: 'error', detail: 'x' }, 'feishu:history': { state: 'paused', detail: '' } }))
+    .toEqual({ feishu: 'error' })
   const problem = { place: 'deployment', code: 'stateDirUnset', values: {}, detail: '' } as never
-  expect(states({ problem }, { feishu: { state: 'ready', detail: '' }, 'feishu:history': { state: 'ready', detail: '' }, github: { state: 'ready',
-    detail: '' } }))
-    .toEqual({ feishu: 'setup', github: 'setup' })
+  expect(states({ problem }, { feishu: { state: 'ready', detail: '' }, 'feishu:history': { state: 'ready', detail: '' } }))
+    .toEqual({ feishu: 'setup' })
 })
 
 it('reports each Source record\'s own health entries, including a second record of the same kind', () => {
   const host = views()
   const settings = store.settings()
   store.saveSettings({ ...settings, sources: { ...settings.sources,
-    'github-2': { kind: 'github', enabled: true, config: { repository: 'acme/other', cli: 'gh' } },
-    'feishu-2': { kind: 'feishu', enabled: true, config: { cli: 'lark-cli' } } } })
+    'feishu-2': { kind: 'feishu', name: '飞书 2', enabled: true, config: { cli: 'lark-cli' } } } })
   const status = Object.fromEntries(sourcesStatus(host, {
-    github: { state: 'ready', detail: '' },
-    'github-2': { state: 'error', detail: 'second record failed' },
+    feishu: { state: 'ready', detail: '' },
+    'feishu:history': { state: 'ready', detail: '' },
     'feishu-2': { state: 'ready', detail: '' },
     'feishu-2:history': { state: 'paused', detail: '' },
   }, {}).map(source => [source.id, [source.state, source.health.map(part => part.name)]]))
-  expect(status).toMatchObject({ github: ['ready', ['github']],
-    'github-2': ['error', ['github-2']],
+  expect(status).toMatchObject({ feishu: ['ready', ['feishu', 'feishu:history']],
     'feishu-2': ['paused', ['feishu-2', 'feishu-2:history']] })
 })
 
@@ -175,18 +166,18 @@ const problems = (host: ReturnType<typeof views>, health: Parameters<typeof over
 
 it('lists an Eval past its deadline, and as dsh-superagent\'s own errors only parts no Source or Policy sync reports', () => {
   const host = views()
-  const evaluating = { id: 'e1', threadKey: 'github:1', triggerIds: ['t1'], strength: 'explicit' as const, actor: { source: 'github',
-    id: 'alice' },
+  const evaluating = { id: 'e1', threadKey: 'feishu:oc_1:om_root', triggerIds: ['t1'], strength: 'explicit' as const,
+    actor: { source: 'feishu', id: 'ou_alice' },
     basis: { via: 'addressed' as const, addressed: 'mention' as const }, policyVersion: 'v1', startedAt: '2026-01-01T00:00:00Z',
     deadline: '2026-01-01T00:02:00Z' }
-  store.threads.save({ key: 'github:1', ref: { source: 'github', id: '1' }, createdAt: at, subscriptions: [], correlated: [], pending: [],
-    evaluating, meta: {} })
+  store.threads.save({ key: 'feishu:oc_1:om_root', ref: { source: 'feishu', id: 'oc_1:om_root' }, createdAt: at, subscriptions: [],
+    correlated: [], pending: [], evaluating, meta: {} })
   const error = (detail: string) => ({ state: 'error' as const, detail })
   const health = { relay: error('relay failing'), reply: error('reply failing'), feishu: error('socket closed'),
     'feishu:history': error('read failed'),
     'sync:feishu': error('sync failed'), evals: error('unavailable'), launch: { state: 'ready' as const, detail: '' } }
   const found = problems(host, health)
-  expect(found).toContainEqual({ kind: 'eval-overdue', thread: expect.objectContaining({ key: 'github:1', stage: 'evaluating' }) })
+  expect(found).toContainEqual({ kind: 'eval-overdue', thread: expect.objectContaining({ key: 'feishu:oc_1:om_root', stage: 'evaluating' }) })
   // 效果属于 dsh-superagent 自身；来源显示其部件与策略同步，评估则逐条列出。
   expect(found.filter(item => item.kind === 'runtime-error')).toEqual([{ kind: 'runtime-error', name: 'relay', detail: 'relay failing' },
     { kind: 'runtime-error', name: 'reply', detail: 'reply failing' }])
@@ -197,11 +188,12 @@ it('says no Source runs when every Source is off, and states a Source missing or
   const host = views()
   expect(problems(host).map(item => item.kind)).not.toContain('no-source')
   const settings = store.settings()
-  store.saveSettings({ ...settings, sources: { feishu: { kind: 'feishu', enabled: false, config: {} }, github: { kind: 'github', enabled: false, config: {} },
-    jira: { kind: 'jira', enabled: true, config: { site: 'acme' } } } })
+  store.saveSettings({ ...settings, sources: { feishu: { kind: 'feishu', name: '飞书', enabled: false, config: {} },
+    'feishu-work': { kind: 'feishu', name: '飞书 2', enabled: false, config: {} },
+    jira: { kind: 'jira', name: 'Jira', enabled: true, config: { site: 'acme' } } } })
   expect(problems(host).map(item => item.kind)).toContain('no-source')
   expect(Object.fromEntries(sourcesStatus(host, {}, {}).map(source => [source.id, [source.state, source.installed]])))
-    .toEqual({ feishu: ['off', true], github: ['off', true], jira: ['missing', false] })
+    .toEqual({ feishu: ['off', true], 'feishu-work': ['off', true], jira: ['missing', false] })
 })
 
 it('sends text without HTML, entity-encoded tags included, and with images named', () => {
@@ -218,11 +210,11 @@ it('words each settings save by what it changed from the one before, and nothing
     feishu: { ...first.policy.sources.feishu!, allowed: entries } } })
   const alice = { id: 'ou_alice', name: 'Alice Liu' }, bob = { id: 'ou_bob', name: 'Bob' }
   store.saveSettings({ ...first, policy: allowed([alice, bob, { id: 'ou_carol' }]), paused: true,
-    sources: { ...first.sources, feishu: { kind: 'feishu', enabled: false, config: {} } },
+    sources: { ...first.sources, feishu: { kind: 'feishu', name: '飞书', enabled: false, config: {} } },
     executor: { ...first.executor, directory: '/srv/work', prepare: 'npm ci', blockedCommands: ['rm', 'curl'] } })
   const second = store.settings()
   store.saveSettings({ ...second, policy: allowed([alice, { id: 'ou_carol' }]), paused: false, sources: { ...second.sources,
-    feishu: { kind: 'feishu', enabled: true, config: {} } } })
+    feishu: { kind: 'feishu', name: '飞书', enabled: true, config: {} } } })
   const changes = (revision: number) => policyHistory(store, host.sources, 'v').items.find(item => item.revision === revision)!.changes
   const revision = store.get(KV.settings.revision)!
   expect(changes(revision - 1)).toEqual([
@@ -263,16 +255,16 @@ it('shows a follow-up that reached a ticket as delivered, the tickets that hande
   // 被交回的触发器会像其线程上的任何消息一样进入评估；交回它的工单有标题后会以标题标出。
   expect(triggerView(view, store.triggers.get('f2')!).disposition).toMatchObject({ delivered: false,
     handbacks: [{ ticketId: 't1', title: 't1', reason: 'Asks for a new feature' }] })
-  store.threads.save({ key: 'github:7', ref: { source: 'github', id: '7' }, createdAt: at, subscriptions: ['t1'], context: ['t1'],
+  store.threads.save({ key: 'feishu:oc_7:om_root', ref: { source: 'feishu', id: 'oc_7:om_root' }, createdAt: at, subscriptions: ['t1'], context: ['t1'],
     correlated: [], pending: [], meta: {} })
-  expect(threadDetail(host, 'github:7', undefined, 50)?.context).toEqual(['t1'])
+  expect(threadDetail(host, 'feishu:oc_7:om_root', undefined, 50)?.context).toEqual(['t1'])
   store.tickets.save({ id: 't1', title: 'Fix', decisionId: 'd', channels: [], undelivered: [], createdAt: at, updatedAt: at,
     mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'listed' }, actor: { source: 'feishu', id: 'ou_alice' }, scope: '' },
     origin: { triggerId: 'e1', triggerIds: ['e1'] }, assignments: [],
     inputs: [{ id: 'i1', kind: 'trigger', triggerId: 'f1', at }, { id: 'i2', kind: 'trigger', triggerId: 'f2', at }] })
   const page = ticketDetail(host, 't1')!
   expect(Object.fromEntries(page.threads.map(thread => [thread.key, !!thread.context]))).toEqual({ 'feishu:oc_1:om_root': false,
-    'github:7': true })
+    'feishu:oc_7:om_root': true })
   expect(page.inputs.map(input => input.kind === 'trigger' && input.trigger?.handback)).toEqual([{ reason: 'Asks for a new feature', at },
     undefined])
   expect(triggerView(snapshot(host), store.triggers.get('f2')!).disposition.handbacks[0]?.title).toBe('Fix')

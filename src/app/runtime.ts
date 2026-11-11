@@ -35,7 +35,6 @@ import { registerHttp, type HttpHost } from './http.ts'
 import type { LinkTarget } from './views/records.ts'
 import { candidateCard, repliedTo, sourceLink, type LinkHost } from './links.ts'
 import { eventNotice, followupNotice } from './notices.ts'
-import { pullEndNotices } from '../sources/github-pull.ts'
 import { HealthBoard } from '../infra/health.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
@@ -45,6 +44,7 @@ import { health, type Health, type SourceContext, type SourceHost } from '../sou
 import type { SourceAdapter } from '../sources/kind.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
+import { ProjectScheduler } from './scheduler.ts'
 import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
@@ -81,6 +81,7 @@ export class Runtime extends Service implements SourceHost {
   readonly outbox: Outbox
   readonly engine: Engine
   readonly passes: Passes
+  readonly scheduler: ProjectScheduler
   readonly ready: Promise<void>
   private readonly board = new HealthBoard()
   private readonly runtimeHealth = this.board.claim('runtime', { state: 'starting', detail: '' })
@@ -165,13 +166,13 @@ export class Runtime extends Service implements SourceHost {
           const followed = !this.quiet && (event.type === 'trigger.received' || event.type === 'ticket.resumed' || event.type === 'trigger.followup')
           const followup = followed ? followupNotice(store, sources, event.data.triggerId) : undefined
           if (followup) sessions.relay(followup.id, followup.text)
-          // 当工单通过拉取请求结束时，通知该工单的所有会话。
-          const ended = event.type === 'ticket.ended' ? store.tickets.get(event.data.ticketId) : undefined
-          if (ended && setup.configured()) {
-            const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
-            for (const message of pullEndNotices(ended, request, setup.deployment.sources)) outbox.send(message)
-          }
+          // 项目调度按工单终态更新队列；失败重排与回写在调度器内完成。
+          if (event.type === 'ticket.ended') this.scheduler.observe(event.data.ticketId)
         } })
+      this.scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
+        engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
+        executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
+        commands, stateDir: machine.stateDir, lifetime: this.lifetime })
       // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
       const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
       const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
@@ -181,12 +182,6 @@ export class Runtime extends Service implements SourceHost {
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
         get sourceProblems() { return setup.sourceProblems }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
-        githubFor: (source: string) => {
-          const githubs = runtime.sources.instances().filter(item => item.installed && item.enabled && item.kind === 'github')
-          // 触发器来自 GitHub 记录时用它；其他来源的工单只有在部署恰有一条 GitHub 记录时才能确定归属。
-          const record = runtime.sources.kindOf(source)?.kind === 'github' ? source : githubs.length === 1 ? githubs[0]!.id : undefined
-          return record ? runtime.context({ kind: 'github', health: ['github'] }, record) : undefined
-        },
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
@@ -231,7 +226,6 @@ export class Runtime extends Service implements SourceHost {
     return undefined
   }
   get feishuProblem(): SetupProblem | undefined { return this.problemOfKind('feishu') }
-  get gitlabProblem(): SetupProblem | undefined { return this.problemOfKind('gitlab') }
   /** 按记录 ID 排序的第一条记录问题；概览用它说明某个来源为何没有启动。 */
   get sourceProblem(): SetupProblem | undefined {
     const [first] = Object.keys(this.setup.sourceProblems).sort()
@@ -275,22 +269,27 @@ export class Runtime extends Service implements SourceHost {
     this.executor.resume()
     this.passes.start()
     this.effects.start()
+    this.scheduler.start()
     this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now() })
   }
   private httpHost(): HttpHost {
     const runtime = this
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
+      queue: () => this.scheduler.snapshot(),
       get deployment() { return setup.deployment },
       get setupProblem() { return setup.problem }, get sourceProblems() { return setup.sourceProblems }, get sourceProblem() { return runtime.sourceProblem },
-      get feishuProblem() { return runtime.feishuProblem }, get gitlabProblem() { return runtime.gitlabProblem },
+      get feishuProblem() { return runtime.feishuProblem },
       configured: () => setup.configured(), links: () => runtime.links(), ticketEnvironment: ticket => runtime.ticketEnvironment(ticket),
-      checkSetup: () => { setup.check() }, requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
+      checkSetup: () => { setup.check() },
+      checkSource: (kind, config, field, meta) => setup.checkSource(kind, config, field, sources, meta),
+      checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, store.settings(), meta),
+      requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
   }
   /** 幂等停止；并发或重复调用共享同一个关闭 Promise。 */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }
   private async shutdown(): Promise<void> {
-    this.closingFlag = true; const passes = this.passes.stop(); this.stopped.abort()
+    this.closingFlag = true; this.scheduler.stop(); const passes = this.passes.stop(); this.stopped.abort()
     const loops = [...this.loops]
     for (const loop of loops) loop.controller.abort()
     try {

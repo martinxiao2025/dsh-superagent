@@ -9,8 +9,9 @@ import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types
 import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts }
   from './prompts.ts'
 import { policyVersion } from '../policy.ts'
+import { LIMITS } from '../limits.ts'
 import { SettingsConflict, type Settings } from './settings.ts'
-import { SetupError, type SetupProblem } from '../setup.ts'
+import { SetupError, type SetupProblem, type SourceCheck } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
 import { firstSource, type Deployment, type Machine } from '../deployment.ts'
 import type { DshExecutor } from '../executor/dsh.ts'
@@ -28,6 +29,7 @@ import { sourceHealth, sourceState, sourcesStatus, type SetupState } from './vie
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 import type { StartupStatus } from './startup.ts'
+import type { QueueSnapshot } from '../queue/model.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -36,7 +38,8 @@ export interface HttpHost {
   readonly sources: SourceRegistry
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'preview' | 'save' | 'defaultChanged'>
   readonly sessions: Pick<Sessions, 'status' | 'notify' | 'delivery'>
-  readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels' | 'createSource' | 'removeSource'>
+  readonly settings: Pick<Settings, 'view' | 'save' | 'pause' | 'sync' | 'refreshLabels' | 'createSource' | 'removeSource'
+    | 'createCodeRepo' | 'removeCodeRepo' | 'createTaskSource' | 'removeTaskSource' | 'createProject' | 'removeProject'>
   readonly engine: EngineForPeople
   readonly executor: Pick<DshExecutor, 'activeCount'>
   readonly health: Record<string, Health>
@@ -52,11 +55,16 @@ export interface HttpHost {
   /** 按记录 ID 排序的第一条记录问题；概览据此说明某个来源为何没有启动。 */
   readonly sourceProblem?: SetupProblem | undefined
   readonly feishuProblem?: SetupProblem | undefined
-  readonly gitlabProblem?: SetupProblem | undefined
   configured(): boolean
+  /** 项目调度队列的只读快照；P5 面板与外部集成读取。 */
+  queue(): QueueSnapshot
   links(): LinkTarget
   ticketEnvironment(ticket: Ticket): Variable[]
   checkSetup(): void
+  /** 对新增来源的候选配置做真实预检；不写设置、不重启。 */
+  checkSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
+  /** 对新增任务来源的候选配置做真实预检；驱动负责读取清单或文档，同样不写设置、不重启。 */
+  checkTaskSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
   requestPass(): void
   models(): Promise<ModelCatalog>
 }
@@ -92,7 +100,7 @@ function failure(error: unknown): [number, Record<string, unknown>] {
   }
   if (error instanceof SetupError) return [400, { error: error.message, setup: error.problem }]
   if (error instanceof RouteError) return [error.status, { error: error.message }]
-  if (error instanceof UserError) return [error.code === 'sourceInUse' ? 409 : error.missing ? 404 : 400,
+  if (error instanceof UserError) return [/InUse$/.test(error.code) ? 409 : error.missing ? 404 : 400,
     { error: error.message, code: error.code, values: error.values }]
   if (error instanceof SettingsConflict || error instanceof PromptConflict) return [409, { error: error.message }]
   return [500, { error: error instanceof Error ? error.message : String(error) }]
@@ -110,7 +118,6 @@ function setupView(runtime: HttpHost) {
   const gitlab = firstSource(resolved, 'gitlab')
   return {
     machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, feishuProblem: runtime.feishuProblem ?? null,
-    gitlabProblem: runtime.gitlabProblem ?? null,
     accounts: resolved ? { repository: github?.repository ?? '', agent: github?.login ?? '', feishu: feishu ? { appId: feishu.appId, brand: feishu.brand, botId: feishu.botId, name: feishu.name } : null,
       gitlab: gitlab ? { project: gitlab.project, login: gitlab.login } : null } : null,
   }
@@ -179,11 +186,19 @@ const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.litera
   limit: limit(30, 200) })
 const count = z.coerce.number().int().nonnegative()
 const PromptsQuery = z.object({ revision: count.optional(), offset: count.default(0) })
-const SourceBlock = z.templateLiteral(['source:', z.string().regex(/^[a-z][a-z0-9-]*$/)])
-const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), SourceBlock])
+const RecordBlock = z.templateLiteral([z.enum(['source', 'codeRepo', 'taskSource', 'project']), ':', z.string().regex(/^[a-z][a-z0-9-]*$/)])
+const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), RecordBlock])
 const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
 const ResourceId = z.string().regex(/^[a-z][a-z0-9-]*$/)
-const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(), config: z.unknown().optional() })
+const CreateCodeRepoRequest = z.object({ kind: z.enum(['github', 'gitlab']), id: ResourceId.optional(),
+  name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
+const CreateTaskSourceRequest = z.object({ kind: z.string().regex(/^[a-z][a-z0-9-]*$/), id: ResourceId.optional(),
+  name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
+const CreateProjectRequest = z.object({ id: ResourceId.optional() }).passthrough()
+const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
+  name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
+const VerifySourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
+  name: z.string().trim().max(LIMITS.sourceName).optional(), config: z.unknown().optional(), field: z.string().max(40).optional() })
 
 function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupStatus): Routes {
   const { store } = runtime
@@ -197,11 +212,39 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'GET sources': () => sourcesStatus(views(runtime), runtime.health, setupState(runtime)),
     'POST sources': async ({ body }) => {
       const request = CreateSourceRequest.parse(await body())
-      return runtime.settings.createSource(request.kind, request.id, request.config, 'panel')
+      return runtime.settings.createSource(request.kind, request.id, request.config, 'panel', request.name)
+    },
+    // 预检复用真实探测，但不持久化；面板逐字段调用，`field: 'all'` 表示验证全部关键字段。
+    'POST sources/verify': async ({ body }) => {
+      const request = VerifySourceRequest.parse(await body())
+      return { checks: await runtime.checkSource(request.kind, request.config, request.field ?? 'all',
+        { id: request.id, name: request.name }) }
     },
     'DELETE sources/:id': ({ params }) => runtime.settings.removeSource(params.id, 'panel'),
+    'POST code-repos': async ({ body }) => {
+      const request = CreateCodeRepoRequest.parse(await body())
+      return runtime.settings.createCodeRepo(request.kind, request.id, request.config, 'panel', request.name)
+    },
+    'DELETE code-repos/:id': ({ params }) => runtime.settings.removeCodeRepo(params.id, 'panel'),
+    'POST task-sources': async ({ body }) => {
+      const request = CreateTaskSourceRequest.parse(await body())
+      return runtime.settings.createTaskSource(request.kind, request.id, request.config, 'panel', request.name)
+    },
+    // 与来源预检同构：驱动真实读取任务清单，但不持久化候选配置。
+    'POST task-sources/verify': async ({ body }) => {
+      const request = VerifySourceRequest.parse(await body())
+      return { checks: await runtime.checkTaskSource(request.kind, request.config, request.field ?? 'all',
+        { id: request.id, name: request.name }) }
+    },
+    'DELETE task-sources/:id': ({ params }) => runtime.settings.removeTaskSource(params.id, 'panel'),
+    'POST projects': async ({ body }) => {
+      const { id, ...value } = CreateProjectRequest.parse(await body())
+      return runtime.settings.createProject(id, value, 'panel')
+    },
+    'DELETE projects/:id': ({ params }) => runtime.settings.removeProject(params.id, 'panel'),
     // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。
     'GET health': () => healthView(runtime, listen(), startup),
+    'GET queue': () => runtime.queue(),
     'GET settings': () => settingsView(store, runtime.sources, runtime.health, setupState(runtime), runtime.machine.stateDir),
     'POST sources/:id/labels': ({ params }) => runtime.settings.refreshLabels(params.id),
     'GET threads': ({ query }) => {
@@ -239,8 +282,13 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'POST executor/pause': async ({ body }) => runtime.settings.pause(z.object({ paused: z.boolean() }).parse(await body()).paused, 'panel'),
     'PUT settings/:block': async ({ params, body }) => {
       const block = SettingsBlockSchema.parse(params.block)
-      const known = !block.startsWith('source:') || runtime.sources.instances().some(instance => `source:${instance.id}` === block)
-      if (!known) throw new RouteError(404, 'Source not found')
+      const [family, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, '']
+      const known = family === 'source' ? runtime.sources.instances().some(instance => instance.id === id)
+        : family === 'codeRepo' ? !!store.settings().codeRepos[id]
+          : family === 'taskSource' ? !!store.settings().taskSources[id]
+            : family === 'project' ? !!store.settings().projects[id] : true
+      if (!known) throw new RouteError(404, family === 'source' ? 'Source not found'
+        : family === 'codeRepo' ? 'Code repository not found' : family === 'taskSource' ? 'Task source not found' : 'Project not found')
       const request = SaveRequest.parse(await body())
       return runtime.settings.save(block, request.value, request.revision, 'panel')
     },

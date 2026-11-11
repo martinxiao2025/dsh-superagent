@@ -1,6 +1,5 @@
-/** 任务项模型、清单规范化、拆解与规划：均为纯函数，便于独立验证。 */
-import { key } from '../core/index.ts'
-import type { TaskColumns } from './config.ts'
+/** 任务项模型、清单规范化与拆解：均为纯函数，便于独立验证。 */
+import type { TaskFieldMap } from './kind.ts'
 
 /** 任务源读出的一行，字段已按列映射规范化。 */
 export interface RawTask {
@@ -14,8 +13,6 @@ export interface RawTask {
 
 /** 一条任务项拆出的可独立执行工作项。 */
 export interface WorkItem {
-  /** 由流水线记录、任务编号与子项序号派生的稳定键。 */
-  key: string
   taskId: string
   /** 任务项的原始标题，用于回写时定位清单行。 */
   taskTitle: string
@@ -34,7 +31,7 @@ export interface TaskIssue { row: number; reason: string }
 
 /**
  * 清单不满足导入契约时抛出：携带全部问题，整批拒绝。
- * 用显式错误替代“成功导入 0 条”或静默丢行，调用方把 message 直接写进运行状态与健康详情。
+ * 用显式错误替代“成功导入 0 条”或静默丢行，调用方把 message 直接写进预检结果。
  */
 export class TaskListError extends Error {
   readonly issues: TaskIssue[]
@@ -44,21 +41,6 @@ export class TaskListError extends Error {
     this.issues = [...issues]
   }
 }
-
-/** 工作项在流水线中的状态；工单自身的状态仍由引擎维护。 */
-export type ItemState = 'queued' | 'running' | 'succeeded' | 'failed' | 'written-back' | 'writeback-failed'
-/** 持久化到 KV 的单条工作项记录。 */
-export interface ItemRecord {
-  state: ItemState
-  /** 已创建的工单 ID，用于续跑与回写。 */
-  ticket?: string
-  /** 已尝试次数，达到上限后不再自动准入。 */
-  attempts: number
-  at: string
-  /** 失败或跳过的原因文本。 */
-  reason?: string
-}
-export type ItemRecords = Record<string, ItemRecord>
 
 /** 问题摘要里最多逐条列出的行数。 */
 const ISSUE_LIMIT = 5
@@ -75,13 +57,13 @@ function describe(issues: readonly TaskIssue[]): string {
  * 任一条件不满足即整批拒绝，并把问题按行号汇总，避免“成功导入 0 条”或静默丢行。
  * @throws TaskListError 表头缺列、没有数据行或存在行级问题时。
  */
-export function importTasks(input: TaskTableInput, columns: TaskColumns): RawTask[] {
+export function importTasks(input: TaskTableInput, columns: TaskFieldMap): RawTask[] {
   if (!columns.id || !columns.title) throw new TaskListError('任务编号列与标题列不能为空，请先填写列名')
   const missing = [columns.id, columns.title].filter(name => !input.header.some(cell => cell.trim() === name))
   if (missing.length) {
     const header = input.header.filter(Boolean).join('、') || '空'
     throw new TaskListError(`任务清单缺少必填列：${missing.join('、')}（当前表头：${header}）。`
-      + '请修正表头拼写，或在流水线记录里把编号列、标题列改成实际表头。')
+      + '请修正表头拼写，或在任务来源记录里把编号列、标题列改成实际表头。')
   }
   if (!input.rows.length) throw new TaskListError('任务清单只有表头、没有数据行，本次未导入任何任务')
 
@@ -112,7 +94,7 @@ const NUMBERED = /^\s*\d+[.)]\s+(.+)$/
  * 把一条任务拆成工作项：优先取 Markdown 复选框，其次是至少两项的编号列表，否则整条任务即一项。
  * 描述中的空行与标题行不产生工作项。
  */
-export function splitTask(task: RawTask): Omit<WorkItem, 'key'>[] {
+export function splitTask(task: RawTask): WorkItem[] {
   const lines = task.description.split(/\r?\n/)
   const boxes = lines.flatMap(line => { const match = CHECKBOX.exec(line); return match ? [match[1]!.trim()] : [] })
   const numbered = lines.flatMap(line => { const match = NUMBERED.exec(line); return match ? [match[1]!.trim()] : [] })
@@ -126,27 +108,6 @@ function compose(task: RawTask, part?: string): string {
   const head = part ? `${part}\n\n任务：${task.title}` : task.title
   return [head, task.description].filter((text, position) => text && (position === 0 || text !== head)).join('\n\n')
 }
-
-/** 由任务项得到工作项，键在同样输入下保持稳定。 */
-export function workItems(tasks: readonly RawTask[], pipeline: string): WorkItem[] {
-  return tasks.flatMap(task => splitTask(task).map((item, index) => ({ ...item, key: key('pipeline-item', pipeline, task.id, String(index)) })))
-}
-
-/**
- * 选出本轮应准入的工作项：从未记录过的工作项、失败但未达重试上限的工作项。
- * 已成功、已回写、已达上限、或仍在排队/运行的工作项不重复准入。
- */
-export function plannable(items: readonly WorkItem[], records: ItemRecords, maxRetries: number): WorkItem[] {
-  return items.filter(item => {
-    const record = records[item.key]
-    if (!record) return true
-    if (record.state === 'failed') return record.attempts <= maxRetries
-    return false
-  })
-}
-
-/** 连续失败超过上限后进入终态，等待人工处理。 */
-export const finalFailure = (record: ItemRecord, maxRetries: number): boolean => record.state === 'failed' && record.attempts > maxRetries
 
 /** 简单的 32 位摘要，仅用于缺少编号时生成稳定键。 */
 export function simpleHash(text: string): string {

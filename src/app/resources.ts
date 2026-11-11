@@ -2,8 +2,6 @@
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { UserError, key, latestReport, reached, runningAssignment, threadKey, type Ticket, type Trigger } from '../core/index.ts'
 import { batchOf, inputMessage, triggerMessage, workerSessionId } from '../executor/dsh.ts'
-import { readGithub } from '../sources/github-read.ts'
-import { readGitlab } from '../sources/gitlab-read.ts'
 import { feishuReferences, feishuRead } from '../sources/feishu-read.ts'
 import { feishuRef } from '../sources/feishu.ts'
 import { feishuTriggerId } from '../sources/feishu-trigger.ts'
@@ -52,8 +50,6 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'models', holds: 'model providers, the DSH default and each role\'s model' },
   { name: 'models/<provider>', holds: 'one provider\'s models' },
   { name: 'feishu/<trigger-id>/…', holds: 'a Feishu original, as the dsh-superagent-feishu skill describes', executor: true },
-  { name: 'github/…', holds: 'a GitHub original, as the dsh-superagent-github skill describes; name the Source record when the installation has more than one', executor: true },
-  { name: 'gitlab/…', holds: 'a GitLab original, as the dsh-superagent-gitlab skill describes; name the Source record when the installation has more than one', executor: true },
 ]
 export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(resource => !executor || resource.executor)
   .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
@@ -104,46 +100,14 @@ const trigger = (host: ResourceHost, id: string, ticketId?: string): Trigger => 
   return found
 }
 /** 在偏移 0 处获取并缓存来源资源，后续偏移从会话缓存提供。 */
-async function sourcePage(read: Read, source: string, fetch: () => Promise<unknown>) {
+async function sourcePage(read: Read, source: 'feishu', fetch: () => Promise<unknown>) {
   const { host, resource, offset, sessionId } = read
   const body = offset === 0 ? JSON.stringify(await fetch()) : host.pages.get(`${sessionId}:${resource}`)
-  if (body === undefined) throw new Error(`Read this ${{ feishu: 'Feishu', github: 'GitHub', gitlab: 'GitLab' }[source] ?? source} resource from offset 0 first`)
+  if (body === undefined) throw new Error(`Read this ${{ feishu: 'Feishu' }[source]} resource from offset 0 first`)
   if (offset === 0) host.pages.set(`${sessionId}:${resource}`, body)
   return text(read, body)
 }
-/** 各来源资源的固定段；记录段是它前面可选的一段。 */
-const RESOURCE_HEADS = { github: new Set(['issues', 'pulls', 'commits']), gitlab: new Set(['issues', 'mrs']) } as const
-const SOURCE_LABELS = { github: 'GitHub', gitlab: 'GitLab' } as const
 const FEISHU_SECTIONS = new Set(['message', 'root', 'parent', 'thread', 'around'])
-/**
- * 拆出来源资源路径里的可选记录段，并选出该记录的命令作用域。
- * 执行器会话只读取其工单的来源记录；主会话在省略记录段时只接受该类型唯一的一条记录，绝不回退到「第一条」。
- */
-function sourceRead(read: Read, kind: 'github' | 'gitlab'): { commands: Commands; record: string; rest: string } {
-  const [head, ...tail] = read.rest.split('/')
-  const sections = RESOURCE_HEADS[kind]
-  // 记录 id 可以与固定段同名：`github/issues/issues/9` 的第一段是记录，`github/issues/9` 的第一段是资源。
-  const explicit = head && (!sections.has(head) || (tail[0] !== undefined && sections.has(tail[0]))) ? decodeURIComponent(head) : undefined
-  const rest = explicit === undefined ? read.rest : tail.join('/')
-  const own = read.host.commands.source
-  if (own) {
-    if (explicit !== undefined && explicit !== own.id) {
-      throw new Error(`This Session reads only its ticket's Source record (${own.id}); it cannot read ${kind} resources of ${explicit}`)
-    }
-    return { commands: read.host.commands, record: own.id, rest }
-  }
-  const label = SOURCE_LABELS[kind]
-  const records = Object.values(read.host.commands.deployment.sources).filter(source => source.kind === kind).map(source => source.id)
-  if (explicit !== undefined) {
-    if (!records.includes(explicit)) {
-      throw new Error(`${explicit} is not an enabled ${label} Source record; this installation has ${records.length ? records.join(', ') : `no ${label} Source`}`)
-    }
-    return { commands: read.host.commands.scope(explicit), record: explicit, rest }
-  }
-  if (records.length === 1) return { commands: read.host.commands.scope(records[0]!), record: records[0]!, rest }
-  throw new Error(records.length === 0 ? `This installation has no ${label} Source`
-    : `${label} resources need a Source record: this installation has ${records.length} (${records.join(', ')}); read ${kind}/<record>/… with one of them`)
-}
 /** 飞书资源路径：`feishu/[<record>/]<trigger id>/<section>[/<cursor>]`；触发器 id 本身已按记录生成。 */
 function feishuPath(read: Read): { record?: string; rest: string } {
   const [head, second, ...tail] = read.rest.split('/')
@@ -254,16 +218,6 @@ const ROUTES: readonly Route[] = [
     return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize(source.source)))
   }],
   // 记录段始终出现在返回的引用里，使多记录安装中的续读不再有歧义。
-  ['github/', read => {
-    const { commands, record, rest } = sourceRead(read, 'github')
-    const resource = `github/${encodeURIComponent(record)}/${rest}`
-    return sourcePage(read, 'github', () => readGithub(commands.withSignal(read.signal), resource))
-  }],
-  ['gitlab/', read => {
-    const { commands, record, rest } = sourceRead(read, 'gitlab')
-    const resource = `gitlab/${encodeURIComponent(record)}/${rest}`
-    return sourcePage(read, 'gitlab', () => readGitlab(commands.withSignal(read.signal), resource))
-  }],
   ['trigger/', async read => {
     const { host, rest, ticketId, offset, signal } = read
     if (!rest || rest.includes('/')) throw new Error('Unknown context resource')

@@ -7,8 +7,8 @@ import type { Store, SettingsVersion } from './store.ts'
 type SourceSettings = SettingsVersion['settings']['sources'][string]
 /** 由 Web 面板以 `change.<code>` 本地化的变更代码。 */
 export type SettingsChangeCode = 'ruleAdded' | 'ruleRenamed' | 'ruleInstruction' | 'ruleEnabled' | 'ruleDisabled' | 'ruleRemoved'
-  | 'sourceEnabled' | 'sourceDisabled' | 'sourceField' | 'sourceRowsAdded' | 'sourceRowsRemoved' | 'sourceRowsChanged' | 'sourceAdmission'
-  | 'mode' | 'timeout' | 'evalModel' | 'executorModel' | 'maxWorkers' | 'projectWorkers' | 'paused' | 'resumed' | 'executionDirectory' | 'prepareCommand'
+  | 'sourceEnabled' | 'sourceDisabled' | 'sourceRenamed' | 'sourceField' | 'sourceRowsAdded' | 'sourceRowsRemoved' | 'sourceRowsChanged' | 'sourceAdmission'
+  | 'mode' | 'timeout' | 'evalModel' | 'executorModel' | 'maxWorkers' | 'paused' | 'resumed' | 'executionDirectory' | 'prepareCommand'
   | 'blockedCommands'
 /** 面板使用 `change.<code>` 和来源列表中的字段标签渲染的单条设置差异。 */
 export interface SettingsChange {
@@ -40,6 +40,7 @@ function fieldChanges(id: string, fields: readonly FieldSpec[], a: Record<string
 function sourceChanges(id: string, before: SourceSettings | undefined, after: SourceSettings | undefined, sources: SourceRegistry): SettingsChange[] {
   const kind = sources.kindOf(id)
   const changes: SettingsChange[] = []
+  if (before && after && before.name !== after.name) changes.push({ code: 'sourceRenamed', source: id, from: before.name, to: after.name })
   if ((before?.enabled ?? true) !== (after?.enabled ?? true)) changes.push({ code: after?.enabled === false ? 'sourceDisabled' : 'sourceEnabled', source: id })
   const fill = (value: SourceSettings | undefined) => kind ? kind.schema.parse(value?.config ?? {}) : value?.config ?? {}
   return [...changes, ...fieldChanges(id, kind?.fields ?? [], fill(before), fill(after))]
@@ -67,7 +68,6 @@ function settingsChanges(before: SettingsVersion['settings'], after: SettingsVer
   if (!same(before.eval.model, after.eval.model)) changes.push({ code: 'evalModel' })
   if (!same(before.executor.model, after.executor.model)) changes.push({ code: 'executorModel' })
   if (before.executor.maxWorkers !== after.executor.maxWorkers) changes.push({ code: 'maxWorkers', from: before.executor.maxWorkers, to: after.executor.maxWorkers })
-  if (before.executor.projectWorkers !== after.executor.projectWorkers) changes.push({ code: 'projectWorkers', from: before.executor.projectWorkers, to: after.executor.projectWorkers })
   if (before.paused !== after.paused) changes.push({ code: after.paused ? 'paused' : 'resumed' })
   if (before.executor.directory !== after.executor.directory) changes.push({ code: 'executionDirectory', from: before.executor.directory, to: after.executor.directory })
   if (before.executor.prepare !== after.executor.prepare) changes.push({ code: 'prepareCommand' })

@@ -7,8 +7,8 @@ import { Engine, type ChannelRef, type Trigger } from '../src/core/index.ts'
 import { Store } from '../src/app/store.ts'
 import { threadDetail } from '../src/app/views/threads.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
-import { githubKind } from '../src/sources/github.ts'
-import { githubLink } from '../src/sources/github-channel.ts'
+import { feishuKind } from '../src/sources/feishu.ts'
+import { feishuLink } from '../src/sources/feishu-channel.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 
 let directory: string
@@ -18,48 +18,48 @@ beforeEach(() => {
   store = new Store(join(directory, 'orchestrator.sqlite'))
 })
 afterEach(() => { store.close(); rmSync(directory, { recursive: true, force: true }) })
-const settings = () => SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} } } })
+const settings = () => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { chats: [{ chatId: 'oc_7', listen: 'all' }] } } } })
 const sources = new SourceRegistry(settings)
-sources.register(githubKind)
-const host = () => ({ store, sources, links: (channel: ChannelRef) => githubLink(channel.address, {}) })
+sources.register(feishuKind)
+const host = () => ({ store, sources, links: (channel: ChannelRef) => feishuLink(channel.address, {}) })
 const engine = () => new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(settings(), sources),
   assessor: { request: () => {} }, executor: { start: async () => {}, deliver: async () => {}, stop: async () => {} },
   outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
-const comment = (id: string, at: string): Trigger => ({ id, source: 'github', threads: [{ source: 'github', id: '7' }], actor: { source: 'github', id: 'alice' },
-  human: true, at, text: `comment ${id}`, meta: {} })
-const saveThread = () => store.threads.save({ key: 'github:7', ref: { source: 'github', id: '7' }, createdAt: '', subscriptions: [], correlated: [], pending: [],
-  meta: {} })
+const comment = (id: string, at: string): Trigger => ({ id, source: 'feishu', threads: [{ source: 'feishu', id: 'oc_7:om_root' }],
+  actor: { source: 'feishu', id: 'ou_alice' }, human: true, at, text: `comment ${id}`, meta: { chatId: 'oc_7' } })
+const saveThread = () => store.threads.save({ key: 'feishu:oc_7:om_root', ref: { source: 'feishu', id: 'oc_7:om_root' }, createdAt: '',
+  subscriptions: [], correlated: [], pending: [], meta: {} })
 const ids = (detail: ReturnType<typeof threadDetail>) => detail!.timeline.map(item => item.id)
 
 it('pages a thread by time and then id, so a Trigger of the same second as a page\'s oldest one shows on the next page', () => {
   saveThread()
   for (const item of [comment('a', '2026-10-01T00:00:00.000Z'), comment('b', '2026-10-01T00:00:01.000Z'), comment('c', '2026-10-01T00:00:01.000Z')]) store.triggers.save(item)
-  const first = threadDetail(host(), 'github:7', undefined, 1)!
-  const second = threadDetail(host(), 'github:7', first.earlier!, 1)!
-  const third = threadDetail(host(), 'github:7', second.earlier!, 1)!
+  const first = threadDetail(host(), 'feishu:oc_7:om_root', undefined, 1)!
+  const second = threadDetail(host(), 'feishu:oc_7:om_root', first.earlier!, 1)!
+  const third = threadDetail(host(), 'feishu:oc_7:om_root', second.earlier!, 1)!
   expect([ids(first), ids(second), ids(third), third.earlier]).toEqual([['c'], ['b'], ['a'], null])
   // 仅含时间戳的旧游标仍会在该时间戳之前分页。
-  expect(ids(threadDetail(host(), 'github:7', '2026-10-01T00:00:01.000Z', 5))).toEqual(['a'])
+  expect(ids(threadDetail(host(), 'feishu:oc_7:om_root', '2026-10-01T00:00:01.000Z', 5))).toEqual(['a'])
 })
 
-it('shows the page around a GitHub comment with that comment, though GitHub writes its time in whole seconds', () => {
+it('shows the page around a comment with that comment, though its Source writes its time in whole seconds', () => {
   // 按字典序，`...:00Z` 排在 `...:00.001Z` 之后，除非规范化为毫秒。
   const taking = engine()
   for (const item of [comment('old', '2026-10-01T00:00:00Z'), comment('new', '2026-10-01T00:00:00.500Z'), comment('newest', '2026-10-01T00:00:01Z')]) {
     taking.receive(item)
   }
-  expect(ids(threadDetail(host(), 'github:7', undefined, 50, 'old'))).toEqual(['old'])
-  expect(ids(threadDetail(host(), 'github:7', undefined, 50, 'new'))).toEqual(['old', 'new'])
+  expect(ids(threadDetail(host(), 'feishu:oc_7:om_root', undefined, 50, 'old'))).toEqual(['old'])
+  expect(ids(threadDetail(host(), 'feishu:oc_7:om_root', undefined, 50, 'new'))).toEqual(['old', 'new'])
 })
 
 it('finds the Triggers before and after one among Triggers of the same time', () => {
   for (const item of [comment('a', '2026-10-01T00:00:01.000Z'), comment('b', '2026-10-01T00:00:01.000Z'), comment('c', '2026-10-01T00:00:01.000Z')]) store.triggers.save(item)
-  const around = store.read.neighbours('github:7', '2026-10-01T00:00:01.000Z', 'b')
+  const around = store.read.neighbours('feishu:oc_7:om_root', '2026-10-01T00:00:01.000Z', 'b')
   expect([around.before?.id, around.after?.id]).toEqual(['a', 'c'])
 })
 
 it('stores every received Trigger\'s time in the one form stored times take', () => {
   engine().receive(comment('raw', '2026-10-01T08:00:00+08:00'))
   expect(store.triggers.get('raw')?.at).toBe('2026-10-01T00:00:00.000Z')
-  expect(store.read.threadTriggers('github:7').map(item => item.at)).toEqual(['2026-10-01T00:00:00.000Z'])
+  expect(store.read.threadTriggers('feishu:oc_7:om_root').map(item => item.at)).toEqual(['2026-10-01T00:00:00.000Z'])
 })

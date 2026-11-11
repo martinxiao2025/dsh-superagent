@@ -35,7 +35,6 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
   expect(server.settings.eval).toEqual({ mode: 'auto', timeoutSeconds: 180, model: { provider: 'worker-provider', model: 'worker-model' } })
   await click(find(zh['promptPart.runtime/work'], '.dt-settings-link'))
   await type(field<HTMLInputElement>(zh.maxWorkers), '5')
-  await type(field<HTMLInputElement>(zh.projectWorkers), '2')
   // 空的根目录使用默认目录，字段会说明它，而不是看起来已设置。
   expect(field<HTMLInputElement>(zh.executionDirectory).closest('.dt-field')!.querySelector('small')?.textContent).toBe('留空时用 /srv/dsh-superagent/work')
   await type(field<HTMLInputElement>(zh.executionDirectory), '/srv/work')
@@ -45,7 +44,7 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
   prepare.setSelectionRange(17, 17)
   await click('可用的环境变量 3')
   expect(all('.dt-table tbody tr').map(row => row.textContent)).toEqual(['DSH_SUPERAGENT_DIR工单的执行目录执行器', 'DSH_SUPERAGENT_NAME工单短名执行器',
-    'DSH_SUPERAGENT_GITHUB_REPOSITORY仓库GitHub · 已关闭'])
+    'DSH_SUPERAGENT_GITHUB_REPOSITORY仓库github · 已关闭'])
   await click('DSH_SUPERAGENT_DIR')
   expect(field<HTMLTextAreaElement>(zh.prepareCommand).value).toBe('git worktree add "$DSH_SUPERAGENT_DIR"')
   await type(field<HTMLInputElement>(zh.blockedCommands), 'gh-personal  gh.other')
@@ -54,7 +53,7 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
     'worker-model'); await type(effort as HTMLInputElement, 'high')
   expect([...document.querySelectorAll('#dt-worker-model-efforts option')].map(option => option.getAttribute('value'))).toEqual(['high'])
   await click(zh.save)
-  expect(server.settings.executor).toEqual({ maxWorkers: 5, projectWorkers: 2, directory: '/srv/work',
+  expect(server.settings.executor).toEqual({ maxWorkers: 5, directory: '/srv/work',
     prepare: 'git worktree add "$DSH_SUPERAGENT_DIR"', blockedCommands: ['gh-personal', 'gh.other'], model: { provider: 'worker-provider',
       model: 'worker-model', reasoningEffort: 'high' } })
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/eval',
@@ -102,11 +101,12 @@ it('shows save and discard only while a settings block has edits, at the end of 
   expect(document.activeElement).toBe(workers.form)
   await click(find(zh['term.source'], '.dt-settings-link'))
   expect(all('.dt-savebar')).toHaveLength(0)
-  const github = all('.dt-card').find(card => card.querySelector('.dt-card-title')?.textContent === 'GitHub')!
-  await type(field<HTMLInputElement>('智能体的 GitHub CLI'), 'gh-other')
-  expect(github.lastElementChild!.classList.contains('dt-savebar')).toBe(true)
+  const feishu = document.getElementById('dt-source-feishu')!
+  const cli = field<HTMLInputElement>('机器人的 lark-cli', feishu)
+  await type(cli, 'lark-other')
+  expect(feishu.querySelector('.dt-savebar')).not.toBeNull()
   // 智能体 CLI 由设置读取，因此保存栏会警告：保存会重启 dsh-superagent 并中断正在运行的工作。
-  expect(github.lastElementChild!.textContent).toContain('2 个进行中的派工会中断')
+  expect(feishu.querySelector('.dt-savebar')!.textContent).toContain('2 个进行中的派工会中断')
 })
 
 it('gives the focus back to the field that had it once a block\'s save ends', async () => {
@@ -125,11 +125,21 @@ it('gives the focus back to the field that had it once a block\'s save ends', as
   expect(document.activeElement).toBe(input)
 })
 
+it('builds the TaskSource kind dropdown from the driver catalog and reports a missing name', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.taskSources'], '.dt-settings-link'))
+  expect(all('.dt-select option').map(option => option.textContent)).toEqual(['Excel 文件', '飞书知识库'])
+  await click(document.querySelector(`[aria-label="${zh.verify} · ${zh.sourceName}"]`) as HTMLElement)
+  await settle()
+  expect(document.querySelector('.dt-error.dt-check')?.textContent).toBe(zh['check.sourceNameRequired'])
+})
+
 it('lists the settings groups stages first, opens each stage\'s group from its status, and returns to the last group opened',
   async () => {
   await mount()
   await click(tab(zh['tab.settings']))
-  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['来源', '评估', '执行', '提示词', '部署'])
+  expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['来源', '任务来源', '评估', '执行', '提示词', '部署'])
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(zh['term.source'])
   for (const [tab, group] of [['来源', '来源'], ['评估', '评估'], ['执行', '执行']] as const) {
     await click(find(tab, '[role="tab"]'))

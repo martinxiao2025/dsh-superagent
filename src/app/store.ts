@@ -5,8 +5,9 @@ import { dirname } from 'node:path'
 import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, type ReplyStatus, type Repositories, type Thread, type ThreadFact,
   type ThreadFacts, type Ticket, type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { KV, type Family, type Key } from '../kv.ts'
+import type { QueueEntry } from '../queue/model.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
-import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, tooOld } from './migration.ts'
+import { OLDEST_SCHEMA, SCHEMA_VERSION, migrateTo11, migrateTo12, tooOld } from './migration.ts'
 import { Versions } from './versions.ts'
 import { storeReads } from './store-read.ts'
 
@@ -41,6 +42,10 @@ const SETS: Record<string, Record<string, string>> = {
   // 用于保持每个会话回复顺序的复合键（ticketId + thread）。
   outbox: { dropped: "TEXT AS (value ->> '$.dropped.at')", pending: `TEXT AS (CASE WHEN value ->> '$.status' = 'pending'
     AND value ->> '$.ticketId' IS NOT NULL THEN (value ->> '$.ticketId') || ' ' || (value ->> '$.channel.thread') END)` },
+  queue: {
+    active: `TEXT AS (CASE WHEN value ->> '$.state' IN ('queued','starting','running') THEN value ->> '$.project' END)`,
+    inflight: `TEXT AS (CASE WHEN value ->> '$.state' IN ('starting','running') THEN value ->> '$.project' END)`,
+  },
 }
 export { SCHEMA_VERSION }
 /**
@@ -51,9 +56,9 @@ export { SCHEMA_VERSION }
 export class Store implements Repositories {
   readonly db: DatabaseSync
   /**
-   * 在 `path` 处打开或创建 SQLite 数据库，并在单个事务中将模式 10 迁移到模式 11。
+   * 在 `path` 处打开或创建 SQLite 数据库，并在单个事务中将模式 10、11 或 12 迁移到模式 13。
    * @param report - 接收 `afterCommit` 回调抛出的错误，且不会使已提交的事务失败。
-   * @throws 当数据库模式早于 `OLDEST_SCHEMA`（10）、晚于 `SCHEMA_VERSION`（11），或迁移失败时抛出；无论哪种情况，数据库文件都保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
+   * @throws 当数据库模式早于 `OLDEST_SCHEMA`（10）、晚于 `SCHEMA_VERSION`（13），或迁移失败时抛出；无论哪种情况，数据库文件都保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
    */
   constructor(path: string, private readonly report: (error: unknown) => void = () => {}) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
@@ -80,13 +85,16 @@ export class Store implements Repositories {
             CREATE TABLE IF NOT EXISTS effect (kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, seq INTEGER NOT NULL,
               generation INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL,
               since TEXT NOT NULL, PRIMARY KEY (kind, key));
+            CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, value TEXT NOT NULL, seq INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS trigger_at ON trigger(at);
             CREATE INDEX IF NOT EXISTS trigger_thread_at ON trigger_thread(thread, at);
             CREATE INDEX IF NOT EXISTS decision_thread ON decision(thread);
             CREATE INDEX IF NOT EXISTS effect_due ON effect(kind, due, seq);
+            CREATE INDEX IF NOT EXISTS queue_seq ON queue(seq);
           `)
           this.addColumns()
-          if (migrating) migrateTo11(this)
+          if (version !== undefined && version < 11) migrateTo11(this)
+          if (version !== undefined && version < 12) migrateTo12(this)
           if (version !== SCHEMA_VERSION) this.set(KV.store.schema, SCHEMA_VERSION)
         })
       } catch (error) {
@@ -244,6 +252,18 @@ export class Store implements Repositories {
     get: (id: string): Decision | undefined => { const row = this.db.prepare('SELECT value FROM decision WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as Decision : undefined },
     save: (decision: Decision): void => { this.db.prepare('INSERT INTO decision VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, thread=excluded.thread').run(decision.id, decision.threadKey, JSON.stringify(decision)) },
     byThread: (threadKeyValue: string): Decision[] => this.db.prepare('SELECT value FROM decision WHERE thread=? ORDER BY rowid').all(threadKeyValue).map(row => JSON.parse(String(row.value)) as Decision),
+  }
+  /** 持久化调度队列；`seq` 决定全局 FIFO 顺序，状态列只索引活动条目。 */
+  readonly queue = {
+    get: (id: string): QueueEntry | undefined => { const row = this.db.prepare('SELECT value FROM queue WHERE id=?').get(id); return row ? JSON.parse(String(row.value)) as QueueEntry : undefined },
+    save: (entry: QueueEntry): void => { this.db.prepare('INSERT INTO queue VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, seq=excluded.seq').run(entry.id, JSON.stringify(entry), entry.seq) },
+    /** 全部条目，按全局入队顺序。 */
+    list: (): QueueEntry[] => this.values('SELECT value FROM queue ORDER BY seq'),
+    /** 仍在队列或执行中的条目，按全局入队顺序。 */
+    active: (): QueueEntry[] => this.values('SELECT value FROM queue WHERE active IS NOT NULL ORDER BY seq'),
+    /** 项目当前占用的执行位置（正在建单或执行），按项目记录 ID 去重。 */
+    inflight: (): string[] => this.db.prepare('SELECT DISTINCT inflight FROM queue WHERE inflight IS NOT NULL').all().map(row => String(row.inflight)),
+    maxSeq: (): number => Number((this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM queue').get() as { seq: number }).seq),
   }
   /** 管理视图、编排工具和来源轮询的只读查询（见 `storeReads`）。 */
   readonly read: ReturnType<typeof storeReads>

@@ -254,7 +254,7 @@ API 保存具有面板的权限。与通过主会话工具进行的保存不同�
 - `source:<记录 ID>`：`{"enabled": true, "config": {…}}`，记录 ID 由创建时生成或指定。`config` 由该类型的适配器 schema 定义：GitHub 有 `instanceUrl`、`repository` 和 `cli`，以及开关 `observeIssues`、`observePulls`、`observeComments` 和 `observeCi`，默认关闭，用于接收仓库中的每个新 Issue、新拉取请求和评论，以及默认分支的 CI；GitLab 有 `instanceUrl`、`project`、`cli`、`pollSeconds` 和同样的接收开关；飞书有 `instanceUrl`、`cli`、`chats`（形式为 `[{"chatId": "oc_…", "name": "…", "listen": "mentions"}]`，或 `"all"`）、`directMessages`，以及 `otherChats`（`"none"` 或 `"mentions"`）。
 - `policy`：`{"rules": […], "sources": {"<记录 ID>": {"allowed": [{"id": "<login>"}], "bots": [{"id": "dependabot[bot]"}]}, "feishu-1": {"allowed": [{"id": "ou_…", "name": "…"}], "syncChat": "oc_…", "admission": {"oc_…": {"unlistedAddressed": "explicit"}}}}}`。`bots` 列出其消息可以成为推断候选的机器人。`admission` 行以群 id、飞书的 `other` 或 `direct`，以及 GitHub 的 `issues`、`pulls`、`comments` 或 `ci` 为键；未设置的单元格取默认值（见 [002 授权](002-authorization.md)）。
 - `eval`：`mode`、`timeoutSeconds` 和 `model`。
-- `executor`：`model`、`maxWorkers`、`projectWorkers`、`directory`、`prepare` 和 `blockedCommands`。处理暂停是独立的设置 `paused`，由 `POST executor/pause` 设置。
+- `executor`：`model`、`maxWorkers`、`directory`、`prepare` 和 `blockedCommands`。处理暂停是独立的设置 `paused`，由 `POST executor/pause` 设置。
 
 更改仓库或 CLI 会先运行对应的安装检查。检查失败返回 400，详情在 `setup` 中。成功的账号更改，或安装待定时进行的任何保存，返回 `restarting: true`。应用重启期间 API 暂时不可用。
 

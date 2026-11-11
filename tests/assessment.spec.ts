@@ -8,35 +8,36 @@ import type { Commands } from '../src/infra/commands.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 import { deferred } from './fixtures/async.ts'
-import { githubKind } from '../src/sources/github.ts'
+import { feishuKind } from '../src/sources/feishu.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 
-/** 由内存仓库以及伪造的 GitHub Issue 与文件读取支撑的评估器夹具。 */
-function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.from({ length: 5 }, (_, i) => `comment ${i}`),
+/** 由内存仓库以及伪造的飞书话题与文件读取支撑的评估器夹具。 */
+function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = ['issue 1', ...Array.from({ length: 5 }, (_, i) => `comment ${i}`)],
   threadContext?: AssessorHost['threadContext']) {
-  const comments = bodies.map((body, i) => ({ id: i, html_url: `https://github.com/acme/widgets/issues/1#c${i}`,
-    user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', body }))
-  const gate = { issue: undefined as Promise<void> | undefined }
+  const messages = bodies.map((body, i) => ({ message_id: `om_${i}`, chat_id: 'oc_team', thread_id: 'omt_1', msg_type: 'text',
+    sender: { id: 'ou_bob', name: 'bob', sender_type: 'user' },
+    create_time: String(Date.parse('2026-09-09T00:00:00Z') + i * 1000), content: body }))
+  const gate = { thread: undefined as Promise<void> | undefined }
   const commands = {
-    repository: 'acme/widgets', deployment: testDeployment(),
+    deployment: testDeployment(),
     scope() { return commands },
     withSignal() { return commands },
-    gh: vi.fn(async (args: string[]) => {
-      await gate.issue
-      const number = Number(/issues\/(\d+)/.exec(args[1]!)?.[1])
-      return args[1]!.includes('/comments') ? comments : { id: 100 + number, number, state: 'open',
-        html_url: `https://github.com/acme/widgets/issues/${number}`,
-        user: { login: 'bob' }, created_at: '2026-09-09T00:00:00Z', title: 'Issue', body: 'body' }
+    // 伪造的飞书话题：mget 找到来源消息，话题分页返回线程中的全部消息。
+    lark: vi.fn(async (args: string[]) => {
+      await gate.thread
+      if (args[2] === '/open-apis/im/v1/messages/mget') {
+        const params = JSON.parse(args[4]!) as { message_ids: string[] }
+        return { items: params.message_ids.map(id => ({ message_id: id, chat_id: 'oc_team', thread_id: 'omt_1' })) }
+      }
+      return { thread_id: 'omt_1', messages, has_more: false }
     }),
     run: vi.fn(async () => 'export const value = 1\n'),
-    // 第一个参数为字符串时是原始文件路径；否则用 schema 校验伪造的 gh 响应。
-    api: vi.fn(async (schema: unknown, ...rest: string[]) => typeof schema === 'string' ? 'export const value = 1\n'
-      : (schema as { parse(value: unknown): unknown }).parse(await (commands as unknown as { gh(args: string[]): Promise<unknown> }).gh(['api', rest[0]!]))),
+    api: vi.fn(async () => 'export const value = 1\n'),
   } as unknown as Commands
   const repo = new MemoryRepositories()
-  const settings = () => SettingsSchema.parse({ sources: { github: { kind: 'github', enabled: true, config: {} } } })
+  const settings = () => SettingsSchema.parse({ sources: { feishu: { kind: 'feishu', name: 'Feishu', enabled: true, config: {} } } })
   const sources = new SourceRegistry(settings)
-  sources.register(githubKind)
+  sources.register(feishuKind)
   let engine!: Engine
   const host: AssessorHost = {
     get engine() { return engine }, commands, deployment: testDeployment(), settings,
@@ -61,8 +62,8 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = Array.fr
   const size = () => kept.evals.size
   return { repo, engine, assessor, tools, size, gate }
 }
-const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'github', threads: [{ source: 'github', id: String(n) }], actor: { source: 'github', id: 'bob' }, human: true,
-  at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`, url: `https://github.com/acme/widgets/issues/${n}`, meta: { number: n } })
+const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'feishu', threads: [{ source: 'feishu', id: String(n) }], actor: { source: 'feishu', id: 'ou_bob' }, human: true,
+  at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`, meta: { chatId: 'oc_team', messageId: `om_${n}` } })
 const signal = new AbortController().signal
 
 it('keeps nothing for an Eval once it is decided, as for one that timed out', async () => {
@@ -77,7 +78,7 @@ it('keeps nothing for an Eval once it is decided, as for one that timed out', as
   }
   s.engine.receive(issue(9)); s.engine.evaluateDue()
   await s.assessor.context('issue-9', signal)
-  const thread = s.repo.threads.get('github:9')!
+  const thread = s.repo.threads.get('feishu:9')!
   s.repo.threads.save({ ...thread, expired: 2, evaluating: { ...thread.evaluating!, delivered: '2000-01-01T00:00:00.000Z', deadline: '2000-01-01T00:00:00.000Z' } })
   s.engine.evaluateDue()
   expect(s.size()).toBe(0)
@@ -86,7 +87,7 @@ it('keeps nothing for an Eval once it is decided, as for one that timed out', as
 it('keeps nothing from a context read that finishes after its Eval was decided', async () => {
   const s = setup()
   const hold = deferred()
-  s.gate.issue = hold.promise
+  s.gate.thread = hold.promise
   s.engine.receive(issue(1)); s.engine.evaluateDue()
   const details = s.assessor.context('issue-1', signal)
   s.engine.decide('issue-1', { kind: 'ignore', reason: 'not a request' })
@@ -138,14 +139,13 @@ it('loads a window without the assessment instructions: the trigger once, cut me
   const bodies = Array.from({ length: 30 }, (_, i) => `comment ${i}: ${'the label reads oddly on the settings page. '.repeat(i % 4 === 0
     ? 40 : 3)}`)
   const s = setup('inferred', bodies)
-  const trigger = { ...issue(1), id: 'c15', text: bodies[15]!, url: 'https://github.com/acme/widgets/issues/1#c15', meta: { number: 1,
-    kind: 'comment' } }
+  const trigger = { ...issue(1), id: 'c15', text: bodies[15]!, meta: { chatId: 'oc_team', messageId: 'om_15' } }
   s.engine.receive(trigger); s.engine.evaluateDue()
   const result = await s.assessor.context('c15', signal) as Record<string, unknown> & { thread: { messages: Record<string, unknown>[] } }
   expect(result).not.toHaveProperty('instructions')
   expect(result.text).toBe(bodies[15])
   const messages = new Map(result.thread.messages.map(message => [message.id as string, message]))
-  const at = (i: number) => messages.get(`https://github.com/acme/widgets/issues/1#c${i}`)!
+  const at = (i: number) => messages.get(`om_${i}`)!
   // 触发器自身的文本只在顶层给出一次；其最近的两个邻居比窗口其余消息保留更多文本。
   expect(at(15)).toEqual({ id: expect.any(String), from: 'bob', at: expect.any(String), trigger: true })
   expect(at(16)).toMatchObject({ chars: bodies[16]!.length, text: `${bodies[16]!.slice(0, 1200)}…` })

@@ -20,6 +20,7 @@
 {
   "github": {
     "kind": "github",
+    "name": "核心仓",
     "enabled": true,
     "config": {
       "instanceUrl": "",
@@ -31,6 +32,7 @@
   },
   "gl-internal": {
     "kind": "gitlab",
+    "name": "内部 GitLab",
     "enabled": true,
     "config": {
       "instanceUrl": "https://gitlab.example.com",
@@ -48,13 +50,16 @@
 | --- | --- |
 | 记录 ID（对象键） | `^[a-z][a-z0-9-]*$`，全仓唯一；创建时由服务端生成（`kind`、`kind-2`…）或校验客户端提供的值 |
 | `kind` | 适配器类型：`github` / `gitlab` / `feishu`；新增类型只需新增适配器 |
+| `name` | 必填的项目显示名称（1–80 字符），只影响界面标题，不参与身份；旧设置缺少该字段时在加载阶段用记录 ID 补齐 |
 | `enabled` | 启用状态；停用后不轮询、不接收新触发器，已有工单不受影响 |
 | `config.instanceUrl` | 实例地址；留空表示官方站点。GitHub Enterprise 与自建 GitLab 必填 |
 | `config.cli` | 凭据引用：已登录的 CLI 包装或命令名；登录态由 CLI 自身保存，不写入设置 |
 | `config.repository` / `project` | 仓库或项目标识 |
 | `config` 其余字段 | 轮询与过滤参数，由各适配器 schema 定义并在面板渲染 |
 
-新增来源不要求任何默认记录；首次使用由面板创建。所有记录地位相同，没有「主记录」。
+新增来源不要求任何默认记录；首次使用由面板创建，必须填写项目名称。所有记录地位相同，没有「主记录」。
+
+GitHub / GitLab 记录只作为代码仓库，提供代码数据而不提供任务；系统任务只来自任务来源（Excel 文件、飞书知识库，见 `docs/011-projects-and-scheduling.md`）。
 
 ## 记录 ID 即来源身份
 
@@ -123,9 +128,10 @@ interface SourceAdapter {
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/orchestrator/api/settings` | 来源记录卡片与 `kinds` 类型目录 |
-| `PUT` | `/orchestrator/api/settings/source:<id>` | 更新 `{ enabled, config }`，含启停 |
+| `PUT` | `/orchestrator/api/settings/source:<id>` | 更新 `{ name, enabled, config }`，含启停与项目名称 |
 | `GET` | `/orchestrator/api/sources` | 运行状态与健康 |
-| `POST` | `/orchestrator/api/sources` | 创建记录，body `{ kind, id?, config? }`，返回 `{ id, revision, restarting }` |
+| `POST` | `/orchestrator/api/sources` | 创建记录，body `{ kind, id?, name, config? }`，返回 `{ id, revision, restarting }` |
+| `POST` | `/orchestrator/api/sources/verify` | 字段级预检；body `{ kind, id?, name?, config?, field? }`（`field` 默认 `all`），返回 `{ checks }`；名称按必填校验，真实运行 CLI、读取任务清单或知识库，不写设置、不重启 |
 | `DELETE` | `/orchestrator/api/sources/:id` | 删除记录，返回 `{ removed, restarting }`；有未结束工单时 `409`；记录不存在时 `400`（`sourceNotInstalled`） |
 | `GET` | `/orchestrator/api/health` | 插件注册阶段、初始化状态、监听地址与记录健康摘要 |
 

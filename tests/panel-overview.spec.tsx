@@ -85,8 +85,7 @@ it('shows paused processing as a system problem with its resume action, and says
 })
 
 it('offers the step that fixes a settings problem as a button on the overview', async () => {
-  server.settings = { ...server.settings, policy: { ...server.settings.policy, sources: { feishu: { allowed: [], admission: {} },
-    github: { allowed: [], admission: {} } } } }
+  server.settings = { ...server.settings, policy: { ...server.settings.policy, sources: { feishu: { allowed: [], admission: {} } } } }
   await mount()
   expect(text()).toContain(zh.problemNoAllowed)
   await click(zh.actionAddAllowed)
@@ -140,7 +139,7 @@ it('lists the unavailable Evals one by one, without the health entry that counts
 })
 
 it('says when no Source is on, an Eval is past its deadline or a message keeps failing, each with the way to it', async () => {
-  for (const kind of ['feishu', 'github']) server.settings.sources[kind] = { ...server.settings.sources[kind]!, enabled: false }
+  server.settings = { ...server.settings, sources: { ...server.settings.sources, feishu: { ...server.settings.sources.feishu!, enabled: false } } }
   server.threads = [threadSummary({ key: 'github:9', title: '#9 迟迟未决', stage: 'evaluating',
     evaluating: { id: 'v9', triggers: 1, strength: 'inferred', startedAt: '2026-08-31T23:58:00Z', deadline: '2026-09-01T00:00:00Z' } })]
   server.failing = [{ id: 'm1', channel: { source: 'github', thread: 'github:42', address: { number: '42' } },

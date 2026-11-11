@@ -1,9 +1,14 @@
 /** 按块作用域的设置校验、乐观并发保存、处理暂停控制，以及来源策略同步。 */
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
-import { UserError, type EngineForSettings, type Ticket } from '../core/index.ts'
+import { LIMITS } from '../limits.ts'
+import { UserError, type EngineForSettings, type Ticket, type UserErrorCode } from '../core/index.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
+import { CodeRepoKindSchema, CodeRepoRecordSchema } from '../code-repos/kind.ts'
+import { ProjectSchema } from '../projects/kind.ts'
+import { TaskSourceRecordSchema } from '../task-sources/kind.ts'
+import { taskSourceRepo, taskSources } from '../task-sources/index.ts'
 import type { SourceHost } from '../sources/host.ts'
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
@@ -29,7 +34,7 @@ interface Block {
   merge(settings: SettingsValue, value: unknown, id: string): SettingsValue
   guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin): void
 }
-const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
+const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'codeRepo' | 'taskSource' | 'project', Block> = {
   policy: {
     parse: (value, sources) => {
       const policy = PolicyConfigSchema.parse(value)
@@ -45,11 +50,25 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
     guard: (current, candidate, origin) => { if (origin !== 'panel' && environment(current) !== environment(candidate)) throw new UserError('panelOnlyEnvironment') },
   },
   source: {
-    parse: (value, sources, id) => sources.validate(id, z.object({ enabled: z.boolean(), config: z.unknown() }).parse(value)),
+    parse: (value, sources, id) => sources.validate(id, z.object({
+      name: z.string().trim().min(1).max(LIMITS.sourceName), enabled: z.boolean(), config: z.unknown() }).parse(value)),
     // 记录的类型不可通过设置块修改：保存开关与配置时保留已存储的 `kind`。
     merge: (settings, value, id) => ({ ...settings, sources: { ...settings.sources, [id]: { ...settings.sources[id]!, ...value as object } } }),
     // 只有管理面板可以切换来源账户。
     guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
+  },
+  codeRepo: {
+    parse: value => CodeRepoRecordSchema.omit({ kind: true }).parse(value),
+    // 记录类型不可通过设置块修改：保存开关与配置时保留已存储的 `kind`。
+    merge: (settings, value, id) => ({ ...settings, codeRepos: { ...settings.codeRepos, [id]: { ...settings.codeRepos[id]!, ...value as object } } }),
+  },
+  taskSource: {
+    parse: value => TaskSourceRecordSchema.omit({ kind: true }).parse(value),
+    merge: (settings, value, id) => ({ ...settings, taskSources: { ...settings.taskSources, [id]: { ...settings.taskSources[id]!, ...value as object } } }),
+  },
+  project: {
+    parse: value => ProjectSchema.parse(value),
+    merge: (settings, value, id) => ({ ...settings, projects: { ...settings.projects, [id]: value as SettingsValue['projects'][string] } }),
   },
 }
 
@@ -108,7 +127,8 @@ export class Settings {
   current(): SettingsValue { return this.host.store.settings() }
   /**
    * 返回所有设置块及其当前块修订的概览：`pause`、`eval` 和
-   * `executor` 的完整值；`policy` 的规则摘要和允许发送者计数；以及 `sources` 的实例状态开关（完整块读取使用 `read: 'settings/<block>'` 路径）。
+   * `executor` 的完整值；`policy` 的规则摘要和允许发送者计数；消息来源实例；
+   * 以及代码仓库、任务来源与项目的记录摘要（完整块读取使用 `read: 'settings/<block>'` 路径）。
    */
   view() {
     const { store, sources } = this.host
@@ -120,20 +140,33 @@ export class Settings {
       executor: { revision: revision('executor'), value: settings.executor },
       policy: { revision: revision('policy'), rules: rules.map(rule => ({ id: rule.id, name: rule.name, enabled: rule.enabled })),
         allowed: Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.allowed.length])), read: 'settings/policy' },
-      sources: sources.instances(settings).map(({ id, kind, enabled, installed }) =>
-        ({ id, kind, enabled, installed, revision: revision(`source:${id}`), read: `settings/source:${id}` })) }
+      sources: sources.instances(settings).map(({ id, kind, name, enabled, installed }) =>
+        ({ id, kind, name, enabled, installed, revision: revision(`source:${id}`), read: `settings/source:${id}` })),
+      codeRepos: Object.entries(settings.codeRepos).map(([id, record]) => ({ id, kind: record.kind, name: record.name, enabled: record.enabled,
+        revision: revision(`codeRepo:${id}`), read: `settings/codeRepo:${id}` })),
+      taskSources: Object.entries(settings.taskSources).map(([id, record]) => ({ id, kind: record.kind, name: record.name, enabled: record.enabled,
+        revision: revision(`taskSource:${id}`), read: `settings/taskSource:${id}` })),
+      projects: Object.entries(settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
+        codeRepo: project.codeRepo, taskSource: project.taskSource, revision: revision(`project:${id}`), read: `settings/project:${id}` })) }
   }
   /**
    * 返回 `save` 可接受的一个设置块（`policy`、`eval`、`executor`，持有 `{ paused }` 的 `pause`，
-   * 或持有 `{ enabled, config }` 的 `source:<id>`）及其当前块修订。
+   * 或持有 `{ name, enabled, config }` 的 `source:<id>` / `codeRepo:<id>` / `taskSource:<id>`，
+   * 或完整项目值的 `project:<id>`）及其当前块修订。
    * @throws 当不存在该设置块时抛出 UserError（`unknownBlock`）。
    */
   block(block: string): { block: string; revision: number; value: unknown } {
     const { store, sources } = this.host
-    const settings = store.settings(), id = block.startsWith('source:') ? block.slice('source:'.length) : undefined
-    const instance = id === undefined ? undefined : sources.instances(settings).find(item => item.id === id)
+    const settings = store.settings(), [family, id] = block.includes(':') ? block.split(/:(.*)/s) : [block, '']
+    const instance = family === 'source' ? sources.instances(settings).find(item => item.id === id) : undefined
+    const repo = family === 'codeRepo' ? settings.codeRepos[id!] : undefined
+    const taskSource = family === 'taskSource' ? settings.taskSources[id!] : undefined
+    const project = family === 'project' ? settings.projects[id!] : undefined
     const value = block === 'pause' ? { paused: settings.paused } : block === 'policy' || block === 'eval' || block === 'executor' ? settings[block]
-      : instance ? { enabled: instance.enabled, config: instance.config } : undefined
+      : instance ? { name: instance.name, enabled: instance.enabled, config: instance.config }
+        : repo ? { name: repo.name, enabled: repo.enabled, config: repo.config }
+          : taskSource ? { name: taskSource.name, enabled: taskSource.enabled, config: taskSource.config }
+            : project ?? undefined
     if (value === undefined) throw new UserError('unknownBlock', { block })
     return { block, revision: store.blockRevision(block as SettingsSave), value }
   }
@@ -150,13 +183,16 @@ export class Settings {
     const { store, sources, engine, sessions } = this.host
     const stale = () => revision !== store.blockRevision(block)
     if (stale()) throw new SettingsConflict('Settings changed. Reload before saving.')
-    const id = block.startsWith('source:') ? block.slice(7) : block
-    const kind = block.startsWith('source:') ? 'source' : block
+    const [kind, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, block]
     if (!(kind in BLOCKS)) throw new UserError('unknownBlock', { block })
     const rules = BLOCKS[kind as keyof typeof BLOCKS]
+    const stored = store.settings()
     if (kind === 'source' && !sources.record(id)) throw new UserError('sourceNotInstalled', { source: id })
+    if (kind === 'codeRepo' && !stored.codeRepos[id]) throw new UserError('codeRepoNotInstalled', { repo: id })
+    if (kind === 'taskSource' && !stored.taskSources[id]) throw new UserError('taskSourceNotInstalled', { source: id })
+    if (kind === 'project' && !stored.projects[id]) throw new UserError('projectNotInstalled', { project: id })
     const parsed = rules.parse(value, sources, id)
-    const current = store.settings()
+    const current = stored
     // 停用一条正在工作的记录会结束它名下未完成工单，而不是让它们失去来源后悬挂。
     const disabling = kind === 'source' && current.sources[id]?.enabled !== false && !(parsed as { enabled: boolean }).enabled
     const candidate = rules.merge(current, parsed, id)
@@ -167,6 +203,8 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
+    if (kind === 'project') this.checkRepoBinding(candidate, id)
+    else if (kind === 'taskSource') this.checkRepoBinding(candidate, undefined, id)
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // 异步检查后重新读取当前设置，以防无关块被并发保存。
@@ -222,10 +260,11 @@ export class Settings {
   /**
    * 用插件提供的类型创建一个来源记录并重启使配置生效。
    * 未提供 `id` 时按 `kind`、`kind-2`… 生成；显式 `id` 已存在时拒绝。
+   * `name` 是面板显示的项目名称，必填。
    * @returns 新记录的 ID、当前修订和重启标记。
    * @throws 当类型未安装（`sourceKindUnknown`）、显式 ID 冲突（`sourceExists`）或配置无效（ZodError）时抛出。
    */
-  async createSource(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin) {
+  async createSource(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin, name: string) {
     const { store, sources, sessions } = this.host
     const spec = sources.kindByName(kind)
     if (!spec) throw new UserError('sourceKindUnknown', { kind })
@@ -239,7 +278,7 @@ export class Settings {
     }
     const parsed = spec.schema.parse(config ?? {})
     const settings = SettingsSchema.parse({ ...current,
-      sources: { ...current.sources, [recordId]: { kind, enabled: true, config: parsed } } })
+      sources: { ...current.sources, [recordId]: { kind, name, enabled: true, config: parsed } } })
     const block: SettingsSave = `source:${recordId}`
     store.atomic(() => {
       store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
@@ -281,6 +320,111 @@ export class Settings {
     await sessions.delivery(`settings:${block}`)
     this.host.setup.restart()
     return { removed: true as const, restarting: true as const }
+  }
+  /**
+   * 创建一条代码仓库记录。运行时在启动时解析它；保存后由设置版本与后续重启生效。
+   * @throws 显式 ID 冲突（`codeRepoExists`）、类型未知或配置无效时抛出。
+   */
+  async createCodeRepo(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin, name: string) {
+    const current = this.current()
+    const parsedKind = CodeRepoKindSchema.parse(kind)
+    const recordId = this.recordId(id, parsedKind, current.codeRepos, 'codeRepoExists', 'repo')
+    const record = CodeRepoRecordSchema.parse({ kind: parsedKind, name, enabled: true, config: config ?? {} })
+    const settings = SettingsSchema.parse({ ...current, codeRepos: { ...current.codeRepos, [recordId]: record } })
+    return this.persistRecord(`codeRepo:${recordId}`, settings, current, origin, recordId)
+  }
+  /** 创建一条任务来源记录；类型必须已注册驱动，配置由驱动的 schema 校验。 */
+  async createTaskSource(kind: string, id: string | undefined, config: unknown, origin: SettingsOrigin, name: string) {
+    const current = this.current()
+    const driver = taskSources.kind(kind)
+    if (!driver) throw new UserError('sourceKindUnknown', { kind })
+    const recordId = this.recordId(id, kind, current.taskSources, 'taskSourceExists', 'source')
+    const record = TaskSourceRecordSchema.parse({ kind, name, enabled: true, config: driver.schema.parse(config ?? {}) })
+    const settings = SettingsSchema.parse({ ...current, taskSources: { ...current.taskSources, [recordId]: record } })
+    return this.persistRecord(`taskSource:${recordId}`, settings, current, origin, recordId)
+  }
+  /** 创建一个项目；引用的代码仓库与任务来源必须已存在，且任务来源读取的仓库必须与项目一致。 */
+  async createProject(id: string | undefined, value: unknown, origin: SettingsOrigin) {
+    const current = this.current()
+    const project = ProjectSchema.parse(value)
+    const recordId = this.recordId(id, 'project', current.projects, 'projectExists', 'project')
+    const settings = SettingsSchema.parse({ ...current, projects: { ...current.projects, [recordId]: project } })
+    this.checkRepoBinding(settings, recordId)
+    return this.persistRecord(`project:${recordId}`, settings, current, origin, recordId)
+  }
+  /**
+   * 项目绑定的代码仓库必须与任务来源读取的仓库一致：Excel 清单在仓库里，仓库不一致会读到别的代码。
+   * 只读任务来源（未声明 `repo`）不约束项目；保存项目时检查该项目，保存任务来源时检查引用它的项目。
+   * @throws 不一致时抛出 `projectRepoMismatch` / `taskSourceRepoMismatch`。
+   */
+  private checkRepoBinding(settings: SettingsValue, projectId?: string, sourceId?: string): void {
+    const pairs = projectId ? [[projectId, settings.projects[projectId]!] as const]
+      : Object.entries(settings.projects).filter(([, project]) => project.taskSource === sourceId)
+    for (const [id, project] of pairs) {
+      const source = settings.taskSources[project.taskSource]
+      const repo = source ? taskSourceRepo(source) : ''
+      if (!repo || repo === project.codeRepo) continue
+      throw new UserError(projectId ? 'projectRepoMismatch' : 'taskSourceRepoMismatch',
+        { project: id, source: project.taskSource, repo: project.codeRepo, taskRepo: repo })
+    }
+  }
+  /** 删除一条代码仓库记录；仍被项目引用时拒绝。 */
+  async removeCodeRepo(id: string, origin: SettingsOrigin) {
+    const current = this.current()
+    if (!current.codeRepos[id]) throw new UserError('codeRepoNotInstalled', { repo: id })
+    const used = Object.values(current.projects).filter(project => project.codeRepo === id).length
+    if (used) throw new UserError('codeRepoInUse', { repo: id, count: String(used) })
+    const { [id]: _record, ...codeRepos } = current.codeRepos
+    const settings = SettingsSchema.parse({ ...current, codeRepos })
+    return this.removeRecord(`codeRepo:${id}`, settings, current, origin)
+  }
+  /** 删除一条任务来源记录；仍被项目引用时拒绝。 */
+  async removeTaskSource(id: string, origin: SettingsOrigin) {
+    const current = this.current()
+    if (!current.taskSources[id]) throw new UserError('taskSourceNotInstalled', { source: id })
+    const used = Object.values(current.projects).filter(project => project.taskSource === id).length
+    if (used) throw new UserError('taskSourceInUse', { source: id, count: String(used) })
+    const { [id]: _record, ...taskSources } = current.taskSources
+    const settings = SettingsSchema.parse({ ...current, taskSources })
+    return this.removeRecord(`taskSource:${id}`, settings, current, origin)
+  }
+  /** 删除一个项目；队列与运行记录由 P4 的调度器负责收尾。 */
+  async removeProject(id: string, origin: SettingsOrigin) {
+    const current = this.current()
+    if (!current.projects[id]) throw new UserError('projectNotInstalled', { project: id })
+    const { [id]: _record, ...projects } = current.projects
+    const settings = SettingsSchema.parse({ ...current, projects })
+    return this.removeRecord(`project:${id}`, settings, current, origin)
+  }
+  /** 生成记录 ID：未提供时按类型、`<类型>-2`… 递增；显式 ID 冲突时拒绝。 */
+  private recordId(id: string | undefined, base: string, records: Record<string, unknown>, code: UserErrorCode, field: string): string {
+    if (id === undefined) {
+      let candidate = base, suffix = 2
+      while (records[candidate]) candidate = `${base}-${suffix++}`
+      return candidate
+    }
+    if (records[id]) throw new UserError(code, { [field]: id })
+    return id
+  }
+  /** 保存新建记录：写入设置与变更通知，返回块修订与上下文投递状态。 */
+  private async persistRecord(block: SettingsSave, settings: SettingsValue, current: SettingsValue, origin: SettingsOrigin, id: string) {
+    const { store, sessions } = this.host
+    store.atomic(() => {
+      store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
+    })
+    const delivery = await sessions.delivery(`settings:${block}`)
+    return { id, revision: store.blockRevision(block), restarting: false as const, context_delivery: delivery }
+  }
+  /** 删除记录并写入变更通知。 */
+  private async removeRecord(block: SettingsSave, settings: SettingsValue, current: SettingsValue, origin: SettingsOrigin) {
+    const { store, sessions } = this.host
+    store.atomic(() => {
+      store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
+    })
+    const delivery = await sessions.delivery(`settings:${block}`)
+    return { removed: true as const, restarting: false as const, context_delivery: delivery }
   }
   /** 删除记录后释放它拥有的 `sync:<id>` 健康项，并取消待处理的策略同步重试。 */
   private releaseSource(id: string): void {

@@ -32,6 +32,17 @@ export const SETUP_PROBLEMS = {
 } as const satisfies Record<string, readonly [SetupPlace, string]>
 export type SetupCode = keyof typeof SETUP_PROBLEMS
 export interface SetupProblem { place: SetupPlace; code: SetupCode; values: Record<string, string>; detail: string }
+/**
+ * 一次字段级预检的结果：`setup` 作用域的 `code` 来自 `SETUP_PROBLEMS`，
+ * `check` 作用域的 `code` 由面板用 `check.<code>` 文案渲染。
+ */
+export interface SourceCheck {
+  field: string
+  ok: boolean
+  scope: 'setup' | 'check'
+  code: string
+  values: Record<string, string>
+}
 
 /**
  * 部署和账号校验检查在必需的 CLI、账号或仓库检查失败时抛出。

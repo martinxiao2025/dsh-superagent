@@ -2,8 +2,6 @@
 import { z } from 'zod'
 import { liveTicket, type EngineForExecutor, type Ticket } from '../../core/index.ts'
 import { IM_WORDS } from '../../infra/text.ts'
-import { claimPull, readPull } from '../../sources/github-pull.ts'
-import type { SourceContext } from '../../sources/host.ts'
 import { readResource, type ResourceHost } from '../resources.ts'
 import type { Store } from '../store.ts'
 import { reportRelay, threadFollowedNotice } from '../notices.ts'
@@ -15,18 +13,15 @@ export interface ExecutorToolsHost {
   readonly store: Pick<Store, 'tickets' | 'triggers' | 'replyStatus' | 'atomic'>
   readonly sessions: Pick<Sessions, 'relay' | 'notify'>
   readonly resources: ResourceHost
-  /** 工单来源记录对应的 GitHub 上下文；拉取请求规则决定能否认领上报的 PR。 */
-  githubFor(source: string): SourceContext | undefined
   sendReplies(): Promise<void>
 }
 
 export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   const ticketId = ticket.id
-  // 工单来源记录取自启动它的触发器；同一类型的多条记录因此各自使用自己的仓库、实例与账号。
+  // 工单来源记录取自启动它的触发器；同一类型的多条记录因此各自使用自己的实例与账号。
   const origin = host.store.triggers.get(ticket.origin.triggerId)
   const source = origin?.source
-  const github = source ? host.githubFor(source) : undefined
-  // 资源读取使用工单来源记录的命令作用域，使 `github/` 等资源落到正确的记录与实例。
+  // 资源读取使用工单来源记录的命令作用域，使 `feishu/` 等资源落到正确的记录与实例。
   const resources: ResourceHost = { ...host.resources, commands: source ? host.resources.commands.scope(source) : host.resources.commands }
   return [
     readTool('Read one page of a resource of this ticket that the resource parameter lists. Follow next_offset, and next_resource where a page names one.',
@@ -48,21 +43,21 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
       name: 'orchestrator_thread_unrelated',
       description: 'Stop following an attached thread that is not about this ticket, as the work section says; its own threads cannot be dropped.',
       schema: z.object({
-        thread: z.string().min(1).describe('The thread key, which trigger/<id> of one of its messages shows as thread, such as feishu:<chat>:<root> or github:<number>.'),
+        thread: z.string().min(1).describe('The thread key, which trigger/<id> of one of its messages shows as thread, such as feishu:<chat>:<root>.'),
         reason: z.string().trim().min(1).max(300).describe('One sentence on why the thread is not about this ticket.'),
       }).strict(),
       execute: async args => { host.engine.markUnrelated(ticketId, args.thread, args.reason); return { removed: true, thread: args.thread } },
     }),
     tool({
       name: 'orchestrator_thread_follow',
-      description: 'Follow a related thread, such as an Issue or another PR, for context only.',
+      description: 'Follow a related thread, such as another Feishu topic, for context only.',
       schema: z.object({
-        thread: z.string().describe('Thread key, such as github:<number>.'),
+        thread: z.string().describe('Thread key, such as feishu:<chat>:<root>.'),
         reason: z.string().trim().min(1).max(300).describe('How it relates, in one sentence.'),
       }).strict(),
       execute: async args => host.store.atomic(() => {
         const at = args.thread.indexOf(':')
-        if (at < 1 || at === args.thread.length - 1) throw new Error('A thread key is <source>:<id>, such as github:<number>')
+        if (at < 1 || at === args.thread.length - 1) throw new Error('A thread key is <source>:<id>, such as feishu:<chat>:<root>')
         const followed = host.engine.followForContext(ticketId, { source: args.thread.slice(0, at), id: args.thread.slice(at + 1) })
         if (followed) host.sessions.notify(...threadFollowedNotice(ticketId, args.thread, args.reason))
         return { followed, thread: args.thread }
@@ -85,18 +80,12 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         summary: z.string().min(1),
         human_action: z.string().trim().min(1).max(1000).nullish().describe('One concrete question for a person, also with state=progress; omit to keep the pending one, null to clear it.'),
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
-        pr_number: z.number().int().positive().nullish().describe(`The ticket's PR: its source PR, or one by ${github?.source?.kind === 'github' ? github.source.login : 'the agent'} from a branch named after this ticket (DSH_SUPERAGENT_NAME).`),
         reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers; never for ordinary progress.'),
       }).strict(),
-      execute: async (args, signal) => {
+      execute: async (args, _signal) => {
         const current = host.store.tickets.get(ticketId)
-        if (!current || !liveTicket(current)) throw new Error('Ticket ended (PR was closed or work finished); do not resume it')
-        if (args.pr_number != null && !github) throw new Error('This ticket has no GitHub Source to claim a PR from')
-        const pull = args.pr_number != null ? await readPull(github!, args.pr_number, signal) : undefined
-        // 原子地认领 PR、记录报告并排队中继，使被拒的 PR 认领或无效报告不留部分状态，且已记录的报告总能到达主会话。
+        if (!current || !liveTicket(current)) throw new Error('Ticket ended; do not resume it')
         return host.store.atomic(() => {
-          const refused = pull && claimPull(github!, ticketId, pull)
-          if (refused) throw new Error(refused)
           const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),
             ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }

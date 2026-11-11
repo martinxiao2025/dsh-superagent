@@ -18,7 +18,8 @@ export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, 
     const entry = health[name]
     return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
   })
-  return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
+  const title = { zh: instance.name, en: instance.name }
+  return { id: instance.id, title, health: parts }
 }
 export interface SetupState {
   /** 已解析的部署信息；机器级初始化失败时为 undefined。 */

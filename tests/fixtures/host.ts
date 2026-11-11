@@ -1,5 +1,5 @@
 /**
- * 内存中的 DSH 宿主夹具（与 tests/runtime.spec.ts 中一样），运行已配置的 Runtime，包含 GitHub 与飞书来源、
+ * 内存中的 DSH 宿主夹具（与 tests/runtime.spec.ts 中一样），运行已配置的 Runtime，包含 GitHub 代码仓库与飞书来源、
  * 允许成员 Alice（`ou_alice`）、监听的群聊 `oc_team`，以及 `auto` 评估模式。用 `stop()` 停止它。
  */
 import { Context } from '@deepseek-ai/cordis'
@@ -12,7 +12,6 @@ import { Runtime } from '../../src/app/runtime.ts'
 import { Store } from '../../src/app/store.ts'
 import { SettingsSchema } from '../../src/policy.ts'
 import { feishuKind, feishuTrigger } from '../../src/sources/feishu.ts'
-import { githubKind } from '../../src/sources/github.ts'
 import { Commands } from '../../src/infra/commands.ts'
 import { credentialHelper, shellArgv, workerGitConfig } from '../../src/infra/environment.ts'
 import type { Trigger } from '../../src/core/index.ts'
@@ -23,8 +22,12 @@ export const CHAT = 'oc_team'
 
 /** 根据 `oc_team` 中 Alice 的消息构建飞书提及触发器，使用 `id` 中的数字作为以秒为单位的时间戳偏移。 */
 export function feishu(id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
+  return feishuFrom('feishu', id, text, overrides)
+}
+/** 与 `feishu` 相同，但来自另一条飞书记录，因此属于另一个项目。 */
+export function feishuFrom(source: string, id: string, text: string, overrides: Record<string, unknown> = {}): Trigger {
   const at = String(Date.parse('2026-09-09T00:00:00Z') + Number(id.replace(/\D/g, '') || 0) * 1000)
-  return feishuTrigger('feishu', { message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: at,
+  return feishuTrigger(source, { message_id: `om_${id}`, chat_id: CHAT, chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: text, create_time: at,
     mentions: [{ id: 'ou_bot' }], ...overrides }, 'ou_bot', 'cli_bot')!
 }
 
@@ -245,18 +248,19 @@ export async function startRuntime(seed?: (store: Store) => void) {
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
-  const sources = { github: { kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: AGENT } },
-    feishu: { kind: 'feishu', enabled: true, config: { cli: BOT } } }
-  seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
+  const sources = { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT } } }
+  const codeRepos = { github: { kind: 'github', name: 'GitHub', enabled: true, config: { repository: 'acme/widgets', cli: AGENT } } }
+  seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources, codeRepos }))
   seed?.(seeded)
   seeded.close()
   const runtime = new Runtime(ctx, testMachine({ stateDir: directory }), vi.fn())
   await runtime.ready
-  runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
+  runtime.sources.register(feishuKind)
   const settings = runtime.store.settings()
   runtime.store.saveSettings({ ...settings, eval: { ...settings.eval, mode: 'auto' },
-    policy: { ...settings.policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } } },
-    sources: { ...sources, feishu: { kind: 'feishu', enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
+    policy: { ...settings.policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT } } },
+    sources: { ...sources, feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } },
+    codeRepos })
   deliveries.mockClear()
 
   /** 投递到 `sessionId` 的已解析 JSON 载荷。 */
@@ -282,6 +286,14 @@ export async function startRuntime(seed?: (store: Store) => void) {
     const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
     return { trigger, ticket, sessionId: `worker-${ticket.id}` }
   }
+  /** 新增一条飞书记录与它的策略，使它的工单属于另一个项目。 */
+  async function addFeishuSource(id: string) {
+    const current = runtime.store.settings()
+    runtime.store.saveSettings({ ...current,
+      policy: { ...current.policy, sources: { ...current.policy.sources, [id]: { allowed: [{ id: MEMBER, name: 'Alice' }] } } },
+      sources: { ...current.sources, [id]: { kind: 'feishu', name: id, enabled: true, config: { ...current.sources.feishu!.config } } } })
+    await runtime.idle()
+  }
   async function api(method: string, path: string, json?: unknown) {
     let status = 0, text = ''
     const chunks = json === undefined ? [] : [Buffer.from(JSON.stringify(json))]
@@ -294,7 +306,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const step = (sessionId: string) => { steps.get(sessionId)!() }
   /** worker 的某个步骤会认领等待它的内容，并在会话取走它之前被切断。 */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
-  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, hooks, resolveDefault, stop,
+  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, addFeishuSource, api, controller, subprocess, hooks, resolveDefault, stop,
     jobs, subagents, step, claim }
 }
 export type Host = Awaited<ReturnType<typeof startRuntime>>

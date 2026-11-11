@@ -113,7 +113,7 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   environment?: { variables: readonly VariableSpec[]; values(input: EnvironmentInput<C>): Record<string, string> }
 }
 
-export interface SourceInstance<C extends Record<string, unknown> = Record<string, unknown>> { id: string; kind: string; enabled: boolean; config: C }
+export interface SourceInstance<C extends Record<string, unknown> = Record<string, unknown>> { id: string; kind: string; name: string; enabled: boolean; config: C }
 
 /** 内置适配器：种类描述符与按来源记录运行的轮询循环。 */
 export interface SourceAdapter<C extends Record<string, unknown> = Record<string, unknown>> {

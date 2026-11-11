@@ -1,5 +1,5 @@
 /** 暴露给每种来源的范围化运行时上下文，使来源与 Store 或 Engine 的直接访问相隔离。 */
-import type { EngineForSources, ReceiveResult, ScheduledTicket, Trigger } from '../core/index.ts'
+import type { EngineForSources, ReceiveResult, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SetupProblem } from '../setup.ts'
@@ -11,8 +11,8 @@ import type { Store } from './store.ts'
 export interface SourceContextDeps {
   readonly store: Pick<Store, 'atomic' | 'get' | 'set' | 'delete' | 'keys' | 'threads' | 'tickets' | 'triggers' | 'read'>
   readonly outbox: Pick<Outbox, 'send'>
-  readonly engine: Pick<EngineForSources, 'bindThread' | 'threadClosed' | 'schedule'>
-  /** 应用状态目录；流水线用它存放代码镜像与运行状态。 */
+  readonly engine: Pick<EngineForSources, 'bindThread' | 'threadClosed'>
+  /** 应用状态目录；需要自有工作目录的来源使用它。 */
   readonly stateDir: string
   readonly commands: Commands
   readonly sources: SourceRegistry
@@ -47,7 +47,6 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
       return instance?.enabled ? instance.config : undefined
     },
     receive: trigger => deps.receive(trigger),
-    schedule: (input: ScheduledTicket) => deps.engine.schedule(input),
     atomic: work => store.atomic(work),
     state: {
       get: name => store.get(name),

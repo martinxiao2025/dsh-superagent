@@ -116,7 +116,7 @@ Runtime 把 `ticket.ended`、`trigger.requeued` 和 `thread.unsubscribed` 变成
 
 工单每个事实只保存一次。只要它没有 `ended` 就是打开的，`ended` 记录何时、由谁、为何以及以什么结果结束；它最后说的是其最新派工报告（`latestReport`）；其执行器会话以它命名（`src/executor/dsh.ts` 中的 `workerSessionId`）。
 
-其字段是有类型的：`origin`，给评估批次提供强度的可准入触发器以及批次本身（`triggerId`、`triggerIds`）；`execution`，执行器选择的内容（`name`、`directory` 和 `assignment`）；`delivery`，最后一次失败的输入投递（`error`、`at`），直到投递成功、新派工开始或工单结束；以及 `follows`，来源让它关注的线程，每个为 `{thread, own, closed?}`：工单打开它时 `own` 为真，关闭后 `closed` 带 `at` 和 `outcome`。只有 Tickets 写入 `follows`；GitHub 来源用 `pullsOf` 和 `pullOf`（`src/sources/github-pull.ts`）读取其拉取请求。
+其字段是有类型的：`origin`，给评估批次提供强度的可准入触发器以及批次本身（`triggerId`、`triggerIds`）；`execution`，执行器选择的内容（`name`、`directory` 和 `assignment`）；`delivery`，最后一次失败的输入投递（`error`、`at`），直到投递成功、新派工开始或工单结束；以及 `follows`，来源让它关注的线程，每个为 `{thread, own, closed?}`：工单打开它时 `own` 为真，关闭后 `closed` 带 `at` 和 `outcome`。只有 Tickets 写入 `follows`。
 
 携带触发器的输入记录它是否由人所写，`waitsForPerson` 会读取该标记。线程还在 `context` 中列出仅作上下文关注它的已订阅工单，并在 `expired` 中计数其排队触发器连续过期的评估次数；评估记录其 `primary` 触发器以及候选何时 `delivered`。
 
@@ -200,7 +200,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 `prepare(ticket, outcome)` 提供 Engine 的 `prepareTicket` 钩子：短名、项目名、项目下的工单子目录和 `ticketExecution` 派工文本。`workerSessionId(ticket.id)` 派生会话 id。
 
-`WorkerSlots` 在启动或唤醒空闲执行器的投递之前预留容量。人的消息可以使用 `maxWorkers` 之外的一个槽位，唤醒优先于启动。单项目另有槽位上限（`executor.projectWorkers`，`0` 表示自动取全局上限的一半），达到上限的启动排队等待，人工跟进不受此限制。`activeCount` 提供面板负载。
+`WorkerSlots` 在启动或唤醒空闲执行器的投递之前预留容量，`executor.maxWorkers` 是唯一硬上限，人的消息与自动启动共用这些槽位。同一项目同时只运行一个工单（固定为 1，不可配置），达到上限的启动排队等待，人工跟进也不例外。`activeCount` 提供面板负载。
 
 模型提供方和网络的瞬时失败会重试三次。启动使用副作用退避；失败的回合会在 15、30 和 60 秒后收到继续消息。`inputMessage` 根据当前工单状态渲染每个输入，`mandateInstructions` 为推断工作添加匹配规则的限制。
 
@@ -249,7 +249,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/tools/main.ts`、`src/app/tools/executor.ts` | 把主会话和执行器会话的工具参数翻译成核心类的调用，并把结果翻译成卡片 |
 | `src/app/http.ts`、`src/app/views/`、`src/app/api.ts` | 把 HTTP 请求翻译成调用，把 Store 读取翻译成面板视图；`api.ts` 为面板定义每个路由的类型 |
 | `src/app/resources.ts`、`src/app/links.ts`、`src/app/cards.ts` | 把资源名翻译成读取，把来源消息翻译成链接，把记录翻译成给模型的紧凑卡片 |
-| `src/sources/github*.ts`、`src/sources/feishu*.ts`、`src/sources/poll.ts` | 把 GitHub 和飞书载荷翻译成触发器与线程事实，把消息翻译成 CLI 调用 |
+| `src/sources/github.ts`、`src/sources/gitlab.ts`、`src/sources/feishu*.ts`、`src/sources/poll.ts` | 把飞书载荷翻译成触发器与线程事实，把消息翻译成 CLI 调用；GitHub / GitLab 只描述代码仓库 |
+| `src/code-repos/`、`src/task-sources/` | 代码仓库的工作副本同步与文件读取，任务来源驱动的登记、读取与回写 |
 | `src/deployment.ts`、`src/setup.ts`、`src/infra/` | 安装探测和问题、CLI 传输、智能体的进程环境 |
 
 ## 依赖规则
@@ -274,15 +275,14 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 - **固定拒绝。** 人或智能体可以引发的拒绝是 `src/core/errors.ts` 中 `USER_ERRORS` 的 `UserError(code, values)`。管理 API 对 `missing` 错误码答复 404，对其他错误码答复 400，面板用其语言为每个错误码措辞。安装问题是 `SetupError` 错误码（`src/setup.ts`），固定健康文本是 `HealthCode`（`src/sources/host.ts`），措辞方式相同。
 ### 来源特有依赖
 
-一些通用模块仍然直接引用 GitHub 或飞书：
+一些通用模块仍然直接引用飞书：
 
 - Outbox 应用飞书群的字数限制。
 - `src/app/links.ts` 解析飞书消息链接和 `repliedTo`。它和 Runtime 用 `feishuSettings` 读取设置。
-- `src/app/resources.ts` 读取 `feishu/` 和 `github/` 原始记录；`src/app/cards.ts` 用 `pullOf` 生成工单卡片。
-- Runtime 为已合并或已关闭的工单发送 `pullEndNotices`。
-- 执行器工具用 `readPull` 和 `claimPull` 绑定报告的拉取请求，使用 Runtime 暴露的 GitHub 上下文。
-- MasterAssessor 用 `readRepositoryPath` 读取仓库文件。
-- Sessions 和 Prompts 为 GitHub、GitLab 和飞书注册内置技能。
+- `src/app/resources.ts` 读取 `feishu/` 原始记录；`src/app/cards.ts` 生成工单卡片。
+- 执行器工具不再绑定拉取请求；GitHub / GitLab 只作为代码仓库提供克隆、同步与凭据。
+- MasterAssessor 用 `src/code-repos/read.ts` 的 `readRepositoryPath` 读取仓库文件。
+- Sessions 和 Prompts 为飞书注册内置技能；GitHub / GitLab 技能只描述仓库操作。
 - 安装按记录类型探测字段（`SETUP_FIELDS`），每条记录通过 `SourceContext.problem` 收到自己的账号安装问题。
 
 
@@ -295,7 +295,20 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/admin-mount.ts` | `AdminMount`：Runtime 创建之前挂载 `/orchestrator/api`，初始化失败时用启动状态回答健康探针与 503 |
 | `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveGithubSource`、`resolveGitlabSource` 和 `resolveFeishuSource` 按记录解析仓库、项目和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出各类型安装读取的字段。代码不指名任何人、账号或组织 |
 | `src/setup.ts` | 安装问题：`SetupError`，带错误码、修复它的位置，以及日志、主会话和面板共享的英文文本 |
-| `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验 |
+| `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验；`SettingsSchema` 校验项目对代码仓库与任务来源的引用完整性 |
+| `src/projects/kind.ts` | `ProjectSchema`：项目名称、启停、一对一的 `codeRepo` / `taskSource` 引用、执行目录与分支、调度、重试和任务状态口径 |
+| `src/code-repos/kind.ts` | `CodeRepoRecordSchema` 与 `CodeRepoKindSchema`：代码仓库记录的类型、名称、启停与配置，以及代码仓库类型描述 `CodeRepoType` |
+| `src/code-repos/work.ts` | 代码仓库工作副本：按记录 ID 固定目录，首次 clone、后续同步 |
+| `src/code-repos/sync.ts` | 代码仓库同步：按记录解析远端地址、注册目录凭据、初始化/快进合并并返回提交，不覆盖本地改动 |
+| `src/code-repos/read.ts` | 代码仓库文件读取：只读访问默认分支中的非隐藏文件或目录 |
+| `src/task-sources/kind.ts` | 任务来源记录、字段映射与 `TaskSourceDriver` 契约：类型、名称、schema、字段、预检、读取、可选回写与仓库绑定 |
+| `src/task-sources/index.ts` | 驱动注册表与字段级预检：类型目录、名称/ID 预检、`all` 依次验证；新增驱动只需登记 |
+| `src/task-sources/excel.ts` | Excel 驱动：先同步代码仓库工作副本，再读取 CSV / TSV / XLSX，支持回写 |
+| `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：复用文档读取，首批只读 |
+| `src/task-sources/table.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
+| `src/task-sources/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解与稳定键 |
+| `src/task-sources/writeback.ts` | 任务结果回写：仅更新 CSV/TSV 匹配行；`.xlsx` 与飞书明确报未支持 |
+| `src/task-sources/feishu-doc.ts` | 飞书知识库任务源：节点解析、文档纯文本读取、Markdown 表格与复选框还原 |
 | `src/admission.ts` | 准入表的取值、每个单元格的选项和默认值，与面板共享 |
 | `src/limits.ts` | 人设置的值的限制，由设置架构检查，并由面板字段提供 |
 | `src/kv.ts` | `KV`：每一族 `kv` 记录及其键、值类型和拥有者，以及 Store 和 `SourceContext.state` 接受的 `Key` 和 `Family` 类型 |
@@ -317,12 +330,14 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/core/index.ts` | 核心的导出 |
 | `src/app/runtime.ts` | Runtime，组合根，及其启动和停止 |
 | `src/app/setup.ts` | 安装，以及 `setupChanged`：保存是否更改了安装读取的字段 |
+| `src/app/scheduler.ts` | ProjectScheduler：按项目轮询任务来源、维护持久化队列、按容量出队建单并跟踪终态 |
+| `src/queue/model.ts` | 队列条目与快照模型 |
 | `src/app/passes.ts` | Passes，轮次调度器 |
 | `src/app/outbox.ts` | Outbox：Engine 的 `Outbox` 端口、回执以及发送它们的 `reply` 副作用 |
 | `src/app/notices.ts` | 主会话的通知和中继：`eventNotice`、`reportRelay`、`resultRelay` 和 `followupRelay` |
 | `src/app/store.ts` | Store，以及 `Receipt`，即出站的一条消息 |
 | `src/app/store-read.ts` | `storeReads`：供视图、工具和来源轮询使用的 Store 读取查询，从不写入 |
-| `src/app/migration.ts` | 架构 11 迁移：从架构 10 一步转换，按当前形态写入每条已存储记录 |
+| `src/app/migration.ts` | 架构 13 迁移：从架构 10、11、12 一步转换，按当前形态写入每条已存储记录 |
 | `src/app/effects.ts` | Effects |
 | `src/app/versions.ts` | `Versions`：保存为带编号快照并指向当前快照的记录，用于设置和提示词 |
 | `src/app/cache.ts` | `TextCache`：在大小限制内保存在内存中的文本，最先丢弃最久未使用的 |
@@ -364,19 +379,11 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/sources/kind.ts` | `SourceKind` 与 `SourceAdapter` 协议 |
 | `src/sources/identity.ts` | 记录作用域的身份拼接：线程键、触发器 ID、KV 键与健康项名称 |
 | `src/sources/registry.ts` | `SourceRegistry`：按来源记录解析类型、配置、策略、线程与健康项 |
-| `src/sources/adapters.ts` | 内置适配器清单（GitHub、GitLab、飞书）；新增类型只需实现并登记一个适配器 |
+| `src/sources/adapters.ts` | 内置消息来源适配器清单（飞书）；代码仓库不产生触发器，不在此登记 |
 | `src/sources/host.ts` | `SourceHost`、`SourceContext`、`Health`、`health` 以及固定健康文本 |
-| `src/sources/poll.ts` | GitHub、GitLab 和飞书轮询共享的内容：`POLL_HORIZON_MS`、`polled`、`cursorAt`、`pollFailure`、失败轮询的错误健康，以及 `pollThreads`（把失败作为 `pollError` 留在其线程上） |
-| `src/sources/forge.ts` | GitHub 和 GitLab 共享的内容：`scopeOfMeta` 和 `forgeScope`（触发器的接收范围）、用于允许账号和准入行的 `forgePolicy`，以及 `mentions` |
-| `src/sources/github.ts` | GitHub 适配器与种类定义：一轮通知轮询、打开工单的拉取请求及其 CI，以及已订阅线程 |
-| `src/sources/github-trigger.ts` | 把 GitHub 评论、评审、Issue 正文和 CI 变化作为触发器，以及 GitHub 地址 |
-| `src/sources/github-pull.ts` | 拉取请求规则：工单关注哪些拉取请求（`claimPull`、`observePull`）、向 Engine 报告的关闭，以及 `pullEndNotices`（工单以合并或关闭结束时发送的聊天通知） |
-| `src/sources/github-channel.ts` | GitHub 渠道：评论和评审线程回复，`sent` 或 `gone` |
-| `src/sources/github-read.ts` | CI 快照、仓库读取、`github/` 资源，以及 `githubThreadContext`：分页读取 Issue 或拉取请求的对话 |
-| `src/sources/gitlab.ts` | GitLab 适配器与种类定义：一轮针对 Issue 和合并请求及其评论的轮询、来源健康，以及已订阅线程 |
-| `src/sources/gitlab-trigger.ts` | 把 GitLab Issue、合并请求和评论作为触发器，含人和机器人的规则以及 GitLab 地址 |
-| `src/sources/gitlab-channel.ts` | GitLab 渠道：Issue 和合并请求上的评论，带幂等标记，`sent` 或 `gone` |
-| `src/sources/gitlab-read.ts` | `gitlab/` 资源和 `gitlabThreadContext`：分页读取 Issue 或合并请求的正文和评论 |
+| `src/sources/poll.ts` | 飞书轮询共享的内容：`POLL_HORIZON_MS`、`polled`、`cursorAt`、`pollFailure`、失败轮询的错误健康，以及 `pollThreads`（把失败作为 `pollError` 留在其线程上） |
+| `src/sources/github.ts` | GitHub 代码仓库类型描述：配置 schema、设置字段与账号事实；不产生触发器，只用于克隆、同步与凭据 |
+| `src/sources/gitlab.ts` | GitLab 代码仓库类型描述：配置 schema、设置字段与账号事实；不产生触发器，只用于克隆、同步与凭据 |
 | `src/sources/feishu.ts` | 飞书适配器与种类定义：策略同步、群名刷新与飞书循环的启动 |
 | `src/sources/feishu-trigger.ts` | 按同一套规则把实时事件、历史页面和话题页面中的飞书消息转为触发器 |
 | `src/sources/feishu-loops.ts` | 飞书循环：事件消费者、历史恢复、群名和已订阅话题的轮询 |
@@ -384,15 +391,6 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/sources/feishu-read.ts` | 对触发器消息、其根、父级和话题的 `feishu/` 读取，以及 `feishuThreadContext`（把它们的图片一并提供给评估） |
 | `src/sources/admission-context.ts` | 评估起步时的有界窗口：通过其 kind 读取的触发器线程前几页，以及触发器周围的消息 |
 | `src/sources/feishu-image.ts` | 把飞书消息中的图片作为附件读取给评估会话 |
-| `src/pipeline/pipeline.ts` | `pipeline` 来源种类与适配器：配置字段、健康条目、监听范围，以及把来源上下文组装为运行器能力 |
-| `src/pipeline/config.ts` | 流水线平铺配置架构、列映射、待办状态集合与配置问题检查 |
-| `src/pipeline/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解、去重规划与稳定键 |
-| `src/pipeline/task-source.ts` | 任务源端口 `TaskSourcePort` 及按 `kind` 创建 Excel / 飞书适配器 |
-| `src/pipeline/excel.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
-| `src/pipeline/feishu.ts` | 飞书知识库任务源：节点解析、文档纯文本读取、Markdown 表格与复选框还原 |
-| `src/pipeline/code.ts` | 代码源同步：按来源记录解析远端地址、注册目录凭据、初始化/快进合并并返回提交 |
-| `src/pipeline/runner.ts` | 流水线运行器：运行状态机、单飞循环、并发准入、等待工单、失败重试与崩溃恢复 |
-| `src/pipeline/writeback.ts` | 任务结果回写：按任务聚合状态，仅更新 CSV/TSV 匹配行；`.xlsx` 与飞书明确报未支持 |
 | `src/client/index.tsx` | 客户端插件入口：侧边栏条目、主面板，以及 DeepSeek Harness 插件管理器中的页面 |
 | `src/client/app.tsx` | 面板：页头、搜索、术语表、标签页以及当前路由的页面 |
 | `src/client/provider.tsx` | 每个页面从宿主读取的内容：文案、调用、导航、通知、状态轮询，以及 `restart`（在 dsh-superagent 重启期间快速读取状态） |
@@ -400,6 +398,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/route.ts` | 标签页、设置分组、由 `parseRoute` 读取的带类型路由，以及记住上次打开的设置分组的路由记忆 |
 | `src/client/overview.tsx` | 概览 |
 | `src/client/source.tsx`、`trigger.tsx`、`eval.tsx`、`execution.tsx` | 每个阶段一个文件：其状态，以及有设置时的设置 |
+| `src/client/task-sources.tsx` | 任务来源设置：类型下拉来自驱动注册表，新增前逐字段验证 |
 | `src/client/thread.tsx`、`ticket.tsx` | 记录页面：带时间线的线程，以及带授权、输入和派工的工单 |
 | `src/client/settings.tsx` | 设置标签页：分组导航和屏幕上的分组 |
 | `src/client/settings-kit.tsx` | 设置块的构件：各阶段分组共享的设置、`useBlockDraft`、字段（包括来源 kind 的字段），以及保存历史 |
@@ -416,7 +415,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/locales.ts` | 两种语言的全部文案，以及 [001 领域模型](001-domain.md) 的术语表 |
 | `src/client/client.css`、`css.d.ts` | 面板的样式表，以文本加载 |
 
-`src/sources/github.ts`、`src/sources/gitlab.ts`、`src/sources/feishu.ts` 和 `src/pipeline/pipeline.ts` 导出适配器，由 `src/sources/adapters.ts` 汇总；主插件启动后为每条已存储来源记录运行其适配器。`package.json` 没有来源子路径导出，`cordis.patch.yml` 只插入主插件和两个会话预设。
+`src/sources/github.ts`、`src/sources/gitlab.ts` 与 `src/sources/feishu.ts` 描述来源类型；Git 记录只作为代码仓库，不产生触发器，由 `src/sources/adapters.ts` 汇总的消息来源适配器只有飞书。主插件启动后为每条已存储的消息来源记录运行其适配器。`package.json` 没有来源子路径导出，`cordis.patch.yml` 只插入主插件和两个会话预设。
 
 ## 测试
 
@@ -426,10 +425,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/stage.spec.ts` | 逐行覆盖工单阶段 |
 | `tests/policy.spec.ts` | 来源范围、准入层、准入表、授权重新校验、策略版本、设置迁移和评估结果 |
 | `tests/registry.spec.ts` | `SourceRegistry`：记录、校验、策略部分、渠道和线程上下文 |
-| `tests/sources.spec.ts` | `SourceContext` 上的飞书和 GitHub 来源：翻译、轮询和读取位置、拉取请求规则、健康 |
-| `tests/gitlab.spec.ts` | 带假 `glab` 的 `SourceContext` 上的 GitLab 来源：Issue、合并请求和评论触发器，双流轮询和游标，已订阅线程的评论，回复及其去重，健康，策略行，`find` 和上下文读取 |
-| `tests/commands.spec.ts` | 以部署账号进行的 CLI 调用、渠道的答复，以及限定在仓库内的 GitHub 调用 |
-| `tests/feishu-read.spec.ts`、`tests/github-read.spec.ts` | 飞书和 GitHub 读取 |
+| `tests/sources.spec.ts` | `SourceContext` 上的飞书来源：翻译、轮询和读取位置、健康 |
+| `tests/commands.spec.ts` | 以部署账号进行的 CLI 调用，以及限定在仓库内的 GitHub 调用 |
+| `tests/feishu-read.spec.ts` | 飞书读取 |
 | `tests/resources.spec.ts` | 来源资源按记录路由：真实 CLI 进程验证两条记录下同号 Issue、同 id 合并请求和同一条飞书消息各自读取自己的内容，以及主会话省略记录段时的失败与唯一记录的回退 |
 | `tests/admission-context.spec.ts`、`tests/feishu-image.spec.ts` | 评估的线程窗口，以及飞书图片读取 |
 | `tests/assessment.spec.ts` | MasterAssessor 为每次评估保留什么，以及何时释放 |
@@ -452,15 +450,15 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/settings.spec.ts` | 与模型或账号检查竞争的设置保存、被保存越过的策略同步，以及暂停、同步和块的拒绝 |
 | `tests/views.spec.ts` | 管理视图从 Store 派生的内容，例如被丢弃消息所属的线程 |
 | `tests/timeline.spec.ts` | 线程的页面和按时间再按 id 排序的触发器邻居，每个收到的触发器时间只有一种形态 |
-| `tests/migration.spec.ts` | 架构 11 迁移：每条已存储记录都处于当前形态，以及拒绝更旧的架构 |
+| `tests/migration.spec.ts` | 架构 13 迁移：每条已存储记录都处于当前形态，以及拒绝更旧的架构 |
 | `tests/store.spec.ts` | 仓库及其工作集（SQLite 和内存中一致）、kv 区域（`KV` 的每个键只在 `src/kv.ts` 和迁移中拼写）、设置历史与查询 |
 | `tests/prompts.spec.ts` | 提示词校验、组装和版本 |
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
-| `tests/scheduled.spec.ts` | 定时准入：不经过评估直接建单、显式授权依据、同一触发器幂等，以及流水线与代码来源记录停用后的授权重新校验 |
-| `tests/pipeline.spec.ts` | 任务流水线：CSV/TSV 与 `.xlsx` 读取、拆解与去重、飞书表格/复选框解析、CSV 回写、代码同步与开单/重试/回写的端到端状态机 |
+| `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、飞书文档读取、字段级预检文案与注册表扩展 |
+| `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败、回写与重启恢复 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |
 | `tests/panel-settings.spec.tsx`、`panel-prompts.spec.tsx`、`panel-deployment.spec.tsx`、`panel-panel.spec.tsx` | 设置分组、草稿和历史、提示词、部署页面，以及面板的搜索、术语表和路由记忆 |
@@ -507,7 +505,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 目前不会删除旧记录，因此以下内容会无限增长：`trigger`、`disposition` 和 `decision` 行；已结束的工单及其线程；outbox 的回执；以及 `kv` 中每个已保存的设置修订和提示词版本、每个会话曾使用的提示词修订号，以及来源按线程和按 Issue 或拉取请求保存的记录。
 
-`SCHEMA_VERSION` 只增不减。较新版本的数据库会拒绝启动；`src/app/migration.ts` 会在启动时把预发布架构 10 的数据库升级一次，并拒绝更旧的数据库。
+`SCHEMA_VERSION` 只增不减。较新版本的数据库会拒绝启动；`src/app/migration.ts` 会在启动时把预发布架构 10、11、12 的数据库升级到当前架构，并拒绝更旧的数据库。
 
 ## 面向模型的接口
 
@@ -580,20 +578,20 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tickets`、`triggers`、`threads`、`decisions` | 分页列表 `{items, next_offset}`；活动列表最新在前 |
 | `decision/<id>` | 一个决定 |
 | `thread/<key>` | 标签、工单、近期决定和一页触发器 |
-| `trigger/<id>` | 消息文本、被回复的触发器和相邻消息，不含 CI 运行 |
+| `trigger/<id>` | 消息文本、被回复的触发器和相邻消息 |
 | `ticket/<id>` | 相关 id、来源批次触发器、线程，以及派工和输入的前几页 |
 | 工单子资源 | `/assignments`、`/inputs`、`/assignment`、`/result`、`/report/<assignment id>`、`/transcript`、`/message/<n>`、`/input/<id>` |
 | `settings`、`settings/<block>` | 修订号和摘要，或可保存的完整块 |
 | `prompts`、`prompts/<revision>`、`prompts/current`、`prompts/defaults`、`prompt-preview/<id>` | 提示词配置和组装文本 |
 | `models`、`models/<provider>` | 可用模型 |
-| `feishu/[<record>/]<trigger id>/…`、`github/[<record>/]…`、`gitlab/[<record>/]…` | 原始来源记录，在来源技能中说明；记录段选择来源记录 |
+| `feishu/[<record>/]<trigger id>/…` | 飞书原始记录，在飞书技能中说明；记录段选择来源记录 |
 
 
 工单线程对仅作上下文关注标记为 `context`，对来源绑定标记为 `bound`。派工页面最新在前，并包含报告预览。用 `next_offset` 继续列表。`/input/<id>` 接受输入的名称或 id。`settings` 完整包含小块，并汇总策略块和来源块。
 
-来源资源包括消息邻域、`github/<record>/pulls/<n>/thread/<comment id>` 和 `github/<record>/commits/<sha>/checks`。记录段由资源路径给出：执行器会话省略时用其工单的来源记录，主会话省略时只在该类型恰好一条记录时采用它，多条记录则报错并列出记录 id；返回的 `next_resource` 总是带上记录段。飞书以触发器 id 作为记录限定，记录段可省略。
+来源资源包括消息邻域。飞书以触发器 id 作为记录限定，记录段可省略；GitHub / GitLab 只作为代码仓库，不提供资源读取。
 
-原始记录的消息以统一的紧凑形态读取，`{id, from, at, text, reply_to?, path?, line?, url?}`，而不是 GitHub 或飞书记录它们的方式。
+原始记录的消息以统一的紧凑形态读取，`{id, from, at, text, reply_to?, path?, line?, url?}`，而不是飞书记录它们的方式。
 
 执行器会话只读取自己的工单、其线程、抵达它或由其请求持有的触发器、它曾使用的提示词版本和原始记录，其页面不包含它无法读取的内容的 id、决定和其他工单。
 

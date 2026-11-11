@@ -117,10 +117,10 @@ export type MandateBasis = Received & { sender?: string; rules?: string[] } & (
   /** 来源机器人名单上的机器人的消息：最多只能是推断候选，永远不会是明确请求或停止。 */
   | { via: 'bot'; addressed?: 'mention' | 'direct'; observation: { mode: AcceptMode } }
   /**
-   * 定时任务源按配置直接准入：`pipeline` 是流水线记录，`task` 是任务项标识。
-   * 授权不来自消息，因此重新校验只检查流水线记录与代码来源记录是否仍然有效。
+   * 项目调度按配置直接准入：`project` 是项目记录，`task` 是任务项标识。
+   * 授权不来自消息，因此重新校验只检查项目及其引用的仓库与任务来源是否仍然有效。
    */
-  | { via: 'scheduled'; pipeline: string; task: string }
+  | { via: 'scheduled'; project: string; task: string }
 )
 
 /** 接受决策产生的不可变授权；执行受其约束，且它永不改变。 */

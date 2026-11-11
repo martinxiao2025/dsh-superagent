@@ -100,17 +100,18 @@ it('writes a schema 10 database in its current shape once, so nothing reads an o
   const store = new Store(path)
   expect(store.get('schema')).toBe(SCHEMA_VERSION)
   const settings = store.settings()
-  expect(Object.keys(settings.sources)).toEqual(['github-main'])
-  expect(settings.sources['github-main']).toEqual({ kind: 'github', enabled: true, config: { repository: 'acme/widgets', cli: 'gh' } })
+  expect(settings.sources).toEqual({})
+  expect(settings.codeRepos['github-main']).toEqual({ kind: 'github', name: 'github-main', enabled: true, config: { repository: 'acme/widgets', cli: 'gh' } })
   expect(settings.executor.prepare).toBe('echo prepare')
   // 当前设置是最新的修订版本，由迁移保存，因为最近保存的那份与它们不同。
   const [current, , second, first] = store.settingsHistory()
   expect(current).toMatchObject({ revision: 4, source: 'internal', settings })
   expect(store.get('settings')).toBeUndefined()
-  // 历史修订按原样保留：迁移不改写已保存的设置快照。
-  expect(first).toMatchObject({ source: 'web', settings: { sources: { 'feishu-team': { kind: 'feishu', enabled: true,
+  // 历史修订升级到四块结构：Git 记录搬入代码仓库并补上名称，飞书保留在消息来源。
+  expect(first).toMatchObject({ source: 'web', settings: { sources: { 'feishu-team': { kind: 'feishu', name: 'feishu-team', enabled: true,
     config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }] } } } } })
-  expect(second).toMatchObject({ source: 'orchestrator-tool', settings: { sources: { 'github-main': { kind: 'github', enabled: true, config: {} } } } })
+  expect(second).toMatchObject({ source: 'orchestrator-tool', settings: { codeRepos: { 'github-main': { kind: 'github', name: 'github-main',
+    enabled: true, config: {} } } } })
   expect(store.get('prompt-version:1')).toMatchObject({ legacy: { config: { guides: { release: 'Use guide/github and dsh-tag-feishu.' } } },
     config: { skills: { release: 'Use the github section and dsh-superagent-feishu.' } } })
   // 无效的历史提示词版本会在 legacy 下保留原始值，并回退到前一个版本的配置。
@@ -151,8 +152,7 @@ it('writes a schema 10 database in its current shape once, so nothing reads an o
   expect(store.decisions.get('d1')!.mandate!.basis).toEqual({ via: 'listed', rules: ['copy'], observation: {}, authority: 'proactive_rule' })
   expect(store.threads.get('github:5')!.evaluating!.basis).toEqual({ via: 'admission', source: 'github', scope: { number: 5 }, row: 'issues',
     cell: 'listedUnaddressed', observation: { mode: 'auto' } })
-  // kv：Input 在读取时由其工单渲染，因此不保留正文；没有任何地方读取的记录会被移除，
-  // 被移除的 Issue 来源的记录也是如此（迁移已转换它们）。
+  // kv：Input 在读取时由其工单渲染，因此不保留正文；没有任何地方读取的记录会被移除。
   expect(store.get('ticket/t1/input/i0')).toBeUndefined()
   expect(store.get('ticket/t1/input/i9')).toBeUndefined()
   expect(store.keys('task/')).toEqual([])
@@ -160,7 +160,6 @@ it('writes a schema 10 database in its current shape once, so nothing reads an o
     'feishu-read:orchestrator-1:feishu/e1/thread', 'github-read:worker-t1:github/pulls/7', 'feishu-source-link:oc_team:om_1', 'orchestrator-1:prompt-preview/abc']) {
     expect(store.get(name)).toBeUndefined()
   }
-  expect(store.get('github-issue-pending')).toBeUndefined()
   // schema 6 的表保留下来，连同 schema 7 导入时漏掉的行。
   expect(store.db.prepare("SELECT name FROM sqlite_master WHERE name = 'inbox'").get()).toBeDefined()
   store.close()
@@ -202,7 +201,7 @@ it('changes nothing when one step fails: the database stays at schema 10 as it w
     updatedAt: '2', mandate: mandate({ via: 'listed' }), meta: { sourceTriggerId: 'trig-1', workspace: '/w/fix-1' } }
   // 当前设置必须能通过校验；无效值会中止迁移事务。
   schema10(path, { settings: { executor: { maxWorkers: 'many' } } }, { ticket: [ticket] })
-  expect(() => new Store(path)).toThrow(/^The orchestrator database is unchanged at schema 10: its migration to schema 11 failed: the current settings: /)
+  expect(() => new Store(path)).toThrow(/^The orchestrator database is unchanged at schema 10: its migration to schema 13 failed: the current settings: /)
   const db = new DatabaseSync(path)
   expect(db.prepare("SELECT value FROM kv WHERE key='schema'").get()).toEqual({ value: '10' })
   expect(JSON.parse(String(db.prepare("SELECT value FROM ticket WHERE id='t1'").get()!.value))).toMatchObject({ meta: { workspace: '/w/fix-1' } })
@@ -367,61 +366,6 @@ it('opens a database the last schema 10 build left, adds what this version keeps
   expect(again.db.prepare('SELECT COUNT(*) AS n FROM effect').get()).toEqual({ n: 2 })
   again.close()
 })
-it('writes the Sources\' records in their current shape once, so no Source converts an earlier one when it reads it', () => {
-  const path = join(directory, 'db.sqlite')
-  const recent = new Date(Date.now() - 3600_000).toISOString()
-  const dm = { source: 'feishu', thread: 'feishu:oc_dm', address: { chatId: 'oc_dm', messageId: 'om_1' } }
-  const evaluating = { id: 'e1', threadKey: 'github:5', triggerIds: ['issue'], strength: 'inferred', actor, policyVersion: 'v1',
-    startedAt: '',
-    deadline: '', basis: { via: 'listed' } }
-  schema10(path, {
-    'feishu-chats': { oc_dm: true, oc_team: false }, 'feishu-history:oc_team': '2026-09-01T00:00:00.000Z',
-    // 更早的版本把聊天的主题保存为列表。
-    'feishu-history-threads:oc_team': ['omt_old'],
-    'github-thread:7': '2026-09-02T00:00:00.000Z', 'thread-since:github:7': '2026-09-03T00:00:00.000Z',
-    'github-thread:8': '2026-09-04T00:00:00.000Z',
-    'github-issue-pending': { a: { number: 12, at: recent }, b: { number: 13,
-      at: '2026-01-01T00:00:00.000Z' } }, 'github-issues-since': 'x',
-  }, {
-    trigger: [{ id: 'dm', source: 'feishu', threads: [{ source: 'feishu', id: 'oc_dm:om_1' }], actor, human: true,
-      at: '2026-09-01T00:00:00Z',
-      text: 'fix', channel: dm, meta: {} },
-    { id: 'issue', source: 'github-issue', threads: [{ source: 'github', id: '12' }], actor: { source: 'github', id: 'alice' }, human: true,
-      at: '2026-09-01T00:00:00Z', text: 'Login fails', meta: { number: 12 } }],
-    thread: [{ key: 'feishu:oc_team:om_9', ref: { source: 'feishu', id: 'oc_team:om_9' }, createdAt: '', subscriptions: [], correlated: [],
-      pending: [], meta: {} },
-    { key: 'github:5', ref: { source: 'github', id: '5' }, createdAt: '', subscriptions: [], correlated: [], pending: [], evaluating,
-      meta: {} }],
-  })
-  const db = new DatabaseSync(path)
-  db.prepare('INSERT INTO outbox (id, value) VALUES (?, ?)').run('r1', JSON.stringify({ id: 'r1', channel: dm, text: 'Done', kind: 'reply',
-    attempts: 0, error: '' }))
-  // 在效果记录触发器之前排队的评估：一个的评估正在运行，另一个的评估已结束。
-  for (const [seq, evalId] of [[1, 'e1'], [2, 'e2']] as const) {
-    db.prepare('INSERT INTO effect (kind, key, value, seq, due, since) VALUES (?, ?, ?, ?, ?, ?)').run('assessment', evalId, '{}', seq, 0,
-      '')
-  }
-  db.close()
-  const store = new Store(path)
-  // 模式 10 的飞书键没有记录段，迁移按旧键名改写。
-  expect(store.get('feishu-history-threads:oc_team')).toEqual({ omt_old: '2026-09-01T00:00:00.000Z' })
-  expect(store.triggers.get('dm')!.channel!.address).toEqual({ chatId: 'oc_dm', messageId: 'om_1', direct: 'true' })
-  expect(store.receipts.waiting()[0]!.channel.address).toEqual({ chatId: 'oc_dm', messageId: 'om_1', direct: 'true' })
-  expect(store.threads.get('feishu:oc_team:om_9')!.meta.url).toBe('https://applink.feishu.cn/client/chat/open?openChatId=oc_team')
-  expect(store.triggers.get('issue')!.source).toBe('github')
-  // 在轮询时间范围内的等待提及会被重新读取；更早的那条不算新请求。
-  expect(store.get(KV.github.retries('github'))).toEqual({ 12: { since: recent, pr: false } })
-  expect(store.get(KV.github.cursor('github', 7))).toBe('2026-09-03T00:00:00.000Z')
-  expect(store.get(KV.github.cursor('github', 8))).toBe('2026-09-04T00:00:00.000Z')
-  for (const name of ['github-issue-pending', 'github-issues-since', 'github-thread:7', 'thread-since:github:7', 'github-thread:8']) {
-    expect(store.get(name)).toBeUndefined()
-  }
-  const effects = store.db.prepare("SELECT key, value FROM effect WHERE kind = 'assessment'").all().map(row => [row.key,
-    JSON.parse(String(row.value))])
-  expect(effects).toEqual([['e1', { triggerId: 'issue' }]])
-  store.close()
-})
-
 it('keeps each fact of a ticket once: its end, its latest report, and no worker Session it can derive', () => {
   const base = { id: 't', title: 'Fix', decisionId: 'd', channels: [], inputs: [], undelivered: [], createdAt: '1', updatedAt: '2',
     mandate: mandate({ via: 'listed' }), origin: { triggerId: 'x', triggerIds: ['x'] }, execution: { name: 'fix', directory: '/w', session: 'worker-t', assignment: 'Do it.' } }
@@ -476,7 +420,7 @@ it('names the ticket it stopped at when a ticket does not read, and leaves the d
   const path = join(directory, 'db.sqlite')
   const { inputs: _inputs, ...broken } = ticket10('t9')
   schema10(path, {}, { ticket: [broken] })
-  expect(() => new Store(path)).toThrow(/^The orchestrator database is unchanged at schema 10: its migration to schema 11 failed: ticket t9: /)
+  expect(() => new Store(path)).toThrow(/^The orchestrator database is unchanged at schema 10: its migration to schema 13 failed: ticket t9: /)
   const db = new DatabaseSync(path)
   expect(db.prepare("SELECT value FROM kv WHERE key='schema'").get()).toEqual({ value: '10' })
   expect(JSON.parse(String(db.prepare("SELECT value FROM ticket WHERE id='t9'").get()!.value))).toEqual(broken)
@@ -536,5 +480,41 @@ it('delivers the candidate of an Eval in progress at the upgrade again, so its d
   const store = new Store(path)
   const effects = store.db.prepare("SELECT key, value FROM effect WHERE kind = 'assessment'").all().map(row => [row.key, JSON.parse(String(row.value))])
   expect(effects).toEqual([['e9', { triggerId: 'issue-9' }]])
+  store.close()
+})
+
+it('splits schema 11 settings into message sources, code repos, task sources and projects, and clears pipeline state', () => {
+  const path = join(directory, 'db.sqlite')
+  new Store(path).close()
+  const db = new DatabaseSync(path)
+  const set = (name: string, value: unknown) => db.prepare('INSERT INTO kv VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(name, JSON.stringify(value))
+  set('schema', 11)
+  set(KV.settings.revision, 1)
+  set('settings-version:1', { revision: 1, savedAt: '', source: 'web', policyVersion: '', policyChanged: false, notified: [], settings: {
+    // 旧快照：Git 记录与飞书混在 sources，pipeline 任务源与 projectWorkers 仍存在，且所有记录都没有 name。
+    sources: {
+      feishu: { kind: 'feishu', enabled: true, config: {} },
+      github: { kind: 'github', enabled: true, config: { repository: 'acme/widgets' } },
+      'gitlab-main': { kind: 'gitlab', enabled: true, config: { project: 'acme/widgets' } },
+      tasks: { kind: 'pipeline', enabled: true, config: { codeSource: 'github', taskKind: 'excel', taskFile: '/tmp/tasks.csv' } },
+    },
+    policy: { sources: { feishu: { allowed: [], admission: {} }, tasks: { allowed: [], admission: {} } } },
+    executor: { maxWorkers: 3, projectWorkers: 2 },
+  } })
+  set('pipeline-state:tasks', { cursor: 3 })
+  set('pipeline-items:tasks', [{ id: '1' }])
+  db.close()
+  const store = new Store(path)
+  const settings = store.settings()
+  expect(store.get(KV.store.schema)).toBe(SCHEMA_VERSION)
+  // 飞书保留在消息来源；Git 记录搬入代码仓库并补上名称；pipeline 记录不迁移。
+  expect(settings.sources).toMatchObject({ feishu: { kind: 'feishu', name: 'feishu', enabled: true } })
+  expect(Object.keys(settings.sources)).toEqual(['feishu'])
+  expect(settings.codeRepos).toMatchObject({ github: { kind: 'github', name: 'github' }, 'gitlab-main': { kind: 'gitlab', name: 'gitlab-main' } })
+  expect(settings.taskSources).toEqual({})
+  expect(settings.projects).toEqual({})
+  expect(settings.executor).not.toHaveProperty('projectWorkers')
+  expect(settings.policy.sources).not.toHaveProperty('tasks')
+  for (const key of ['pipeline-state:tasks', 'pipeline-items:tasks']) expect(store.get(key)).toBeUndefined()
   store.close()
 })

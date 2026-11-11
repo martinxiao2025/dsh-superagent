@@ -7,17 +7,16 @@ import { z } from 'zod'
 import { isoTime, said, type AcceptMode, type AdmissionCell, type ChannelRef, type Decision, type Execution, type Follow, type MandateBasis,
   type Reason, type Thread, type Ticket, type TicketInput, type TriggerDisposition } from '../core/index.ts'
 import { feishuChatLink } from '../sources/feishu-channel.ts'
-import { POLL_HORIZON_MS } from '../sources/poll.ts'
 import { SettingsSchema, policyVersion, type SettingsOrigin } from '../policy.ts'
 import { autoMergeThreshold, teamDefaults } from './context.ts'
 import { PromptConfigSchema, type PromptConfig, type PromptVersion } from './prompts.ts'
 import type { EffectKind, EffectPayloads } from './effects.ts'
 import { promptsNotice, settingsNotice, subscriptionNotice } from './notices.ts'
+import { KV, record, type Key } from '../kv.ts'
 import type { SettingsVersion, Store } from './store.ts'
 import { Versions } from './versions.ts'
-import { KV, record, type Key } from '../kv.ts'
 
-export const SCHEMA_VERSION = 11
+export const SCHEMA_VERSION = 13
 /** 此构建可直接打开并迁移的最旧数据库模式版本。 */
 export const OLDEST_SCHEMA = 10
 /** 返回说明为何无法打开 `version` 的错误消息：更旧的模式需要新的状态目录。 */
@@ -87,6 +86,51 @@ export function migrateTo11(store: Store): void {
   }
   step('the reasons', () => { reasonsAsCodes(store) })
   step('the Triggers\' times', () => { triggerTimes(store) })
+}
+/**
+ * 将模式 11 的 `sources` 拆分为消息来源、代码仓库、任务来源与项目：
+ * GitHub / GitLab 记录移入 `codeRepos`，飞书保留在 `sources`，pipeline 记录直接删除（不迁移）。
+ * 同时补齐缺失的记录名称并移除已废弃的 `executor.projectWorkers`。
+ */
+export function migrateTo12(store: Store): void {
+  step('the settings versions', () => {
+    for (const name of store.keys('settings-version:')) {
+      const version = store.get<SettingsVersion>(name)
+      if (!version) continue
+      store.set(name, { ...version, settings: upgradeSettings(version.settings) })
+    }
+  })
+  // pipeline 运行状态只服务已删除的功能；Git 轮询游标仍由 P1 保留的旧运行时使用，不在此清理。
+  store.db.exec(`DELETE FROM kv WHERE key LIKE 'pipeline-state:%' OR key LIKE 'pipeline-items:%'`)
+}
+
+/** 把一份旧设置快照转换成当前四块结构；重复执行结果不变。 */
+function upgradeSettings(value: unknown): unknown {
+  if (!isObject(value)) return value
+  const sources = isObject(value.sources) ? value.sources : {}
+  const codeRepos: Stored = isObject(value.codeRepos) ? { ...value.codeRepos } : {}
+  const kept: Stored = {}
+  const removed = new Set<string>()
+  for (const [id, record] of Object.entries(sources)) {
+    if (!isObject(record)) continue
+    const kind = String(record.kind ?? '')
+    if (kind === 'pipeline') { removed.add(id); continue }
+    const name = text(record.name) ?? id
+    if (kind === 'github' || kind === 'gitlab') {
+      codeRepos[id] = { kind, name, enabled: record.enabled !== false, config: isObject(record.config) ? record.config : {} }
+    } else kept[id] = { ...record, name }
+  }
+  for (const [id, record] of Object.entries(codeRepos)) {
+    if (isObject(record)) codeRepos[id] = { ...record, name: text(record.name) ?? id }
+  }
+  const policy = isObject(value.policy) ? value.policy : undefined
+  const parts = isObject(policy?.sources) ? Object.fromEntries(Object.entries(policy!.sources as Stored).filter(([id]) => !removed.has(id))) : undefined
+  const executor = isObject(value.executor)
+    ? Object.fromEntries(Object.entries(value.executor).filter(([key]) => key !== 'projectWorkers')) : undefined
+  return { ...value, sources: kept, codeRepos, taskSources: isObject(value.taskSources) ? value.taskSources : {},
+    projects: isObject(value.projects) ? value.projects : {},
+    ...policy ? { policy: { ...policy, ...parts ? { sources: parts } : {} } } : {},
+    ...executor ? { executor } : {} }
 }
 /**
  * 将触发器和线程时间戳规范化为固定宽度的毫秒 ISO 字符串，使字典序文本顺序与
@@ -168,7 +212,7 @@ function settingsAsVersions(store: Store): void {
   const newest = Math.max(versions.revision(), ...versions.list().map(version => version.revision))
   if (newest) store.set(KV.settings.revision, newest)
   if (JSON.stringify(versions.current()?.settings) !== JSON.stringify(current)) {
-    const settings = SettingsSchema.parse(current)
+    const settings = SettingsSchema.parse(upgradeSettings(current))
     versions.save(revision => ({ revision, savedAt: new Date().toISOString(), source: 'internal', policyVersion: policyVersion(settings),
       policyChanged: false, notified: [], settings }))
   }
@@ -453,8 +497,6 @@ function migrateSourceRecords(store: Store): void {
   feishuTopics(store)
   feishuDirectAddresses(store)
   feishuThreadLinks(store)
-  issueSourceRecords(store)
-  githubCursors(store)
   assessmentTriggers(store)
 }
 /** 模式 10 的飞书键没有记录段；迁移只读写这些旧键，运行时的新键由来源按记录写入。 */
@@ -501,33 +543,6 @@ function feishuThreadLinks(store: Store): void {
     if (thread.ref.source !== 'feishu' || typeof thread.meta.url === 'string' || store.read.firstTrigger(thread.key)?.url) continue
     const chatId = thread.ref.id.split(':')[0]
     if (chatId) store.threads.save({ ...thread, meta: { ...thread.meta, url: feishuChatLink(lark ? 'lark' : 'feishu', chatId) } })
-  }
-}
-/**
- * 将触发器从已移除的 `github-issue` 来源重新分配到 `github`，在每个曾有 pending 消息的 issue 上、
- * `POLL_HORIZON_MS` 内从最早的等待消息安排重试，并删除过时的 `github-issue` KV 键。
- */
-function issueSourceRecords(store: Store): void {
-  store.db.exec(`UPDATE trigger SET value = json_set(value, '$.source', 'github') WHERE value ->> '$.source' = 'github-issue'`)
-  const pending = store.get('github-issue-pending' as Key<Record<string, { number: number; at: string }>>) ?? {}
-  const retries = { ...store.get(KV.github.retries('github')) }
-  for (const { number, at } of Object.values(pending)) {
-    if (!(Date.now() - Date.parse(at) < POLL_HORIZON_MS)) continue
-    const retry = retries[number]
-    retries[number] = { ...retry, since: retry && retry.since < at ? retry.since : at, pr: retry?.pr ?? false }
-  }
-  if (Object.keys(retries).length) store.set(KV.github.retries('github'), retries)
-  const kept = ['github-issue-pending', 'github-issues-since', 'github-issues-started-at', ...store.keys('github-issue-eligibility:')]
-  for (const name of kept) store.delete(name)
-}
-/** 将每个 issue/PR 的通知和线程订阅游标合并为单个持有较晚时间戳的游标。 */
-function githubCursors(store: Store): void {
-  for (const name of [...store.keys('github-thread:'), ...store.keys('thread-since:github:')]) {
-    const at = store.get<string>(name as Key<string>)
-    const cursor = KV.github.cursor('github', Number(name.slice(name.lastIndexOf(':') + 1)))
-    const current = store.get(cursor)
-    if (at && !(current && current >= at)) store.set(cursor, at)
-    store.delete(name)
   }
 }
 /** 为待处理评估副作用附加触发器 ID，并重新入队未投递的活跃评估，使其超时截止开始计时。 */

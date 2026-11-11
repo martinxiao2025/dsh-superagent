@@ -3,6 +3,7 @@ import { SETUP_FIELDS } from '../../deployment.ts'
 import { KV } from '../../kv.ts'
 import { policyVersion } from '../../policy.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
+import { taskSources } from '../../task-sources/index.ts'
 import { declaredVariables, executionRoot } from '../execution-environment.ts'
 import type { Store } from '../store.ts'
 import { problemOf, sourceHealth, type HealthMap, type SetupState } from './sources.ts'
@@ -30,19 +31,32 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
   return {
     policyVersion: policyVersion(settings),
     // 已安装的来源类型目录；面板用它渲染「新增来源」的选项。
-    kinds: sources.kindsList().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description })),
+    kinds: sources.kindsList().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
     blocks: { policy: block('policy', settings.policy), eval: block('eval', settings.eval), executor: block('executor',
       settings.executor) },
     sources: sources.instances(settings).map(instance => {
       const kind = sources.kindByName(instance.kind)
       const problem = problemOf(instance.id, setup)
       const { id, title } = sourceHealth(sources, instance, health)
-      return { id, kind: instance.kind, title, description: kind?.description ?? { zh: '', en: '' }, installed: instance.installed,
-        value: { enabled: instance.enabled, config: instance.config }, revision: store.blockRevision(`source:${instance.id}`),
+      return { id, kind: instance.kind, name: instance.name, title, description: kind?.description ?? { zh: '', en: '' }, installed: instance.installed,
+        value: { name: instance.name, enabled: instance.enabled, config: instance.config }, revision: store.blockRevision(`source:${instance.id}`),
         restarts: SETUP_FIELDS[instance.kind] ?? [], fields: kind?.fields ?? [], facts: kind?.facts?.(setup.deployment?.sources[instance.id]) ?? {},
         labels: store.get(KV.sources.labels(instance.id)) ?? {}, openTickets: openTicketCount(store, instance.id),
         ...problem ? { problem } : {}, ...policyOf(sources, instance.id, health) }
     }),
+    // 代码仓库、任务来源与项目在 P1 只提供记录与版本；任务来源的字段目录与预检在 P2 接入。
+    codeRepos: Object.entries(settings.codeRepos).map(([id, record]) => ({ id, kind: record.kind, name: record.name, enabled: record.enabled,
+      value: { name: record.name, enabled: record.enabled, config: record.config }, revision: store.blockRevision(`codeRepo:${id}`) })),
+    // 任务来源类型目录由驱动注册表生成：新增一个驱动后，面板下拉自动出现。
+    taskSourceKinds: taskSources.kinds().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
+    taskSources: Object.entries(settings.taskSources).map(([id, record]) => {
+      const kind = taskSources.kind(record.kind)
+      return { id, kind: record.kind, name: record.name, enabled: record.enabled,
+        title: kind?.title, fields: kind?.fields ?? [],
+        value: { name: record.name, enabled: record.enabled, config: record.config }, revision: store.blockRevision(`taskSource:${id}`) }
+    }),
+    projects: Object.entries(settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
+      codeRepo: project.codeRepo, taskSource: project.taskSource, value: project, revision: store.blockRevision(`project:${id}`) })),
     environment: { root: executionRoot(settings, stateDir), variables: declaredVariables(sources, settings) },
   }
 }

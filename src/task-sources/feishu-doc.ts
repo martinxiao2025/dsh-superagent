@@ -3,8 +3,7 @@
  * 该实现未在本机凭据下验证；接口与错误路径与现有飞书来源保持一致，不读取或外传任何 token。
  */
 import { z } from 'zod'
-import type { Commands } from '../infra/commands.ts'
-import type { TaskColumns, PipelineConfig } from './config.ts'
+import type { TaskFieldMap } from './kind.ts'
 import { importTasks, simpleHash, type RawTask } from './tasks.ts'
 
 const nodeSchema = z.object({ node: z.object({ obj_token: z.string(), obj_type: z.string() }) })
@@ -21,14 +20,13 @@ export function feishuToken(url: string): { kind: 'wiki' | 'docx'; token: string
   throw new Error('无法从地址中解析飞书知识库节点')
 }
 
-/**
- * 读取飞书任务清单。
- * @param commands 已切换到 `config.feishuSource` 记录的命令入口。
- */
-export async function readFeishuTasks(commands: Commands, config: PipelineConfig, columns: TaskColumns): Promise<RawTask[]> {
-  const reference = feishuToken(config.wikiUrl)
-  const token = reference.kind === 'wiki' ? await resolveWikiNode(commands, reference.token) : reference.token
-  const { content } = contentSchema.parse(await commands.lark(['api', 'GET', `/open-apis/docx/v1/documents/${token}/raw_content`]))
+/** 一次飞书 OpenAPI 调用；由已解析记录的 CLI 或测试替身提供。 */
+export type LarkCall = (args: string[]) => Promise<unknown>
+/** 用任意 `lark` 调用读取任务清单；新增来源的预检在记录尚未保存时使用它。 */
+export async function readFeishuTasksWith(lark: LarkCall, wikiUrl: string, columns: TaskFieldMap): Promise<RawTask[]> {
+  const reference = feishuToken(wikiUrl)
+  const token = reference.kind === 'wiki' ? await resolveWikiNode(lark, reference.token) : reference.token
+  const { content } = contentSchema.parse(await lark(['api', 'GET', `/open-apis/docx/v1/documents/${token}/raw_content`]))
   const table = tableRows(content)
   if (table.length && Object.hasOwn(table[0]!, columns.title)) {
     const header = Object.keys(table[0]!)
@@ -38,9 +36,9 @@ export async function readFeishuTasks(commands: Commands, config: PipelineConfig
 }
 
 /** 把知识库节点解析为文档 token；非文档节点给出明确错误。 */
-async function resolveWikiNode(commands: Commands, token: string): Promise<string> {
+async function resolveWikiNode(lark: LarkCall, token: string): Promise<string> {
   const params = JSON.stringify({ token })
-  const { node } = nodeSchema.parse(await commands.lark(['api', 'GET', '/open-apis/wiki/v2/spaces/get_node', '--params', params]))
+  const { node } = nodeSchema.parse(await lark(['api', 'GET', '/open-apis/wiki/v2/spaces/get_node', '--params', params]))
   if (node.obj_type !== 'docx') throw new Error(`知识库节点不是文档：${node.obj_type}`)
   return node.obj_token
 }

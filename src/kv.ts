@@ -5,8 +5,6 @@
 import type { PromptVersion } from './app/prompts.ts'
 import type { SettingsVersion } from './app/store.ts'
 import type { SettingsSave } from './policy.ts'
-import type { Retry } from './sources/github.ts'
-
 /** 值为类型 `V` 的 KV 记录的键；普通字符串表示无类型的键。 */
 export type Key<V> = string & { readonly __value?: V }
 /** 共享前缀的 KV 记录族：可调用以由名称各部分构建键，并暴露用于列举的 `prefix`。 */
@@ -39,17 +37,6 @@ export const KV = {
   /** 按来源解析的显示名称，把有名称的 ID（例如飞书会话 ID）映射到其显示名称。 */
   sources: { labels: family<Record<string, string>, [source: string]>('source-labels:') },
   /**
-   * GitHub 来源：按记录记录的通知游标和待处理重试；按记录与 Issue/PR 记录的读取游标，由通知读取和轮询读取共用；
-   * 按记录与流记录的游标、按类型记录的启动时间，以及 ETag；按记录记录的默认分支 CI 状态；
-   * 以及按记录与 PR 记录的 CI 指纹和修订号
-   * （`revision` 统计已报告的 CI 变化次数，使每次变化都产生不同的触发器 ID）。
-   */
-  github: { since: family<string, [record: string]>('github-since:'), retries: family<Record<string, Retry>, [record: string]>('github-retry:'),
-    cursor: family<string, [record: string, number: number]>('github-cursor:'),
-    stream: family<{ since: string; started: Record<string, string>; etag?: string }, [record: string, stream: string]>('github-stream:'),
-    branchCi: family<{ branch?: string; failures?: string[]; revision: number }, [record: string]>('github-branch-ci:'),
-    ci: family<{ fingerprint: string; revision: number }, [record: string, number: number]>('github-ci:') },
-  /**
    * 飞书来源：按记录记录已知会话（私聊为 `true`）；按记录与会话记录的历史游标，以及把话题 ID 映射到最近可见时间戳的活动话题；
    * 以及按轮询线程记录的已见消息 ID 和初始化标记（线程键已含记录）。
    */
@@ -57,13 +44,4 @@ export const KV = {
     history: family<string, [record: string, chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [record: string, chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
-  /**
-   * 任务流水线：按记录保存最近一次运行状态与任务项状态；
-   * 任务项状态用稳定键索引，用于去重、续跑与回写。
-   */
-  pipeline: { state: family<import('./pipeline/runner.ts').RunState, [record: string]>('pipeline-state:'),
-    items: family<import('./pipeline/tasks.ts').ItemRecords, [record: string]>('pipeline-items:') },
-  /** GitLab Source: 每个记录、每个流（issues/merge_requests）独立的光标，以及每个记录与 Thread 的 notes 光标。 */
-  gitlab: { cursor: family<string, [record: string, stream: 'issues' | 'merge_requests']>('gitlab-cursor:'),
-    notes: family<string, [record: string, thread: string]>('gitlab-notes:') },
 }

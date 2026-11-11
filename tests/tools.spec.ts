@@ -20,7 +20,7 @@ it('reads the lists, a ticket, a decision, the settings, the prompts and the mod
   const { ticket, trigger } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
   await h.acceptedTicket(feishu('2', '@bot 再修一个'))
   const tickets = await read('tickets', { limit: 1 })
-  expect(tickets).toEqual({ items: [expect.objectContaining({ ticket_id: expect.any(String), state: 'working' })], next_offset: 1 })
+  expect(tickets).toEqual({ items: [expect.objectContaining({ ticket_id: expect.any(String), state: expect.stringMatching(/^working/) })], next_offset: 1 })
   expect(await read('tickets', { offset: 1 })).toMatchObject({ items: [expect.objectContaining({ ticket_id: ticket.id })], next_offset: null })
   const triggers = await read('triggers') as { items: { trigger_id: string }[] }
   expect(triggers.items.map(item => item.trigger_id)).toEqual([expect.any(String), trigger.id])
@@ -33,10 +33,10 @@ it('reads the lists, a ticket, a decision, the settings, the prompts and the mod
     trigger_id: trigger.id, assignments: { items: [expect.objectContaining({ state: 'running' })] }, assignment: `ticket/${ticket.id}/assignment` })
   // 设置会指明每个块的修订版本并保存小块；块按保存时使用的名称整体读取。
   const settings = await read('settings')
-  expect(settings).toMatchObject({ eval: { value: { mode: 'auto' } }, policy: { revision: expect.any(Number), allowed: { feishu: 1, github: 1 }, read: 'settings/policy' },
-    pause: { value: { paused: false } }, sources: expect.arrayContaining([expect.objectContaining({ id: 'github', read: 'settings/source:github' })]) })
+  expect(settings).toMatchObject({ eval: { value: { mode: 'auto' } }, policy: { revision: expect.any(Number), allowed: { feishu: 1 }, read: 'settings/policy' },
+    pause: { value: { paused: false } }, sources: expect.arrayContaining([expect.objectContaining({ id: 'feishu', read: 'settings/source:feishu' })]) })
   expect(JSON.stringify(settings)).not.toContain('ou_alice')
-  for (const block of ['policy', 'eval', 'executor', 'pause', 'source:github']) {
+  for (const block of ['policy', 'eval', 'executor', 'pause', 'source:feishu']) {
     const page = await read(`settings/${block}`) as { text: string }
     expect(JSON.parse(page.text)).toEqual({ block, revision: h.runtime.store.blockRevision(block as 'policy'), value: h.runtime.settings.block(block).value })
   }
@@ -265,15 +265,16 @@ it('checks an acknowledgement against the IM word limit, not a character count',
 
 it('saves a settings block by name, a Source\'s block with the Source\'s id', async () => {
   const save = (args: Record<string, unknown>) => h.runTool(h.runtime.masterId, 'orchestrator_settings_save', args)
-  const github = { config: h.runtime.store.settings().sources.github!.config, revision: h.runtime.store.blockRevision('source:github') }
-  const off = { enabled: false, config: github.config }
-  await expect(save({ block: 'source', value: off, revision: github.revision })).rejects.toThrow('source names the Source')
+  const feishu = { config: h.runtime.store.settings().sources.feishu!.config, revision: h.runtime.store.blockRevision('source:feishu') }
+  const name = h.runtime.store.settings().sources.feishu!.name
+  const off = { name, enabled: false, config: feishu.config }
+  await expect(save({ block: 'source', value: off, revision: feishu.revision })).rejects.toThrow('source names the Source')
   // 启停记录会改变部署检查的材料，与 CLI、仓库一样只能由管理页修改。
-  await expect(save({ block: 'source:github', value: off, revision: github.revision })).rejects.toThrow()
-  await expect(save({ block: 'source', source: 'github', value: off, revision: github.revision })).rejects.toThrow('management panel')
-  const tuned = { enabled: true, config: { ...github.config, observeIssues: true } }
-  expect(await save({ block: 'source', source: 'github', value: tuned, revision: github.revision })).toMatchObject({ saved: true })
-  expect(h.runtime.store.settings().sources.github?.config.observeIssues).toBe(true)
+  await expect(save({ block: 'source:feishu', value: off, revision: feishu.revision })).rejects.toThrow()
+  await expect(save({ block: 'source', source: 'feishu', value: off, revision: feishu.revision })).rejects.toThrow('management panel')
+  const tuned = { name, enabled: true, config: feishu.config }
+  expect(await save({ block: 'source', source: 'feishu', value: tuned, revision: feishu.revision })).toMatchObject({ saved: true })
+  expect(h.runtime.store.settings().sources.feishu?.config).toMatchObject(feishu.config)
   expect(await save({ block: 'pause', value: { paused: true }, revision: 0 })).toEqual({ paused: true })
 })
 
@@ -395,11 +396,6 @@ it('shows a candidate with its thread\'s tickets open first, the tickets it reac
   expect((followup.related_tickets as { ticket_id: string }[]).map(card => card.ticket_id)).toEqual([a.id, b.ticket_id])
   expect(followup).toMatchObject({ tickets_total: 2, delivered_to: [a.id], thread: `feishu:${CHAT}:om_1` })
   expect(String(followup.next_action).length).toBeLessThanOrEqual(100)
-  // 别处提到拉取请求的消息会读取跟随它的工单。
-  const thread = { key: 'github:123', ref: { source: 'github', id: '123' }, createdAt: '', subscriptions: [a.id], correlated: [], pending: [], meta: {} }
-  h.runtime.store.threads.save(thread)
-  h.runtime.receive(feishu('4', '@bot 看看 #123 的进展')); await h.runtime.idle()
-  expect(relaysOf('candidate').at(-1)).toMatchObject({ related_tickets: [], tickets_total: 0, referenced_tickets: [{ ticket_id: a.id }] })
 })
 
 it('relays a worker\'s report with its ticket card and the start of its summary, and a question with the card alone', async () => {

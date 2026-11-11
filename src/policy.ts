@@ -5,6 +5,9 @@
 import { isAbsolute } from 'node:path'
 import { LIMITS } from './limits.ts'
 import { z } from 'zod'
+import { CodeRepoRecordSchema } from './code-repos/kind.ts'
+import { ProjectSchema } from './projects/kind.ts'
+import { TaskSourceRecordSchema } from './task-sources/kind.ts'
 import { ADMISSION_DEFAULTS, type Admission, type AdmissionCell, type AdmissionRow } from './admission.ts'
 import { key, type AssessmentOutcome, type Mandate, type Policy, type PolicyEffect, type SourceScope, type Strength, type Thread, type Ticket,
   type Trigger, type ActorRef, type GateResult } from './core/index.ts'
@@ -88,31 +91,46 @@ export const EvalConfigSchema = z.object({
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
-/** 执行器设置：工作单元模型、并发数、单项目并发上限、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令。 */
+/** 执行器设置：工作单元模型、全局并发数、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令。 */
 export const ExecutorConfigSchema = z.object({
   model: RoleModelSchema.nullable().default(null),
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
-  // 0 表示自动：单个项目最多占全局并行数的一半（向上取整，至少 1），避免一个项目吃满全部槽位。
-  projectWorkers: z.number().int().min(LIMITS.projectWorkers.min).max(LIMITS.projectWorkers.max).default(0),
   directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
 }).strict()
-/** 来源记录：键是记录 ID，`kind` 选择适配器，`config` 由适配器 schema 校验。 */
+/** 消息来源记录：键是记录 ID，`kind` 选择适配器，`config` 由适配器 schema 校验。 */
 export const SourceInstanceSchema = z.object({
   kind: z.string().trim().regex(/^[a-z][a-z0-9-]*$/, '来源类型'),
+  /** 面板显示的项目名称，必填。 */
+  name: z.string().trim().min(1).max(LIMITS.sourceName),
   enabled: z.boolean().default(true),
   config: z.record(z.string(), z.unknown()).default({}),
 }).strict()
+const SourceRecordId = z.string().regex(/^[a-z][a-z0-9-]*$/)
+const RecordSchema = <T extends z.ZodTypeAny>(schema: T) => z.record(SourceRecordId, schema).default({})
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
-  sources: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), SourceInstanceSchema).default({}),
+  /** 消息来源（飞书）；GitHub / GitLab 只作为代码仓库，见 `codeRepos`。 */
+  sources: RecordSchema(SourceInstanceSchema),
+  codeRepos: RecordSchema(CodeRepoRecordSchema),
+  taskSources: RecordSchema(TaskSourceRecordSchema),
+  projects: RecordSchema(ProjectSchema),
   policy: PolicyConfigSchema.default(() => PolicyConfigSchema.parse({})),
   eval: EvalConfigSchema.default(() => EvalConfigSchema.parse({})),
   executor: ExecutorConfigSchema.default(() => ExecutorConfigSchema.parse({})),
-}).strict()
+}).strict().superRefine((settings, ctx) => {
+  // 项目引用的记录必须存在；删除记录时由 Settings 先检查引用，这里兜底加载期完整性。
+  for (const [id, project] of Object.entries(settings.projects)) {
+    if (!settings.codeRepos[project.codeRepo]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projects', id, 'codeRepo'],
+      message: `未知的代码仓库：${project.codeRepo}` })
+    if (!settings.taskSources[project.taskSource]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['projects', id, 'taskSource'],
+      message: `未知的任务来源：${project.taskSource}` })
+  }
+})
 export type Settings = z.infer<typeof SettingsSchema>
-export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}`
+export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}` | `codeRepo:${string}` | `taskSource:${string}`
+  | `project:${string}`
 export type SettingsSave = SettingsBlock | 'pause'
 export type SettingsOrigin = 'panel' | 'tool' | 'sync'
 
@@ -221,14 +239,15 @@ export function settingsPolicy(settings: Settings, sources: SourceScope): Policy
     revalidate(mandate: Mandate) {
       // 重新校验规则遵循 docs/002（Eval 路径；Resume 会重新校验）。
       const { basis } = mandate
+      // 项目调度的授权：项目及其引用的代码仓库与任务来源都必须仍然有效。
+      if (basis.via === 'scheduled') {
+        const project = settings.projects[basis.project]
+        if (!project?.enabled || !basis.task) return false
+        return !!settings.codeRepos[project.codeRepo]?.enabled && !!settings.taskSources[project.taskSource]?.enabled
+      }
       const { source } = basis
       const current = source && basis.scope ? listened(sources, source, basis.scope) : undefined
       if (current && !current.listened) return false
-      // 定时任务源的授权：代码来源与流水线记录都必须仍然有效；任务项标识缺失视为无效。
-      if (basis.via === 'scheduled') {
-        if (!basis.pipeline || !basis.task || !source || !basis.scope) return false
-        return !!current?.listened && listened(sources, basis.pipeline, { scheduled: true }).listened
-      }
       const rulesOn = (rules: string[] | undefined) => (rules ?? []).every(id => settings.policy.rules.some(rule => rule.enabled && rule.id === id))
       // 显式跟进保持有效；推断的跟进要求 auto 模式且匹配的规则仍启用。
       if (basis.via === 'followup') return mandate.strength === 'explicit' || (mode === 'auto' && rulesOn(basis.rules))

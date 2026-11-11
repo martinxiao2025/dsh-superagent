@@ -40,9 +40,9 @@ export interface Candidate {
 export type AssessmentOutcome =
   | { kind: 'ignore'; reason: string | Reason; audit?: Record<string, unknown> }
   | { kind: 'unavailable'; reason: string | Reason; audit?: Record<string, unknown> }
-  /** 一次接受：`rules` 是评估匹配到的规则，`name` 是工单请求的短名称，`note` 是给其工作单元的路由说明。 */
+  /** 一次接受：`rules` 是评估匹配到的规则，`name` 是工单请求的短名称，`note` 是给其工作单元的路由说明；`project` 由项目调度提供。 */
   | { kind: 'accept'; title: string; scope: string; reason: string | Reason; acknowledgement?: string; rules?: string[]; audit?: Record<string, unknown>;
-    name?: string; note?: string }
+    name?: string; note?: string; project?: { id: string; name: string } }
   | { kind: 'stop'; ticketId: string; reason: string | Reason; audit?: Record<string, unknown> }
 
 /** 语义判断。`request` 把评估排队，按 `evalId` 幂等；结果通过 `Engine.decide` 返回。 */

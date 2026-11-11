@@ -56,14 +56,22 @@ it('creates and deletes Source records and answers the health probe', async () =
       removeSource: async (...args: unknown[]) => { calls.push(args); return { removed: true, restarting: true } },
     },
   })
-  expect(await call('POST', 'sources', { kind: 'github' })).toEqual({ status: 200, body: { id: 'github-2', revision: 0,
+  expect(await call('POST', 'sources', { kind: 'github', name: '第二个 GitHub' })).toEqual({ status: 200, body: { id: 'github-2', revision: 0,
     restarting: true } })
-  expect(calls[0]).toEqual(['github', undefined, undefined, 'panel'])
+  expect(calls[0]).toEqual(['github', undefined, undefined, 'panel', '第二个 GitHub'])
   expect(await call('DELETE', 'sources/github')).toEqual({ status: 200, body: { removed: true, restarting: true } })
   expect(calls[1]).toEqual(['github', 'panel'])
   expect(await call('GET', 'health')).toMatchObject({ status: 200, body: { ok: true, stage: 'ready', configured: true, paused: false,
     listen: { host: '127.0.0.1', port: 3082 }, machine: { stateDir: '/srv/dsh-superagent' },
     sources: [{ id: 'github', kind: 'github', enabled: true, installed: true, state: 'ready' }] } })
+})
+
+it('serves the scheduling queue snapshot for the panel', async () => {
+  const snapshot = { at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [{ id: 'q1', project: 'a', projectName: 'A', task: 't1',
+    item: 0, title: '一', state: 'running' as const, attempt: 0, dueAt: 0, ticketId: 'ticket-1', enqueuedAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z' }] }
+  const call = serve({ configured: () => true, queue: () => snapshot })
+  expect(await call('GET', 'queue')).toEqual({ status: 200, body: snapshot })
 })
 
 it('answers a Source deletion that still has unfinished Tickets with 409 and its error code', async () => {

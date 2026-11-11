@@ -183,30 +183,50 @@ function firstParsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   }
   return undefined
 }
-/**
- * 校验一条 GitHub 来源记录的智能体 CLI 身份及其对配置仓库的推送权限。
- * 自建 GitHub Enterprise 通过 `GH_HOST` 让 `gh` 访问该实例；失败以记录 ID 为 `place` 抛出 `SetupError`。
- */
-export async function resolveGithubSource(machine: Machine, id: string, github: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<ResolvedGithubSource> {
-  const { stateDir } = machine
-  const accounts = GithubSourceSchema.parse(github ?? {})
-  const remote = accounts.repository
-  if (!remote) throw new SetupError('repositoryUnset', {}, id)
+/** 一条 GitHub 记录的 CLI 身份；`noreply` 是该账户提交时使用的邮箱。 */
+export interface GithubAccount { cli: string; instanceUrl: string; login: string; noreply: string }
+const GithubAccountSchema = GithubSourceSchema.pick({ instanceUrl: true, cli: true })
+/** 只验证 CLI 身份与登录状态，不要求仓库字段，供「凭据」与「实例地址」的字段级预检使用。 */
+async function githubAccount(machine: Machine, id: string, accounts: { instanceUrl: string; cli: string }, probe: Probe, path: string): Promise<GithubAccount> {
   if (!accounts.cli) throw new SetupError('agentCliUnset', {}, id)
   let cli: string
-  try { cli = executable(accounts.cli, path, workerBin(stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }, id) }
+  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }, id) }
   const env = hostVariable('GH_HOST', accounts.instanceUrl)
   const text = await probe([cli, 'api', 'user'], env).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }, id) })
   const agent = parsed(GithubUser, text)
   if (!agent) throw new SetupError('agentCliNoAccount', {}, id)
+  return { cli, instanceUrl: accounts.instanceUrl, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` }
+}
+/** 只验证 GitHub CLI 身份；预检不写设置，因此用调用方提供的配置。 */
+export async function checkGithubAccount(machine: Machine, id: string, github: unknown, probe: Probe,
+  path = process.env.PATH ?? ''): Promise<GithubAccount> {
+  return githubAccount(machine, id, GithubAccountSchema.parse(github ?? {}), probe, path)
+}
+export interface GithubRepositoryAccess { account: GithubAccount; repository: string }
+/**
+ * 验证一条 GitHub 记录的 CLI 身份及对配置仓库的推送权限。
+ * 自建 GitHub Enterprise 通过 `GH_HOST` 让 `gh` 访问该实例；失败以记录 ID 为 `place` 抛出 `SetupError`。
+ */
+export async function checkGithubRepository(machine: Machine, id: string, github: unknown, probe: Probe,
+  path = process.env.PATH ?? ''): Promise<GithubRepositoryAccess> {
+  const accounts = GithubSourceSchema.parse(github ?? {})
+  const remote = accounts.repository
+  if (!remote) throw new SetupError('repositoryUnset', {}, id)
+  const account = await githubAccount(machine, id, accounts, probe, path)
   // 使用 GitHub 返回的规范仓库名，使改名后的仓库也能匹配收到的通知。
-  const access = parsed(RepositoryAccess, await probe([cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}'], env).catch((error: unknown) => {
-    throw new SetupError('repositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) }, id)
-  }))
+  const access = parsed(RepositoryAccess, await probe([account.cli, 'api', `repos/${remote}`, '--jq', '{name: .full_name, push: .permissions.push}'],
+    hostVariable('GH_HOST', accounts.instanceUrl)).catch((error: unknown) => {
+      throw new SetupError('repositoryUnreadable', { account: account.login, repository: remote, output: reason(error) }, id)
+    }))
   if (!access) throw new SetupError('repositoryUnreported', { repository: remote }, id)
-  const repository = access.name
-  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository }, id)
-  return { id, kind: 'github', instanceUrl: accounts.instanceUrl, cli, repository, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` }
+  if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: account.login, repository: access.name }, id)
+  return { account, repository: access.name }
+}
+/** 完整解析一条 GitHub 记录；字段级预检复用同一组探测，避免两套口径。 */
+export async function resolveGithubSource(machine: Machine, id: string, github: unknown, probe: Probe,
+  path = process.env.PATH ?? ''): Promise<ResolvedGithubSource> {
+  const { account, repository } = await checkGithubRepository(machine, id, github, probe, path)
+  return { id, kind: 'github', instanceUrl: account.instanceUrl, cli: account.cli, repository, login: account.login, noreply: account.noreply }
 }
 
 const GitlabUser = z.object({ id: z.number().int().positive(), username: z.string().regex(/^[A-Za-z0-9_.-]+$/) })
@@ -217,14 +237,10 @@ const GitlabProject = z.object({
   permissions: z.object({ project_access: GitlabAccess.nullable().optional(), group_access: GitlabAccess.nullable().optional() }).nullish(),
   namespace: z.object({ path: z.string() }).nullish(),
 })
-/**
- * 验证一条 GitLab 来源记录：CLI 能读到用户，项目可读，并且项目或群组权限达到 Developer（30）以上。
- * 自建 GitLab 通过 `GITLAB_HOST` 让 `glab` 访问该实例；失败以记录 ID 为 `place` 抛出 `SetupError`。
- */
-export async function resolveGitlabSource(machine: Machine, id: string, config: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<ResolvedGitlabSource> {
-  const accounts = GitlabSourceSchema.parse(config ?? {})
-  const requested = accounts.project
-  if (!requested) throw new SetupError('gitlabProjectUnset', {}, id)
+/** 一条 GitLab 记录的 CLI 身份。 */
+export interface GitlabAccount { cli: string; instanceUrl: string; login: string; userId: number }
+const GitlabAccountSchema = GitlabSourceSchema.pick({ instanceUrl: true, cli: true })
+async function gitlabAccount(machine: Machine, id: string, accounts: { instanceUrl: string; cli: string }, probe: Probe, path: string): Promise<GitlabAccount> {
   if (!accounts.cli) throw new SetupError('gitlabCliUnset', {}, id)
   let cli: string
   try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('gitlabCliMissing', { output: reason(error) }, id) }
@@ -233,15 +249,40 @@ export async function resolveGitlabSource(machine: Machine, id: string, config: 
     throw new SetupError('gitlabCliSignedOut', { output: reason(error) }, id)
   }))
   if (!user) throw new SetupError('gitlabNoAccount', {}, id)
+  return { cli, instanceUrl: accounts.instanceUrl, login: user.username, userId: user.id }
+}
+/** 只验证 GitLab CLI 身份，不要求项目字段。 */
+export async function checkGitlabAccount(machine: Machine, id: string, config: unknown, probe: Probe,
+  path = process.env.PATH ?? ''): Promise<GitlabAccount> {
+  return gitlabAccount(machine, id, GitlabAccountSchema.parse(config ?? {}), probe, path)
+}
+export interface GitlabProjectAccess { account: GitlabAccount; project: string; projectId: number }
+/** 验证 GitLab 项目可读，并且项目或群组权限达到 Developer（30）以上。 */
+export async function checkGitlabProject(machine: Machine, id: string, config: unknown, probe: Probe,
+  path = process.env.PATH ?? ''): Promise<GitlabProjectAccess> {
+  const accounts = GitlabSourceSchema.parse(config ?? {})
+  const requested = accounts.project
+  if (!requested) throw new SetupError('gitlabProjectUnset', {}, id)
+  const account = await gitlabAccount(machine, id, accounts, probe, path)
   // GitLab 的 REST 路径用 URL 编码的完整命名空间，因此多级 group/subgroup/project 也能读取。
-  const access = parsed(GitlabProject, await probe([cli, 'api', `projects/${encodeURIComponent(requested)}`], env).catch((error: unknown) => {
-    throw new SetupError('gitlabProjectUnreadable', { account: user.username, project: requested, output: reason(error) }, id)
-  }))
+  const access = parsed(GitlabProject, await probe([account.cli, 'api', `projects/${encodeURIComponent(requested)}`],
+    hostVariable('GITLAB_HOST', accounts.instanceUrl)).catch((error: unknown) => {
+      throw new SetupError('gitlabProjectUnreadable', { account: account.login, project: requested, output: reason(error) }, id)
+    }))
   if (!access) throw new SetupError('gitlabProjectUnreported', { project: requested }, id)
   const project = access.path_with_namespace
   const level = Math.max(access.permissions?.project_access?.access_level ?? 0, access.permissions?.group_access?.access_level ?? 0)
-  if (level < 30) throw new SetupError('gitlabReadOnly', { account: user.username, project }, id)
-  return { id, kind: 'gitlab', instanceUrl: accounts.instanceUrl, cli, project, projectId: access.id, login: user.username, userId: user.id }
+  if (level < 30) throw new SetupError('gitlabReadOnly', { account: account.login, project }, id)
+  return { account, project, projectId: access.id }
+}
+/**
+ * 完整解析一条 GitLab 记录：CLI 能读到用户，项目可读，并且项目或群组权限达到 Developer（30）以上。
+ * 自建 GitLab 通过 `GITLAB_HOST` 让 `glab` 访问该实例；失败以记录 ID 为 `place` 抛出 `SetupError`。
+ */
+export async function resolveGitlabSource(machine: Machine, id: string, config: unknown, probe: Probe,
+  path = process.env.PATH ?? ''): Promise<ResolvedGitlabSource> {
+  const { account, project, projectId } = await checkGitlabProject(machine, id, config, probe, path)
+  return { id, kind: 'gitlab', instanceUrl: account.instanceUrl, cli: account.cli, project, projectId, login: account.login, userId: account.userId }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })

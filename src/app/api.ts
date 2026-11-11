@@ -6,8 +6,10 @@ import type { HistoryView } from './settings-history.ts'
 import type { OverviewView } from './views/overview.ts'
 import type { SettingsView } from './views/settings.ts'
 import type { SourceStatusView } from './views/sources.ts'
+import type { SourceCheck } from '../setup.ts'
 import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } from './views/threads.ts'
 import type { TicketListView } from './views/tickets.ts'
+import type { QueueSnapshot } from '../queue/model.ts'
 
 export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
@@ -22,9 +24,27 @@ export interface Api {
   'GET overview': { response: OverviewView }
   'GET search': { query: { q: string }; response: SearchView }
   'GET sources': { response: SourceStatusView[] }
-  'POST sources': { body: { kind: string; id?: string; config?: unknown }; response: { id: string; revision: number; restarting: true } }
+  'POST sources': { body: { kind: string; id?: string; name: string; config?: unknown }; response: { id: string; revision: number; restarting: true } }
+  'POST sources/verify': {
+    body: { kind: string; id?: string; name?: string; config?: unknown; field?: string }
+    response: { checks: SourceCheck[] }
+  }
   'DELETE sources/:id': { response: { removed: true; restarting: true } }
+  'POST code-repos': { body: { kind: 'github' | 'gitlab'; id?: string; name: string; config?: unknown };
+    response: { id: string; revision: number; restarting: false } }
+  'DELETE code-repos/:id': { response: { removed: true; restarting: false } }
+  'POST task-sources': { body: { kind: string; id?: string; name: string; config?: unknown };
+    response: { id: string; revision: number; restarting: false } }
+  'POST task-sources/verify': {
+    body: { kind: string; id?: string; name?: string; config?: unknown; field?: string }
+    response: { checks: SourceCheck[] }
+  }
+  'DELETE task-sources/:id': { response: { removed: true; restarting: false } }
+  'POST projects': { body: { id?: string; name: string; codeRepo: string; taskSource: string };
+    response: { id: string; revision: number; restarting: false } }
+  'DELETE projects/:id': { response: { removed: true; restarting: false } }
   'GET health': { response: HealthView }
+  'GET queue': { response: QueueSnapshot }
   'GET settings': { response: SettingsView }
   'POST sources/:id/labels': { response: { added: string[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }

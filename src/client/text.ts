@@ -2,7 +2,7 @@
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { DshSuperagentKey } from './locales.ts'
 import type { Localized } from '../sources/kind.ts'
-import type { SetupProblem } from '../setup.ts'
+import type { SetupProblem, SourceCheck } from '../setup.ts'
 import type { Health } from '../sources/host.ts'
 import { reasonText, type Reason } from '../core/reasons.ts'
 
@@ -32,6 +32,10 @@ function label(t: T, reason: Reason): string {
   return written
 }
 export const setupText = (t: T, problem: Pick<SetupProblem, 'code' | 'values'>): string => t(`setup.${problem.code}`, problem.values)
+/** 新增来源的字段级预检结果：初始化问题复用 `setup.*`，其余走 `check.*`。 */
+export const sourceCheckText = (t: T, check: Pick<SourceCheck, 'scope' | 'code' | 'values'>): string => check.scope === 'setup'
+  ? setupText(t, { code: check.code as SetupProblem['code'], values: check.values })
+  : t(`check.${check.code}` as DshSuperagentKey, check.values)
 export const healthText = (t: T, health: Pick<Health, 'detail' | 'code' | 'values'>): string =>
   health.code ? t(`healthCode.${health.code}` as const, health.values) : health.detail
 /** 将飞书与 GitHub 内容占位符（图片、卡片、媒体、转发、未解析的提及）替换为本地化标签。 */
