@@ -81,7 +81,7 @@ it('serves a Project\'s Tasks and queue state for the panel', async () => {
   const item = { id: 'q1', project: 'a', projectName: 'A', task: 't1', item: 0, title: '一', state: 'running' as const, attempt: 0,
     dueAt: 0, ticketId: 'ticket-1', enqueuedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }
   const call = serve({ configured: () => true, store: { settings: () => settings },
-    queue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item] }) })
+    queue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item], projects: [] }) })
   expect(await call('GET', 'projects/a/tasks')).toEqual({ status: 200, body: {
     project: { id: 'a', name: 'A', enabled: true, codeRepo: { id: 'github', name: 'GitHub' },
       taskSource: { id: 'sheet', name: '清单' }, execution: settings.projects.a!.execution,

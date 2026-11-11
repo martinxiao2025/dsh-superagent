@@ -37,6 +37,7 @@ it('lists projects with queue and runtime counts, then opens the project Tasks a
   expect(text()).toContain(zh['queueState.queued'])
   expect(text()).toContain(zh['queueState.running'])
   expect(text()).toContain('t1')
+  expect(text()).toContain(zh.projectNextPollLabel)
 })
 
 it('sends retry, cancel and clear requests from the project queue', async () => {

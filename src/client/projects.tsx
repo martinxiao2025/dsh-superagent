@@ -70,7 +70,9 @@ export function ProjectPage({ id }: { id: string }) {
       <LabelValue label={t('executingLabel')} value={`${data.used} / ${data.maxWorkers}`} />
       <LabelValue label={t('projectRunningLabel')} value={data.running} />
       <LabelValue label={t('queuedLabel')} value={data.queued} />
+      <LabelValue label={t('projectNextPollLabel')} value={data.nextPollAt ? when(data.nextPollAt, t('lang')) : '—'} />
     </div>
+    {data.lastError && <Hint>{t('projectLastError')}: {data.lastError}</Hint>}
     <Section title={t('projectTasksTitle')} hint={t('projectTasksHint')} count={data.items.length}
       action={data.queued > 0 ? <Button variant="outline" size="sm" disabled={clear.busy}
         onClick={() => { void clear.run().then(done => done && notify(t('queueCleared', { count: data.queued }))) }}>

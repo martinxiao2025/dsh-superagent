@@ -150,8 +150,9 @@ queued → starting → running → succeeded
 
 ### 4.4 可观测性
 
-- 队列快照已有：`maxWorkers`、`used`、条目状态、尝试次数、`dueAt`、`reason`。
-- 缺口：项目级错误、下一次轮询时间、写回结果、槽位等待时长都没有进入 API；没有结构化日志与请求 ID（详见 `015`）。
+- 队列快照已有：`maxWorkers`、`used`、条目状态、尝试次数、`dueAt`、`reason`；`projects[]` 额外提供 `nextPollAt` 与 `lastError`（成功后清除），周期检查自身的错误在 `error`。
+- 项目详情 `GET projects/:id/tasks` 同步携带 `nextPollAt` / `lastError`，面板显示「下次轮询」与最近错误。
+- 剩余缺口：写回结果、槽位等待时长、结构化日志与请求 ID（详见 `015`）。
 
 ## 5. 凭据（两套独立功能）
 
@@ -282,6 +283,9 @@ interface TaskSourceDriver<C> {
 | POST | `projects/repository/verify` | Git 凭据 × 仓库地址的真实探测 |
 | POST | `projects/task-source/verify` | Excel 读取；飞书凭据 × 知识库归属与唯一性 |
 | GET | `queue` | 队列与槽位快照 |
+| POST | `queue/:id/retry` | 手动重试已结束或退避中的条目；尝试次数重置 |
+| POST | `queue/:id/cancel` | 取消活动条目；运行中的工单会被停止 |
+| POST | `queue/clear?project=` | 清空排队项，不影响运行中的任务 |
 | GET/POST/PUT/DELETE | `git-credentials[/:id]` | Git 凭据独立 CRUD |
 | POST | `git-credentials/verify` | Git 凭据独立测试（可带 `repository` / `branch`） |
 | POST | `git-credentials/:id/rotate` | 轮换，递增 revision |

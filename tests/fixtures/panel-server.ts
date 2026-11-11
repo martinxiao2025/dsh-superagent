@@ -350,7 +350,8 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   } },
   'GET sources': { answer: sourceStatuses },
   'GET queue': { answer: () => ({ at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
-    items: server.queueItems }) },
+    items: server.queueItems,
+    projects: Object.entries(server.settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled })) }) },
   'POST queue/:id/retry': { answer: () => ({ retried: true }) },
   'POST queue/:id/cancel': { answer: () => ({ cancelled: true }) },
   'POST queue/clear': { query: ['project'], answer: () => ({ cancelled: 0 }) },
@@ -364,7 +365,8 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       execution: project.execution, schedule: project.schedule, retry: project.retry, taskPolicy: project.taskPolicy },
       at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
       queued: items.filter(item => item.state === 'queued').length,
-      running: items.filter(item => item.state === 'running' || item.state === 'starting').length, items }
+      running: items.filter(item => item.state === 'running' || item.state === 'starting').length, items,
+      nextPollAt: '2026-09-23T01:00:00Z' }
   } },
   'POST sources': { body: true, answer: ({ body }) => {
     const kind = KINDS.find(item => item.kind === body.kind)

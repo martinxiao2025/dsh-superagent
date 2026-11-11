@@ -567,6 +567,8 @@ const TEXT = {
   projectAttemptColumn: ['尝试', 'Attempts'],
   projectNextColumn: ['下次时间', 'Next time'],
   projectActionsColumn: ['操作', 'Actions'],
+  projectNextPollLabel: ['下次轮询', 'Next poll'],
+  projectLastError: ['最近错误', 'Last error'],
   queueRetry: ['重试', 'Retry'],
   queueCancel: ['取消', 'Cancel'],
   queueStop: ['停止', 'Stop'],

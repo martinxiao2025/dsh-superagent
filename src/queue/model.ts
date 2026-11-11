@@ -46,11 +46,24 @@ export const QueueEntrySchema = z.object({
 }).strict()
 export type QueueEntry = z.infer<typeof QueueEntrySchema>
 
+/** 单个项目的调度状态：下次轮询时间与最近一次失败原因，供面板排障读取。 */
+export interface QueueProjectStatus {
+  id: string
+  name: string
+  enabled: boolean
+  /** 下次轮询时间；从未调度过的项目没有该字段。 */
+  nextPollAt?: string
+  /** 最近一次轮询失败的原因；成功后清除。 */
+  lastError?: string
+}
+
 /** 队列快照：P5 面板读取的只读视图。 */
 export interface QueueSnapshot {
   at: string
   maxWorkers: number
   used: number
+  /** 周期检查自身的最近错误；单项目错误见 `projects[].lastError`。 */
+  error?: string
   items: {
     id: string
     project: string
@@ -66,6 +79,8 @@ export interface QueueSnapshot {
     enqueuedAt: string
     updatedAt: string
   }[]
+  /** 按项目汇总的轮询状态；与 `items` 一起构成调度可观测性的最小闭环。 */
+  projects: QueueProjectStatus[]
 }
 
 export const queueActive = (entry: Pick<QueueEntry, 'state'>): boolean =>

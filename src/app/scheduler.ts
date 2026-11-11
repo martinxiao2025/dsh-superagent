@@ -168,10 +168,18 @@ export class ProjectScheduler {
   snapshot(): QueueSnapshot {
     const settings = this.host.settings()
     const entries = this.host.store.queue.list()
+    const projects = Object.entries(settings.projects).map(([id, project]) => ({
+      id, name: project.name, enabled: project.enabled,
+      ...(this.nextPoll.has(id) ? { nextPollAt: new Date(this.nextPoll.get(id)!).toISOString() } : {}),
+      ...(this.errors.get(id) ? { lastError: this.errors.get(id)! } : {}),
+    }))
+    const topError = this.errors.get('')
     return {
       at: new Date(this.now()).toISOString(),
       maxWorkers: settings.executor.maxWorkers,
       used: this.host.executor.slotsInUse(),
+      ...(topError ? { error: topError } : {}),
+      projects,
       items: entries.map(entry => ({ id: entry.id, project: entry.project, projectName: settings.projects[entry.project]?.name ?? entry.project,
         task: entry.task, item: entry.item, title: entry.title, state: entry.state, attempt: entry.attempt, dueAt: entry.dueAt,
         ...(entry.ticketId ? { ticketId: entry.ticketId } : {}), ...(entry.reason ? { reason: entry.reason } : {}),
@@ -415,6 +423,9 @@ export class ProjectScheduler {
   retryEntry(id: string): { retried: boolean } {
     const entry = this.host.store.queue.get(id)
     if (!entry || queueActive(entry)) return { retried: false }
+    // 重试前取消旧尝试待执行的写回，避免过期结果覆盖新一轮的状态。
+    this.host.effects.cancel('writeback', key('writeback', entry.id, 'done', String(entry.attempt)))
+    this.host.effects.cancel('writeback', key('writeback', entry.id, 'failed', String(entry.attempt)))
     this.save({ ...entry, state: 'queued', attempt: 0, dueAt: this.now(), updatedAt: this.stamp(),
       reason: undefined, endedAt: undefined, startedAt: undefined, ticketId: undefined })
     this.pump()

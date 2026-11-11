@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { z } from 'zod'
 import { ProjectScheduler } from '../src/app/scheduler.ts'
+import { key } from '../src/core/ids.ts'
 import { Store } from '../src/app/store.ts'
 import { TaskSourceRegistry } from '../src/task-sources/index.ts'
 import type { TaskSourceDriver } from '../src/task-sources/kind.ts'
@@ -258,6 +259,16 @@ it('runOnStart 决定启动时是否立即轮询', async () => {
   expect([...h.entries.values()].map(entry => entry.project).sort()).toEqual(['a', 'b'])
 })
 
+it('队列快照暴露下次轮询时间与最近错误', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  expect(h.scheduler.snapshot().projects).toEqual([{ id: 'a', name: 'a', enabled: true, nextPollAt: expect.any(String) }])
+  ;(h.settings.taskSources['source-a'] as { enabled: boolean }).enabled = false
+  await h.scheduler.poll('a')
+  expect(h.scheduler.snapshot().projects[0]).toMatchObject({ id: 'a', lastError: expect.stringContaining('disabled') })
+})
+
 it('手动重试、取消与清空排队项', async () => {
   const h = setup({ a: project('a') }, 0)
   h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
@@ -275,6 +286,19 @@ it('手动重试、取消与清空排队项', async () => {
   expect(h.scheduler.clearQueue('a')).toEqual({ cancelled: 2 })
   expect([...h.entries.values()].every(entry => entry.state === 'cancelled')).toBe(true)
   expect(h.entries.get(second!.id)).toMatchObject({ state: 'cancelled', reason: expect.stringContaining('Cleared') })
+})
+
+it('手动重试会取消旧尝试待执行的写回', async () => {
+  const h = setup({ a: project('a') }, 0)
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  const entry = [...h.entries.values()][0]!
+  // 模拟已成功但写回尚未执行：旧尝试的写回副作用还在队列里。
+  h.entries.set(entry.id, { ...entry, state: 'succeeded' })
+  h.effects.push({ kind: 'writeback', key: key('writeback', entry.id, 'done', '0'), payload: {} })
+  expect(h.scheduler.retryEntry(entry.id)).toEqual({ retried: true })
+  expect(h.effects).toHaveLength(0)
+  expect(h.entries.get(entry.id)).toMatchObject({ state: 'queued', attempt: 0 })
 })
 
 it('取消运行中的条目会同时停止工单', async () => {
