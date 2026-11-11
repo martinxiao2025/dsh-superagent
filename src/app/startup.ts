@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { lockSync } from 'proper-lockfile'
 
 /** 启动阶段：按挂载、取锁、打开存储、就绪推进，失败时停在 `failed`。 */
-export type StartupPhase = 'starting' | 'http-registered' | 'locked' | 'store-open' | 'ready' | 'failed'
+export type StartupPhase = 'starting' | 'http-registered' | 'locked' | 'resetting' | 'reset' | 'store-open' | 'ready' | 'failed'
 /** 可写入启动记录的异常摘要；栈截断，避免记录无限膨胀。 */
 export interface StartupError { readonly name: string; readonly message: string; readonly stack?: string }
 /** 管理路由可报告的启动状态：运行时不存在的阶段由健康接口与 503 响应透出。 */

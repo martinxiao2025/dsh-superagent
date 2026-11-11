@@ -30,6 +30,18 @@ it('saves this machine\'s settings in the Deployment settings through DSH\'s con
   expect(field<HTMLInputElement>(zh.deploymentContextTimeout).value).toBe('20000')
 })
 
+it('resets the state directory from the Deployment page only after explicit confirmation, and reports the backup', async () => {
+  at({ page: 'settings', query: { group: 'deployment' } })
+  await mount()
+  await click(zh.deploymentResetAction)
+  expect(text()).toContain(zh.deploymentResetConfirm)
+  await click(zh.confirm)
+  const request = server.requests.find(item => item.path === 'admin/reset')
+  expect(request?.body).toEqual({ confirm: 'RESET' })
+  expect(document.querySelector('.dt-toast')?.textContent)
+    .toBe(zh.deploymentResetDone.replace('{backup}', '/backup/2026-11-11T00-00-00-000Z'))
+})
+
 it('keeps a refused Deployment change as a draft, and shows the settings read-only without a writable form', async () => {
   const refusing = fakeForm(true, false)
   server.form = refusing.form

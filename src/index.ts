@@ -6,6 +6,7 @@ import { AdminMount } from './app/admin-mount.ts'
 import { acquireStateLock, recordStartup, startupError, type StartupPhase, type StartupStatus } from './app/startup.ts'
 import { ADAPTERS } from './sources/adapters.ts'
 import { Config, machineOf, type DeploymentConfig } from './deployment.ts'
+import { resetState } from './app/reset.ts'
 
 export const name = 'dsh-superagent'
 export const inject = ['agents', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
@@ -39,6 +40,12 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     const lock = await acquireStateLock(machine.stateDir, { onWait: elapsed => {
       if (mount.status().phase !== 'locked') record('locked', `状态目录锁被占用，最多等待 35 秒（已等待 ${Math.round(elapsed / 1000)} 秒）`)
     } })
+    // 一次性启动参数：取得锁之后、打开数据库之前备份并清空状态目录，随后按空基线启动。
+    if (config.resetState) {
+      record('resetting', 'resetState 已开启：正在备份并清空状态目录')
+      const report = await resetState({ stateDir: machine.stateDir })
+      record('reset', `状态目录已重置${report.backup ? `，备份在 ${report.backup}` : ''}；保留 ${report.kept.length} 个非插件条目`)
+    }
     record('store-open', '已取得状态目录锁，正在打开数据库')
     runtime = new Runtime(ctx, machine, restart, { mount, lock })
     ctx.effect(() => async () => { await runtime?.stop() })

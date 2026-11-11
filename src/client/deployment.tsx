@@ -12,12 +12,12 @@ import { SaveBar, useDraft } from './draft.tsx'
 import { PanelProvider, usePanel, usePanelData } from './provider.tsx'
 import { Field, Fields } from './settings-kit.tsx'
 import { setupText, type T } from './text.ts'
-import { CheckSetupButton, Hint, KeyValues, Section, SetupMessage } from './widgets.tsx'
+import { CheckSetupButton, ConfirmButton, Hint, KeyValues, Section, SetupMessage } from './widgets.tsx'
 
 export type DeploymentForm = ConfigPageForm | undefined
 type Op = Parameters<ConfigPageForm['mutate']>[0][number]
 
-const MACHINE_LIMITS = ['promptMaxChars', 'admissionContextMaxPages', 'admissionContextTimeoutMs'] as const
+const MACHINE_LIMITS = ['promptMaxChars', 'admissionContextMaxPages', 'admissionContextTimeoutMs', 'commandTimeoutMs', 'workspaceRetentionDays'] as const
 type Limits = Record<typeof MACHINE_LIMITS[number], string>
 const text = (value: unknown): string => typeof value === 'string' || typeof value === 'number' ? String(value) : ''
 const limitsOf = (values: object | undefined): Limits =>
@@ -31,7 +31,7 @@ export function usePageForm(form: ConfigForm<Record<string, unknown>> | undefine
 
 /** 部署配置表单；当 DSH 配置表单不可用或只读时，回退为只读展示。 */
 export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup: SetupView; form: DeploymentForm; accounts?: boolean }) {
-  const { t, notify } = usePanel()
+  const { t, notify, call } = usePanel()
   const snapshot = form?.state
   const editable = snapshot?.status === 'ready' && snapshot.writable
   // 仅在 DSH 提供可写值时才传入 `revision`，以便在 `ready` 之前开始的草稿在变为可写时执行变基。
@@ -55,6 +55,11 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
   </Field>
   const feishu = accounts?.feishu ? accounts.feishu.name || accounts.feishu.botId
     : setup.feishuProblem ? setupText(t, setup.feishuProblem) : t('deploymentFeishuNone')
+  // 重置会停掉运行时、清空状态目录再重启；报告里的备份位置是唯一的恢复线索。
+  const reset = async () => {
+    const report = await call('POST admin/reset', { body: { confirm: 'RESET' } })
+    notify(report.backup ? t('deploymentResetDone', { backup: report.backup }) : t('deploymentResetDoneNoBackup'))
+  }
   return <form className="dt-form" onSubmit={event => { void draft.submit(event) }}>
     <Fields disabled={draft.busy}>
       <Hint>{t('deploymentIntro')}</Hint>
@@ -77,6 +82,14 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
         {limit('promptMaxChars', t('deploymentPromptMaxChars'))}
         {limit('admissionContextMaxPages', t('deploymentContextPages'))}
         {limit('admissionContextTimeoutMs', t('deploymentContextTimeout'))}
+        {limit('commandTimeoutMs', t('deploymentCommandTimeout'))}
+        {limit('workspaceRetentionDays', t('deploymentWorkspaceRetention'))}
+      </Section>
+      <Section title={t('deploymentReset')} hint={t('deploymentResetHint')}>
+        <div className="dt-row-buttons">
+          <ConfirmButton variant="outline" icon="refresh" label={t('deploymentResetAction')} title={t('deploymentResetAction')}
+            message={t('deploymentResetConfirm')} onConfirm={reset} />
+        </div>
       </Section>
     </Fields>
     {editable && <SaveBar {...draft} onDiscard={draft.discard} />}

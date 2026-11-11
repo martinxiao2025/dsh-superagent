@@ -8,6 +8,11 @@ import { TicketLine } from './rows.tsx'
 import { healthText, localized, reasonLabel, valueLabel, readableMarkers } from './text.ts'
 import { CheckSetupButton, ConfirmButton, Hint, LoadState, Section, SetupMessage } from './widgets.tsx'
 
+/** 健康分类到文案键的映射；与 `HEALTH_CATEGORIES` 保持一致。 */
+const CATEGORY_LABEL = { runtime: 'healthCategory.runtime', writeback: 'healthCategory.writeback',
+  schedule: 'healthCategory.schedule', sync: 'healthCategory.sync', workspace: 'healthCategory.workspace',
+  communication: 'healthCategory.communication' } as const
+
 function ProblemLine({ problem, onChanged }: { problem: Problem; onChanged: () => Promise<void> }) {
   const { t, call, navigate } = usePanel()
   const post = useAction((request: () => Promise<unknown>) => request(), { reload: onChanged })
@@ -36,7 +41,9 @@ function ProblemLine({ problem, onChanged }: { problem: Problem; onChanged: () =
       <ConfirmButton variant="outline" icon="play" label={t('resumeProcessing')} title={t('resumeProcessing')}
         message={t('resumeProcessingConfirm')}
         onConfirm={async () => { await call('POST executor/pause', { body: { paused: false } }); await onChanged() }} />)
-    case 'runtime-error': return row(t('problemRuntime', { name: valueLabel(t, 'health', problem.name) }), raw(problem.detail), undefined)
+    // 分类来自健康条目：写回、调度、工作区与沟通故障与核心运行时故障区分开。
+    case 'runtime-error': return row(t('problemRuntimeCategory', { name: valueLabel(t, 'health', problem.name),
+      category: t(CATEGORY_LABEL[problem.category]) }), raw(problem.detail), undefined)
     case 'source-error': {
       const health = problem.source.health
       return row(t('sourceError', { source: localized(t, problem.source.title) }), health.code ? worded(healthText(t, health))

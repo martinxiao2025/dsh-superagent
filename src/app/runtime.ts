@@ -18,7 +18,9 @@ import { allowedSender, settingsPolicy } from '../policy.ts'
 import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
 import { firstSource, type Deployment, type Machine } from '../deployment.ts'
-import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
+import { environmentOf, executionRoot, ticketEnvironment, type Variable } from './execution-environment.ts'
+import { collectWorkspaces } from './workspace-gc.ts'
+import { resetState as resetStateFiles, type ResetReport } from './reset.ts'
 import type { AdminMount } from './admin-mount.ts'
 import type { StateLock } from './startup.ts'
 import type { SetupProblem } from '../setup.ts'
@@ -85,11 +87,13 @@ export class Runtime extends Service implements SourceHost {
   readonly ready: Promise<void>
   private readonly board = new HealthBoard()
   private readonly runtimeHealth = this.board.claim('runtime', { state: 'starting', detail: '' })
+  private readonly workspaceHealth = this.board.claim('workspace', { state: 'starting', detail: '', category: 'workspace' })
   readonly masterId: string
   private readonly sourceLinks = new TextCache(200_000)
   private readonly stopped = new AbortController()
   private readonly disposers: (() => void)[] = []
   private releaseLock?: () => Promise<void>
+  private readonly restartPlugin: () => void
   private readonly boot?: RuntimeBoot
   private closingFlag = false
   private stopping?: Promise<void>
@@ -102,7 +106,8 @@ export class Runtime extends Service implements SourceHost {
     super(ctx, 'orchestrator')
     const runtime = this
     this.boot = boot
-    const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort() }
+    this.restartPlugin = restart
+    const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message, category: 'runtime' }); this.stopped.abort() }
     if (boot) {
       // 锁由插件入口在管理路由挂载之后取得；这里只接收释放函数并补登记抢占处理。
       this.releaseLock = boot.lock.release
@@ -169,10 +174,13 @@ export class Runtime extends Service implements SourceHost {
           // 项目调度按工单终态更新队列；失败重排与回写在调度器内完成。
           if (event.type === 'ticket.ended') this.scheduler.observe(event.data.ticketId)
         } })
+      // 调度与工作区回收共用健康看板：错误按 `schedule` / `workspace` 分类暴露给面板。
+      const scheduleHealth = board.claim('schedule', { state: 'starting', detail: '', category: 'schedule' })
       this.scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
         engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
         executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
-        effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime })
+        effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime,
+        health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
       // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
       effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
       // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
@@ -259,7 +267,7 @@ export class Runtime extends Service implements SourceHost {
     if (this.boot) this.boot.mount.attach(this.httpHost())
     else this.disposers.push(registerHttp(this.ctx, this.httpHost()))
     if (!await this.setup.run(this.store.settings())) {
-      this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now() })
+      this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now(), category: 'runtime' })
       return
     }
     this.sessions.install()
@@ -272,7 +280,7 @@ export class Runtime extends Service implements SourceHost {
     this.passes.start()
     this.effects.start()
     this.scheduler.start()
-    this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now() })
+    this.runtimeHealth.set({ state: 'ready', detail: 'Orchestrator is ready', at: now(), category: 'runtime' })
   }
   private httpHost(): HttpHost {
     const runtime = this
@@ -287,7 +295,30 @@ export class Runtime extends Service implements SourceHost {
       checkSetup: () => { setup.check() },
       checkSource: (kind, config, field, meta) => setup.checkSource(kind, config, field, sources, meta),
       checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, store.settings(), meta),
-      requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog() }
+      requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
+      reset: () => runtime.reset() }
+  }
+  /** 回收过期的工单执行目录，并把结果写入 `workspace` 健康条目；与运行中任务互斥由工单结束时间保证。 */
+  private async reclaimWorkspaces(): Promise<void> {
+    const report = await collectWorkspaces({ tickets: this.store.tickets,
+      workRoot: executionRoot(this.store.settings(), this.machine.stateDir),
+      retentionMs: this.machine.workspaceRetentionDays.get() * 86_400_000 })
+    const detail = report.disabled ? 'Workspace reclaim is disabled'
+      : `${report.removed.length} reclaimed, ${report.kept} kept, ${report.unknown} unknown, ${report.scanned} scanned`
+        + (report.errors.length ? `; ${report.errors.join('; ')}` : '')
+    this.workspaceHealth.set({ state: report.errors.length ? 'error' : 'ready', detail, at: report.at, category: 'workspace' })
+  }
+  /**
+   * 重置状态目录：先停止运行时（关闭数据库并释放锁），备份后清空插件拥有的条目，再重启插件。
+   * 重启在 `finally` 中执行，使重置失败时服务仍能带着原（或已恢复的）状态回来。
+   */
+  async reset(): Promise<ResetReport> {
+    await this.stop()
+    try {
+      return await resetStateFiles({ stateDir: this.machine.stateDir })
+    } finally {
+      this.restartPlugin()
+    }
   }
   /** 幂等停止；并发或重复调用共享同一个关闭 Promise。 */
   stop(): Promise<void> { return this.stopping ??= this.shutdown() }

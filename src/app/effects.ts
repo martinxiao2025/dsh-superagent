@@ -6,6 +6,7 @@ export class Later extends Error {}
 /** 某类副作用报告错误前允许的连续失败次数，与来源轮询的失败阈值一致。 */
 export const FAILURES_BEFORE_ERROR = 3
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
+import type { HealthCategory } from '../sources/host.ts'
 import type { Store } from './store.ts'
 
 export interface EffectPayloads {
@@ -40,6 +41,8 @@ type Options<K extends EffectKind> = Partial<Pick<Handler<K>, 'limit' | 'retry' 
 /** `seq` 保留该行的队列位置；`generation` 在载荷更新时递增，使运行中的尝试不会删除更新的载荷。 */
 interface Row { key: string; value: string; seq: number; generation: number; attempts: number; due: number }
 type Task = { kind: EffectKind; key: string; done: Promise<void> }
+/** 面板用于区分故障来源的子系统；未列出的副作用归入运行时。 */
+const CATEGORY: Partial<Record<EffectKind, HealthCategory>> = { writeback: 'writeback', reply: 'communication' }
 
 /**
  * 基于 SQLite 的持久化队列，在命令事务内持久化副作用，并在提交后分发。
@@ -148,7 +151,8 @@ export class Effects {
   }
   private failed(kind: EffectKind, error: unknown): void {
     this.broken.add(kind)
-    this.health.get(kind)?.set({ state: 'error', detail: `The effect queue failed: ${String(error)}`, at: new Date(this.now()).toISOString() })
+    this.health.get(kind)?.set({ state: 'error', detail: `The effect queue failed: ${String(error)}`, at: new Date(this.now()).toISOString(),
+      category: CATEGORY[kind] ?? 'runtime' })
   }
   private report(kind: EffectKind): void {
     const row = this.store.db.prepare(`SELECT COUNT(*) AS waiting, MIN(since) AS since, MAX(attempts) AS attempts,
@@ -157,7 +161,7 @@ export class Effects {
     const failing = Number(row?.attempts ?? 0) >= FAILURES_BEFORE_ERROR && !this.handlers.get(kind)?.quiet
     const detail = waiting ? `${waiting} waiting since ${String(row?.since)}` : 'Nothing waiting'
     this.health.get(kind)?.set(failing
-      ? { state: 'error', detail: `${detail}; the last failure: ${String(row?.error)}`, at: new Date(this.now()).toISOString() }
-      : { state: 'ready', detail, at: new Date(this.now()).toISOString() })
+      ? { state: 'error', detail: `${detail}; the last failure: ${String(row?.error)}`, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' }
+      : { state: 'ready', detail, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' })
   }
 }

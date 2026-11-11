@@ -31,6 +31,7 @@ import { decisionList, search, threadDetail, threadList } from './views/threads.
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 import type { StartupStatus } from './startup.ts'
 import type { QueueSnapshot } from '../queue/model.ts'
+import type { ResetReport } from './reset.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -70,6 +71,8 @@ export interface HttpHost {
   checkTaskSource(kind: string, config: unknown, field: string, meta: { id?: string; name?: string }): Promise<SourceCheck[]>
   requestPass(): void
   models(): Promise<ModelCatalog>
+  /** 备份并清空状态目录后重启；仅由要求显式确认的管理入口调用。 */
+  reset(): Promise<ResetReport>
 }
 /**
  * 表示管理路由解析或查找期间抛出的面向客户端的 400 或 404 错误。
@@ -310,6 +313,11 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'GET policy/history': () => policyHistory(store, runtime.sources, policyVersion(store.settings())),
     'POST policy-sync/:id': async ({ params }) => ({ policy: await runtime.settings.sync(params.id) }),
     'POST setup/check': () => { runtime.checkSetup(); return { restarting: true } },
+    // 重置是破坏性操作：请求体必须显式包含确认词，且在停止运行时之后才删除状态目录。
+    'POST admin/reset': async ({ body }) => {
+      z.object({ confirm: z.literal('RESET') }).parse(await body())
+      return runtime.reset()
+    },
     'GET models': () => runtime.models(),
     'GET prompts': ({ query }) => { const { revision, offset } = PromptsQuery.parse(query); return promptsView(runtime, revision, offset) },
     'PUT prompts': async input => {

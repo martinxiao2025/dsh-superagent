@@ -42,7 +42,7 @@ it('refuses a database older than schema 10 and asks for a new state directory',
   new Store(path).close()
   const schema = (version: number) => { const db = new DatabaseSync(path); db.prepare("UPDATE kv SET value=? WHERE key='schema'").run(String(version)); db.close() }
   schema(9)
-  expect(() => new Store(path)).toThrow(/schema 9 predates schema 10, which this version cannot migrate; start with a new state directory/)
+  expect(() => new Store(path)).toThrow(/schema 9 predates schema 10, which this version cannot migrate; back it up and start from an empty baseline with reset/)
 })
 
 it('writes a schema 10 database in its current shape once, so nothing reads an older shape', () => {

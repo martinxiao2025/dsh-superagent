@@ -135,6 +135,32 @@ function state(url) {
   })
 }
 
+/**
+ * 向管理 API 发送一个 JSON POST；不可达或非 2xx 时抛错。
+ * `reset` 用它触发运行时的「备份—清空—重启」流程，因此超时比状态查询长。
+ */
+function post(url, path, body, timeout = 30_000) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(JSON.stringify(body))
+    const req = request(new URL(url.replace(/\/+$/, '') + '/orchestrator/api' + path), {
+      agent: false, timeout, method: 'POST',
+      headers: { 'x-orchestrator-request': '1', connection: 'close', 'content-type': 'application/json', 'content-length': payload.length },
+    }, response => {
+      const chunks = []
+      response.on('data', chunk => chunks.push(chunk))
+      response.on('error', reject)
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8')
+        if (!(response.statusCode >= 200 && response.statusCode < 300)) return reject(new Error(`The service answered ${response.statusCode}: ${text}`))
+        try { resolve(JSON.parse(text)) } catch { resolve(text) }
+      })
+    })
+    req.on('timeout', () => { req.destroy(new Error('The service did not answer in time.')) })
+    req.on('error', reject)
+    req.end(payload)
+  })
+}
+
 /** 将管理 API 的回答精简为 CLI 所报告的 health 与 setup 字段。 */
 function summarize(value) {
   // 另一个版本省略的键会读为空，以免服务被误认为不可达。
@@ -265,6 +291,20 @@ async function start(options) {
   throw new Error('Startup health check timed out; inspect the log. Any running process was left intact.')
 }
 
+/**
+ * 备份并清空状态目录。只对正在运行的服务生效：CLI 不解析 DSH 配置，
+ * 因此服务停止时无法可靠得知状态目录；那种情况应使用 `resetState` 启动参数。
+ */
+async function reset(options) {
+  if (!options.yes) throw new Error('reset deletes the state directory after backing it up; pass --yes to confirm.')
+  const pids = processes(options.profile)
+  if (!pids.length) throw new Error('dsh-superagent is not running; set resetState in the DSH config to reset on startup instead.')
+  if (!(await state(options.url))) throw new Error('The running service does not answer the management API; set resetState in the DSH config and restart.')
+  const report = await post(options.url, '/admin/reset', { confirm: 'RESET' })
+  console.log(JSON.stringify(report, null, 2))
+  return 0
+}
+
 /** 日志文件名的本地时间戳，格式为 `YYYYMMDD-HHMMSS`。 */
 function localStamp() {
   const now = new Date()
@@ -300,19 +340,20 @@ function parse(argv) {
     action: undefined,
     profile: process.env.DSH_SUPERAGENT_PROFILE || 'superagent',
     url: process.env.DSH_SUPERAGENT_URL || 'http://127.0.0.1:3082',
-    timeout: 60, stopTimeout: 300, respectStop: false,
+    timeout: 60, stopTimeout: 300, respectStop: false, yes: false,
   }
-  const fail = message => { console.error(message); console.error('usage: dsh-superagent {start,stop,restart,status} [--profile NAME] [--url URL]'); process.exit(2) }
-  const actions = ['start', 'stop', 'restart', 'status']
+  const fail = message => { console.error(message); console.error('usage: dsh-superagent {start,stop,restart,status,reset} [--profile NAME] [--url URL] [--yes]'); process.exit(2) }
+  const actions = ['start', 'stop', 'restart', 'status', 'reset']
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index]
     const value = name => argument.startsWith(name + '=') ? argument.slice(name.length + 1) : argv[++index]
     if (argument === '--respect-stop') options.respectStop = true
+    else if (argument === '--yes' || argument === '-y') options.yes = true
     else if (argument === '--profile' || argument.startsWith('--profile=')) options.profile = value('--profile')
     else if (argument === '--url' || argument.startsWith('--url=')) options.url = value('--url')
     else if (argument === '--timeout' || argument.startsWith('--timeout=')) options.timeout = Number(value('--timeout'))
     else if (argument === '--stop-timeout' || argument.startsWith('--stop-timeout=')) options.stopTimeout = Number(value('--stop-timeout'))
-    else if (argument === '--help' || argument === '-h') { console.log('usage: dsh-superagent {start,stop,restart,status} [--profile NAME] [--url URL]'); process.exit(0) }
+    else if (argument === '--help' || argument === '-h') { console.log('usage: dsh-superagent {start,stop,restart,status,reset} [--profile NAME] [--url URL] [--yes]'); process.exit(0) }
     else if (argument.startsWith('-')) fail(`unrecognized arguments: ${argument}`)
     else if (!options.action && actions.includes(argument)) options.action = argument
     else fail(`unrecognized arguments: ${argument}`)
@@ -333,6 +374,7 @@ async function main() {
       return 0
     }
     if (options.action === 'status') return await status(options)
+    if (options.action === 'reset') return await reset(options)
     if (options.action === 'stop' || options.action === 'restart') {
       // 只有停止会让自动恢复保持关闭；停止超时的重启会使其保持开启。
       await stop(options, options.action === 'stop')

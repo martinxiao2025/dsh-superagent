@@ -208,7 +208,7 @@ export class Setup {
       return checkPassed(field, 'githubRepositoryOk', { repository: access.repository, login: access.account.login })
     }
     const account = await checkGithubAccount(this.host.machine, 'candidate', config, probe)
-    if (field === 'instanceUrl') return checkPassed(field, 'githubInstanceOk', { host: hostOf(account.instanceUrl, 'github.com') })
+    if (field === 'instanceUrl') return checkPassed(field, 'githubInstanceOk', { host: hostOf(account.instanceUrl, this.host.machine.githubHost.get()) })
     if (field === 'cli') return checkPassed(field, 'githubAccountOk', { login: account.login })
     return checkFailed(field, 'checkUnsupported', { field })
   }
@@ -218,7 +218,7 @@ export class Setup {
       return checkPassed(field, 'gitlabProjectOk', { project: access.project, login: access.account.login })
     }
     const account = await checkGitlabAccount(this.host.machine, 'candidate', config, probe)
-    if (field === 'instanceUrl') return checkPassed(field, 'gitlabInstanceOk', { host: hostOf(account.instanceUrl, 'gitlab.com') })
+    if (field === 'instanceUrl') return checkPassed(field, 'gitlabInstanceOk', { host: hostOf(account.instanceUrl, this.host.machine.gitlabHost.get()) })
     if (field === 'cli') return checkPassed(field, 'gitlabAccountOk', { login: account.login })
     return checkFailed(field, 'checkUnsupported', { field })
   }

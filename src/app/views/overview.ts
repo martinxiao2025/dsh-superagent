@@ -56,7 +56,7 @@ export function overview(host: ViewHost, health: HealthMap, policyVersionValue: 
     // `evals` 健康项背后的不可用 Eval 会在下方逐条列为 `eval-unavailable`。
     ...Object.entries(health).filter(([name, item]) => item.state === 'error' && !sourceParts.has(name) && !name.startsWith('sync:')
       && name !== 'evals')
-      .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail })),
+      .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail, category: item.category ?? 'runtime' })),
     ...evaluating.filter(thread => thread.evaluating!.deadline < now)
       .map(thread => ({ kind: 'eval-overdue' as const, thread: threadSummary(view, thread) })),
     ...unjudged(store, since).map(({ thread, decision }) => ({ kind: 'eval-unavailable' as const, decisionId: decision.id,

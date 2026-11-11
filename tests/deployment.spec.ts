@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Config, executable, machineOf, resolveFeishuSource, resolveGithubSource, resolveGitlabSource, type Machine, type Probe } from '../src/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
+import { reference } from './fixtures/deployment.ts'
 import { programSource, runProgram } from './fixtures/program.ts'
 
 const exec = promisify(execFile)
@@ -57,11 +58,20 @@ describe('configuration schema', () => {
     expect(() => Config({})).toThrow('stateDir')
     const read = machineOf(Config({ stateDir: join(dir, 'state') }))
     // 上限是易变引用，由加载器原地更新，调用方在用到时读取。
-    expect({ ...read, promptMaxChars: read.promptMaxChars.get(), admissionContextMaxPages: read.admissionContextMaxPages.get(),
+    expect({ stateDir: read.stateDir, promptMaxChars: read.promptMaxChars.get(), admissionContextMaxPages: read.admissionContextMaxPages.get(),
       admissionContextTimeoutMs: read.admissionContextTimeoutMs.get() })
       .toEqual({ stateDir: join(dir, 'state'), promptMaxChars: 100000, admissionContextMaxPages: 10, admissionContextTimeoutMs: 15000 })
     expect(() => Config(minimal({ stateDir: 'relative/dir' }))).toThrow()
     expect(() => Config(minimal({ stateDir: '~/dir' }))).toThrow()
+  })
+  it('gives the command timeout, CLIs and Git hosts defaults that the configuration can override', () => {
+    const defaults = machineOf(Config(minimal()))
+    expect([defaults.commandTimeoutMs.get(), defaults.githubCli.get(), defaults.gitlabCli.get(), defaults.githubHost.get(), defaults.gitlabHost.get(),
+      defaults.workspaceRetentionDays.get()]).toEqual([90_000, 'gh', 'glab', 'github.com', 'gitlab.com', 14])
+    const overridden = machineOf(Config(minimal({ commandTimeoutMs: 5000, githubCli: 'octo', gitlabCli: 'lab', githubHost: 'git.example.com',
+      gitlabHost: 'lab.example.com', workspaceRetentionDays: 0 })))
+    expect([overridden.commandTimeoutMs.get(), overridden.githubCli.get(), overridden.gitlabCli.get(), overridden.githubHost.get(),
+      overridden.gitlabHost.get(), overridden.workspaceRetentionDays.get()]).toEqual([5000, 'octo', 'lab', 'git.example.com', 'lab.example.com', 0])
   })
   it('names keys the configuration does not define, and where the values of older keys live now', () => {
     const raw = minimal({ repository: 'acme/widgets', repositoryPath: '/srv/widgets', blockedCommands: [], author: { name: 'Alice' }, extra: 1 })
@@ -95,7 +105,8 @@ return 1`)
       expect(resolveGithubSource(machine(), place, github, probe, path)).rejects.toEqual(setupError(place, code, values))
     const repository = 'acme/widgets'
     await needs('github-main', 'repositoryUnset', {}, { cli: 'gh' })
-    await needs('github-main', 'agentCliUnset', {}, { repository })
+    // 记录未指定 CLI 时使用宿主默认值 `gh`，并解析到 PATH 上的同名程序。
+    expect(await resolveGithubSource(machine(), 'github-main', { repository }, probe, path)).toMatchObject({ cli: ghCli })
     await needs('github-main', 'agentCliMissing', { output: `${join(dir, 'missing')} is not an executable file` }, { repository, cli: join(dir, 'missing') })
     await needs('github-main', 'agentCliMissing', { output: 'bin/gh must be a command name or an absolute path' }, { repository, cli: 'bin/gh' })
     await needs('github-main', 'agentCliSignedOut', {}, { repository, cli: program('gh-broken', 'return 1') })
@@ -167,7 +178,9 @@ return 1`)
   it('names what GitLab setup needs and where it is set', async () => {
     const needs = (code: string, values: Record<string, unknown>, cli: string, userJson?: string, projectJson?: string) =>
       expect(resolveGitlabSource(machine(), 'gitlab-main', { project, cli }, probe, path)).rejects.toEqual(setupError('gitlab-main', code, values))
-    await needs('gitlabCliUnset', {}, '')
+    // 记录未指定 CLI 时回退到宿主配置的默认命令；用一个不存在的名字验证回退生效。
+    await expect(resolveGitlabSource(machine({ gitlabCli: reference('glab-absent') }), 'gitlab-main', { project, cli: '' }, probe, path))
+      .rejects.toEqual(setupError('gitlab-main', 'gitlabCliMissing', { output: 'glab-absent is not an executable file on PATH' }))
     await needs('gitlabCliMissing', { output: `${join(dir, 'missing')} is not an executable file` }, join(dir, 'missing'))
     await needs('gitlabCliSignedOut', {}, program('glab-broken', 'return 1'))
     await needs('gitlabNoAccount', {}, glab('glab-anonymous', '{}'))

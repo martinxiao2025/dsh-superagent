@@ -7,6 +7,7 @@ import type { Deployment, ResolvedFeishuSource, ResolvedGithubSource, ResolvedGi
 import { hostOf } from '../deployment.ts'
 
 const exec = promisify(execFile)
+/** 未配置 `commandTimeoutMs` 时的默认命令超时；与配置 schema 的默认值保持一致。 */
 const TIMEOUT_MS = 90_000
 /** Windows 上的 CLI 可能被安装为批处理文件，而 Windows 无法在无 shell 的情况下启动它。 */
 const BATCH = /\.(?:cmd|bat)$/i
@@ -37,7 +38,7 @@ export class CliError extends Error {
   constructor(message: string, readonly code?: number, readonly exitCode?: number) { super(message) }
 }
 /** 从失败的子进程中提取脱敏后的错误，不回显可能包含消息正文的 argv。 */
-export function commandError(error: unknown, program = 'command'): Error {
+export function commandError(error: unknown, program = 'command', timeoutMs = TIMEOUT_MS): Error {
   if (error instanceof Error && error.name === 'AbortError') return error
   const exitCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'number' ? error.code : undefined
   if (error && typeof error === 'object' && 'stderr' in error && typeof error.stderr === 'string') {
@@ -50,13 +51,13 @@ export function commandError(error: unknown, program = 'command'): Error {
     // `gh` 在 HTTP 错误（如 `gh: Not Found (HTTP 404)`）和 `gh: HTTP 304` 时会以非零状态退出，ETag 轮询依赖后者。
     if (stderr) return new CliError(stderr.slice(0, 2000), Number(/\bHTTP (\d{3})\b/.exec(stderr)?.[1]) || undefined, exitCode)
   }
-  return new CliError(`${basename(program)} ${ended(error)}`, undefined, exitCode)
+  return new CliError(`${basename(program)} ${ended(error, timeoutMs)}`, undefined, exitCode)
 }
-function ended(error: unknown): string {
+function ended(error: unknown, timeoutMs = TIMEOUT_MS): string {
   const { killed, signal, code } = (error ?? {}) as { killed?: boolean; signal?: string | null; code?: unknown }
   if (code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'printed more output than it may'
   // `execFile` 超时会用 SIGTERM 终止进程，并设置 `killed: true`。
-  if (killed && signal === 'SIGTERM') return `timed out after ${TIMEOUT_MS / 1000} s`
+  if (killed && signal === 'SIGTERM') return `timed out after ${timeoutMs / 1000} s`
   if (signal) return `was stopped by ${signal}`
   if (typeof code === 'number') return `exited with code ${code}`
   return typeof code === 'string' ? `could not run: ${code}` : 'failed'
@@ -116,12 +117,13 @@ export class Commands {
     return signal ? new Commands(this.resolved, this.environment, AbortSignal.any([this.signal, signal]), this.record) : this
   }
   async run(program: string, args: string[], cwd?: string): Promise<string> {
+    const timeoutMs = this.deployment.commandTimeoutMs.get()
     try {
       const { file, args: argv, windowsVerbatimArguments } = spawnCommand(program, args)
-      const { stdout } = await exec(file, argv, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, windowsVerbatimArguments,
+      const { stdout } = await exec(file, argv, { cwd, signal: this.signal, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsVerbatimArguments,
         env: { ...process.env, ...this.environment, ...this.hostEnvironment(), GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
       return stdout
-    } catch (error) { throw commandError(error, program) }
+    } catch (error) { throw commandError(error, program, timeoutMs) }
   }
   /** 企业实例的 `gh` / `glab` 调用需要以 `GH_HOST` / `GITLAB_HOST` 路由到该站点；官方站点不设置，保持默认行为。 */
   private hostEnvironment(): Record<string, string> {

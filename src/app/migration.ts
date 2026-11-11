@@ -19,9 +19,9 @@ import { Versions } from './versions.ts'
 export const SCHEMA_VERSION = 13
 /** 此构建可直接打开并迁移的最旧数据库模式版本。 */
 export const OLDEST_SCHEMA = 10
-/** 返回说明为何无法打开 `version` 的错误消息：更旧的模式需要新的状态目录。 */
+/** 返回说明为何无法打开 `version` 的错误消息：更旧的模式需要先备份并重置状态目录。 */
 export const tooOld = (version: number): string =>
-  `Orchestrator database schema ${version} predates schema ${OLDEST_SCHEMA}, which this version cannot migrate; start with a new state directory`
+  `Orchestrator database schema ${version} predates schema ${OLDEST_SCHEMA}, which this version cannot migrate; back it up and start from an empty baseline with reset (the panel's Reset action, \`reset\` command, or the resetState setting)`
 
 type Stored = Record<string, unknown>
 const isObject = (value: unknown): value is Stored => !!value && typeof value === 'object' && !Array.isArray(value)

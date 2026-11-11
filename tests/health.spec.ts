@@ -15,6 +15,14 @@ async function at(ms: number) {
 /** 重试失败的效果直到它失败三次，此后其类型会报告错误。 */
 async function failThrice() { await at(2000); await at(6000) }
 
+it('labels each health entry with its subsystem so the panel can separate runtime, schedule and workspace failures', async () => {
+  await h.runtime.ready
+  expect(h.runtime.health.runtime).toMatchObject({ category: 'runtime' })
+  expect(h.runtime.health.schedule).toMatchObject({ category: 'schedule' })
+  // 首次调度轮询后工作区回收会写入自己的健康条目。
+  expect(h.runtime.health.workspace).toMatchObject({ category: 'workspace' })
+})
+
 it('reports a relay in error once it failed three times, clears it once the relay reached the main Session, and leaves the runtime ready', async () => {
   const steer = h.agents.get(h.runtime.masterId)!.steer
   for (let count = 0; count < 3; count++) steer.mockImplementationOnce(() => { throw new Error('session busy') })

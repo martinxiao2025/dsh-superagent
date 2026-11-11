@@ -33,7 +33,9 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   const scoped = input.commands.scope(input.codeSource)
   const source = scoped.source
   if (source?.kind !== 'github' && source?.kind !== 'gitlab') throw new Error('代码仓库记录必须是 GitHub 或 GitLab')
-  const remote = remoteOf(source, input.remoteUrl)
+  // 测试与预检可能没有解析出部署；此时 `remoteOf` 使用内置默认主机。
+  const remote = remoteOf(source, input.remoteUrl, scoped.deployment
+    ? { github: scoped.deployment.githubHost.get(), gitlab: scoped.deployment.gitlabHost.get() } : undefined)
   await mkdir(input.directory, { recursive: true })
   // 登记目录后，git 的凭据助手才会按目录选择该代码仓库记录的凭据。
   await recordTicketSource(input.stateDir, input.directory, input.codeSource)
@@ -67,8 +69,9 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
  * 代码仓库的远端地址。
  * `remote` 非空时直接使用（例如 `git@github.com:owner/repo.git`），否则按来源记录生成 HTTPS 地址；
  * 自建实例使用记录里的站点主机。内嵌凭据的地址会被拒绝，凭据只能来自按目录绑定的 git 助手。
+ * `hosts` 给出官方站点的默认主机，使自托管实例与官方实例共用同一套推导。
  */
-export function remoteOf(source: { kind: 'github'; instanceUrl: string; repository: string } | { kind: 'gitlab'; instanceUrl: string; project: string }, remote = ''): string {
+export function remoteOf(source: { kind: 'github'; instanceUrl: string; repository: string } | { kind: 'gitlab'; instanceUrl: string; project: string }, remote = '', hosts: { github?: string; gitlab?: string } | undefined = undefined): string {
   const override = remote.trim()
   if (override) {
     if (hasEmbeddedCredentials(override)) throw new Error('代码仓库远端地址不能包含用户名或密码')
@@ -76,10 +79,12 @@ export function remoteOf(source: { kind: 'github'; instanceUrl: string; reposito
   }
   if (source.kind === 'github') {
     if (!source.repository) throw new Error('代码仓库记录尚未配置仓库')
-    return `https://${hostOf(source.instanceUrl, 'github.com')}/${source.repository}.git`
+    const host = hostOf(source.instanceUrl, hosts?.github ?? 'github.com')
+    return `https://${host}/${source.repository}.git`
   }
   if (!source.project) throw new Error('代码仓库记录尚未配置项目')
-  return `https://${hostOf(source.instanceUrl, 'gitlab.com')}/${source.project}.git`
+  const host = hostOf(source.instanceUrl, hosts?.gitlab ?? 'gitlab.com')
+  return `https://${host}/${source.project}.git`
 }
 
 /** 判断目录是否已经是 git 仓库。 */

@@ -23,6 +23,17 @@ export const Config = s.object({
     .description('Pages of thread context one assessment may read.').volatile(),
   admissionContextTimeoutMs: s.number().min(LIMITS.admissionContextTimeoutMs.min).max(LIMITS.admissionContextTimeoutMs.max).step(1)
     .default(15000).description('Time limit of one context read during an assessment, in milliseconds.').volatile(),
+  commandTimeoutMs: s.number().min(LIMITS.commandTimeoutMs.min).max(LIMITS.commandTimeoutMs.max).step(1).default(90_000)
+    .description('Time limit of one CLI or git command, in milliseconds.').volatile(),
+  githubCli: s.string().default('gh').description('GitHub CLI used when a GitHub code repository record leaves it empty.').volatile(),
+  gitlabCli: s.string().default('glab').description('GitLab CLI used when a GitLab code repository record leaves it empty.').volatile(),
+  githubHost: s.string().default('github.com').description('Host used for GitHub records that leave the instance address empty.').volatile(),
+  gitlabHost: s.string().default('gitlab.com').description('Host used for GitLab records that leave the instance address empty.').volatile(),
+  workspaceRetentionDays: s.number().min(LIMITS.workspaceRetentionDays.min).max(LIMITS.workspaceRetentionDays.max).step(1)
+    .default(14).description('Days an ended ticket\'s execution workspace is kept before it is reclaimed; 0 disables reclaiming.')
+    .volatile(),
+  resetState: s.boolean().default(false)
+    .description('Back up and clear the state directory before starting, then start from an empty baseline. Takes effect once per start.'),
 })
 export type DeploymentConfig = ReturnType<typeof Config>
 export interface Machine {
@@ -30,6 +41,12 @@ export interface Machine {
   promptMaxChars: Volatile<number>
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
+  commandTimeoutMs: Volatile<number>
+  githubCli: Volatile<string>
+  gitlabCli: Volatile<string>
+  githubHost: Volatile<string>
+  gitlabHost: Volatile<string>
+  workspaceRetentionDays: Volatile<number>
 }
 const MOVED: Record<string, string> = {
   repository: 'on each GitHub Source record', branchPrefix: 'in the prepare command of the Execution settings', github: 'on each GitHub Source record',
@@ -41,8 +58,10 @@ const MOVED: Record<string, string> = {
 export function machineOf(config: DeploymentConfig): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
-  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs } = config
-  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }
+  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, commandTimeoutMs, githubCli, gitlabCli, githubHost, gitlabHost,
+    workspaceRetentionDays } = config
+  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, commandTimeoutMs, githubCli, gitlabCli, githubHost, gitlabHost,
+    workspaceRetentionDays }
 }
 
 /**
@@ -69,7 +88,7 @@ export const FeishuSourceSchema = z.object({ instanceUrl: instanceUrl(), cli: z.
 export const GitlabSourceSchema = z.object({
   instanceUrl: instanceUrl(),
   project: z.string().trim().regex(/^([A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+)?$/, 'group/project').default(''),
-  cli: z.string().trim().default('glab'),
+  cli: z.string().trim().default(''),
 })
 /**
  * 影响部署解析、且修改后需要重启的来源配置键（按适配器类型）。
@@ -188,9 +207,11 @@ export interface GithubAccount { cli: string; instanceUrl: string; login: string
 const GithubAccountSchema = GithubSourceSchema.pick({ instanceUrl: true, cli: true })
 /** 只验证 CLI 身份与登录状态，不要求仓库字段，供「凭据」与「实例地址」的字段级预检使用。 */
 async function githubAccount(machine: Machine, id: string, accounts: { instanceUrl: string; cli: string }, probe: Probe, path: string): Promise<GithubAccount> {
-  if (!accounts.cli) throw new SetupError('agentCliUnset', {}, id)
+  // 记录未指定 CLI 时使用宿主默认值；两者都为空才视为未配置。
+  const configured = accounts.cli || machine.githubCli.get()
+  if (!configured) throw new SetupError('agentCliUnset', {}, id)
   let cli: string
-  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }, id) }
+  try { cli = executable(configured, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('agentCliMissing', { output: reason(error) }, id) }
   const env = hostVariable('GH_HOST', accounts.instanceUrl)
   const text = await probe([cli, 'api', 'user'], env).catch((error: unknown) => { throw new SetupError('agentCliSignedOut', { output: reason(error) }, id) })
   const agent = parsed(GithubUser, text)
@@ -241,9 +262,11 @@ const GitlabProject = z.object({
 export interface GitlabAccount { cli: string; instanceUrl: string; login: string; userId: number }
 const GitlabAccountSchema = GitlabSourceSchema.pick({ instanceUrl: true, cli: true })
 async function gitlabAccount(machine: Machine, id: string, accounts: { instanceUrl: string; cli: string }, probe: Probe, path: string): Promise<GitlabAccount> {
-  if (!accounts.cli) throw new SetupError('gitlabCliUnset', {}, id)
+  // 记录未指定 CLI 时使用宿主默认值；两者都为空才视为未配置。
+  const configured = accounts.cli || machine.gitlabCli.get()
+  if (!configured) throw new SetupError('gitlabCliUnset', {}, id)
   let cli: string
-  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('gitlabCliMissing', { output: reason(error) }, id) }
+  try { cli = executable(configured, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('gitlabCliMissing', { output: reason(error) }, id) }
   const env = hostVariable('GITLAB_HOST', accounts.instanceUrl)
   const user = parsed(GitlabUser, await probe([cli, 'api', 'user'], env).catch((error: unknown) => {
     throw new SetupError('gitlabCliSignedOut', { output: reason(error) }, id)

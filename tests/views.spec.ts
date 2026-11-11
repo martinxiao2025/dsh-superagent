@@ -179,8 +179,9 @@ it('lists an Eval past its deadline, and as dsh-superagent\'s own errors only pa
   const found = problems(host, health)
   expect(found).toContainEqual({ kind: 'eval-overdue', thread: expect.objectContaining({ key: 'feishu:oc_1:om_root', stage: 'evaluating' }) })
   // 效果属于 dsh-superagent 自身；来源显示其部件与策略同步，评估则逐条列出。
-  expect(found.filter(item => item.kind === 'runtime-error')).toEqual([{ kind: 'runtime-error', name: 'relay', detail: 'relay failing' },
-    { kind: 'runtime-error', name: 'reply', detail: 'reply failing' }])
+  expect(found.filter(item => item.kind === 'runtime-error')).toEqual([
+    { kind: 'runtime-error', name: 'relay', detail: 'relay failing', category: 'runtime' },
+    { kind: 'runtime-error', name: 'reply', detail: 'reply failing', category: 'runtime' }])
   expect(found.filter(item => item.kind === 'source-error').map(item => item.source.health.name)).toEqual(['feishu', 'feishu:history'])
 })
 

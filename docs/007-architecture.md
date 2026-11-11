@@ -332,6 +332,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/runtime.ts` | Runtime，组合根，及其启动和停止 |
 | `src/app/setup.ts` | 安装，以及 `setupChanged`：保存是否更改了安装读取的字段 |
 | `src/app/scheduler.ts` | ProjectScheduler：按项目轮询任务来源、维护持久化队列、按容量出队建单并跟踪终态 |
+| `src/app/workspace-gc.ts` | `collectWorkspaces`：按工单结束时间回收执行工作区，跳过运行中与不属于任何工单的目录 |
+| `src/app/reset.ts` | `resetState`：先备份状态目录，再清空插件拥有的条目；启动参数、面板与命令共用同一实现 |
 | `src/queue/model.ts` | 队列条目与快照模型 |
 | `src/app/passes.ts` | Passes，轮次调度器 |
 | `src/app/outbox.ts` | Outbox：Engine 的 `Outbox` 端口、回执以及发送它们的 `reply` 副作用 |
@@ -461,7 +463,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、字段级预检文案与注册表扩展 |
+| `tests/reset.spec.ts` | 状态目录重置：备份完整、只清插件拥有的条目、备份失败时不删除、可跳过备份 |
 | `tests/workspace.spec.ts` | 工单执行工作区：从轮询工作副本创建独立 worktree、重试复用、拒绝覆盖与未同步仓库报错 |
+| `tests/workspace-gc.spec.ts` | 执行工作区回收：保留期、运行中与未知目录、禁用回收与删除失败 |
 | `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败（每次重试都是新工单）、工作项级增删改、`runOnStart`、停用/删除项目、活动条目唯一索引与终态清理、回写副作用与重启恢复 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |

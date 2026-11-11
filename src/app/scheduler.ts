@@ -12,6 +12,7 @@ import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
 import type { Store } from './store.ts'
 import type { Effects } from './effects.ts'
+import type { Health } from '../sources/host.ts'
 import { queueActive, queueId, queueInFlight, queueItemKey, type QueueEntry, type QueueSnapshot } from '../queue/model.ts'
 
 /** 写入外部清单的持久化副作用载荷；键由队列条目与尝试次数决定，重复投递幂等。 */
@@ -40,6 +41,10 @@ export interface SchedulerHost {
   readonly syncRepo?: (repo: string) => Promise<string>
   /** 队列变化后的通知，供上层刷新。 */
   readonly onChange?: () => void
+  /** 调度健康条目；轮询、建单与工作区回收的结果写在这里，面板据 `category` 区分调度故障。 */
+  readonly health?: { set(health: Health): void }
+  /** 回收过期的执行工作区；实现必须跳过运行中或仍被未结束工单引用的目录。 */
+  readonly collectWorkspaces?: () => Promise<void>
   readonly now?: () => number
 }
 
@@ -47,6 +52,8 @@ export interface SchedulerHost {
 const TICK_MS = 15_000
 /** 终态条目在队列中的保留时长；更早的记录在轮询时清理。 */
 const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000
+/** 工作区回收的间隔；与保留期无关，保留期由实现按工单结束时间判断。 */
+const GC_INTERVAL_MS = 60 * 60_000
 
 /** 项目调度器：轮询任务来源、维护持久化队列、在容量允许时建单并跟踪工单终态。 */
 export class ProjectScheduler {
@@ -56,6 +63,8 @@ export class ProjectScheduler {
   private readonly registry: TaskSourceRegistry
   private readonly syncRepo: (repo: string) => Promise<string>
   private running = false
+  private nextGc = 0
+  private gcError = ''
 
   constructor(private readonly host: SchedulerHost) {
     this.registry = host.registry ?? taskSources
@@ -68,6 +77,7 @@ export class ProjectScheduler {
     this.timer = setInterval(() => void this.tick(), TICK_MS)
     this.timer.unref?.()
     const now = this.now()
+    this.nextGc = now
     for (const [id, project] of Object.entries(this.host.settings().projects)) {
       if (project.enabled && !project.schedule.runOnStart) this.nextPoll.set(id, now + project.schedule.intervalMinutes * 60_000)
     }
@@ -88,6 +98,8 @@ export class ProjectScheduler {
     }
     this.retire()
     this.pump()
+    await this.reclaim()
+    this.reportHealth()
   }
 
   /** 轮询一个项目：读取任务来源，取消消失的任务，把新的工作项入队。 */
@@ -180,12 +192,43 @@ export class ProjectScheduler {
       for (const entry of this.host.store.queue.active().filter(queueInFlight)) this.settle(entry, this.ticketOf(entry))
       this.retire()
       this.pump()
+      await this.reclaim()
     } catch (error) {
       // 单次检查失败不终止周期任务；具体项目的错误已记录在 `errors` 中。
       if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
     } finally {
       this.running = false
+      this.reportHealth()
     }
+  }
+
+  /** 按固定间隔回收过期工作区；失败不阻塞调度，只记录在调度健康条目中。 */
+  private async reclaim(): Promise<void> {
+    if (!this.host.collectWorkspaces || this.now() < this.nextGc) return
+    this.nextGc = this.now() + GC_INTERVAL_MS
+    try {
+      await this.host.collectWorkspaces()
+      this.gcError = ''
+    } catch (error) {
+      this.gcError = String(error instanceof Error ? error.message : error)
+    }
+  }
+
+  /** 把轮询错误、队列规模与工作区回收结果汇总到调度健康条目。 */
+  private reportHealth(): void {
+    // 停止过程中数据库可能已经关闭；健康上报不是关键路径，跳过即可。
+    if (!this.host.health || this.host.lifetime.aborted) return
+    try {
+      const projects = Object.values(this.host.settings().projects).filter(project => project.enabled).length
+      const items = this.host.store.queue.list()
+      const queued = items.filter(entry => entry.state === 'queued').length
+      const running = items.filter(queueInFlight).length
+      const failures = [...this.errors.entries()].map(([id, message]) => `${id || 'scheduler'}: ${message}`)
+      if (this.gcError) failures.push(`workspace reclaim: ${this.gcError}`)
+      const summary = `${projects} project(s); ${queued} queued; ${running} running`
+      this.host.health.set({ state: failures.length ? 'error' : 'ready', detail: failures.length ? `${summary}; ${failures.join('; ')}` : summary,
+        at: new Date(this.now()).toISOString(), category: 'schedule' })
+    } catch { /* 关闭或数据库不可读时保持上一条健康状态。 */ }
   }
 
   /** 启动恢复：没有工单的启动中条目视为上次中断，按失败重试；其余按工单实际状态结算。 */
@@ -412,6 +455,7 @@ export class ProjectScheduler {
 
   private fail(projectId: string, message: string): void {
     this.errors.set(projectId, message)
+    this.reportHealth()
     this.changed()
   }
 

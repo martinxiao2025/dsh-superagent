@@ -7,7 +7,7 @@ import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node
 import { realpathSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import type { SubprocessOutputReader, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { hostOf, type Deployment } from '../deployment.ts'
+import { hostOf, type Deployment, type ResolvedSource } from '../deployment.ts'
 import { SetupError } from '../setup.ts'
 import { CliError } from './commands.ts'
 import { workerDispatch, writeWorkerRecords, WORKER_DISPATCH_BODY, type WorkerRecord } from './worker-sources.ts'
@@ -138,11 +138,11 @@ export async function writeEnvironment(deployment: Deployment, blockedCommands: 
   }
   for (const name of before) if (!kept.has(name)) await unlink(join(dir, name))
   // 每个托管 Git 仓库的站点都使用同一个调度器助手；具体记录由工单目录决定，同一站点可以有多个账号。
-  const hosts = new Set<string>()
-  for (const source of values) {
-    if (source.kind === 'github') hosts.add(hostOf(source.instanceUrl, 'github.com'))
-    else if (source.kind === 'gitlab') hosts.add(hostOf(source.instanceUrl, 'gitlab.com'))
-  }
+  const githubHost = deployment.githubHost.get()
+  const gitlabHost = deployment.gitlabHost.get()
+  const hostOfSource = (source: ResolvedSource): string | undefined => source.kind === 'github' ? hostOf(source.instanceUrl, githubHost)
+    : source.kind === 'gitlab' ? hostOf(source.instanceUrl, gitlabHost) : undefined
+  const hosts = new Set(values.flatMap(source => hostOfSource(source) ?? []))
   const helper = credentialHelper(stateDir)
   await own(workerGitConfig(stateDir), [
     MARKER,
@@ -150,7 +150,7 @@ export async function writeEnvironment(deployment: Deployment, blockedCommands: 
     '[user]', '\tuseConfigOnly = true',
     '[credential]', '\thelper =',
     ...[...hosts].map(host => `[credential "https://${host}"]\n\thelper = ${gitQuote(helper)}`),
-    ...hosts.has('github.com') ? ['[url "https://github.com/"]', '\tinsteadOf = git@github.com:', '\tinsteadOf = ssh://git@github.com:'] : [],
+    ...hosts.has(githubHost) ? [`[url "https://${githubHost}/"]`, `\tinsteadOf = git@${githubHost}:`, `\tinsteadOf = ssh://git@${githubHost}:`] : [],
     // 包含 Git LFS 过滤器，因为运维者的全局 gitconfig（通常保存它们）被忽略。
     '[filter "lfs"]', '\tclean = git-lfs clean -- %f', '\tsmudge = git-lfs smudge -- %f', '\tprocess = git-lfs filter-process', '\trequired = true',
   ].join('\n') + '\n')
@@ -180,8 +180,8 @@ export async function verifyEnvironment(deployment: Deployment, subprocess: Subp
   const { stateDir, sources } = deployment
   const hosts = new Set<string>()
   for (const source of Object.values(sources)) {
-    if (source.kind === 'github') hosts.add(hostOf(source.instanceUrl, 'github.com'))
-    else if (source.kind === 'gitlab') hosts.add(hostOf(source.instanceUrl, 'gitlab.com'))
+    if (source.kind === 'github') hosts.add(hostOf(source.instanceUrl, deployment.githubHost.get()))
+    else if (source.kind === 'gitlab') hosts.add(hostOf(source.instanceUrl, deployment.gitlabHost.get()))
   }
   for (const host of hosts) {
     // `-z` 用 NUL 分隔字段，且从不引用路径。

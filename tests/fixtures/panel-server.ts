@@ -83,7 +83,7 @@ export const problemOf = (code: SetupCode, values: Record<string, string> = {}) 
 // 这些类型的配置不同，伪实现只把它们当作视图所携带的记录来读取。
 const KINDS = [feishuKind] as unknown as SourceKind[]
 export const MACHINE = { stateDir: '/srv/dsh-superagent', promptMaxChars: 100000, admissionContextMaxPages: 10,
-  admissionContextTimeoutMs: 15000 }
+  admissionContextTimeoutMs: 15000, commandTimeoutMs: 90000, workspaceRetentionDays: 14 }
 
 type Settings = ReturnType<typeof SettingsSchema.parse>
 export interface PanelServer {
@@ -224,7 +224,7 @@ const overviewView = (): ApiResponse<'GET overview'> => {
       // 与宿主机上一样，错误中每个不是来源自身、策略同步或单独列出的不可用评估的条目都是运行时错误。
       ...Object.entries(server.health).filter(([name, item]) => item.state === 'error' && !KINDS.some(kind => kind.health.includes(name))
         && !name.startsWith('sync:') && name !== 'evals')
-        .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail })),
+        .map(([name, item]) => ({ kind: 'runtime-error' as const, name, detail: item.detail, category: item.category ?? 'runtime' })),
       ...Object.values(server.settings.policy.sources).some(part => part.allowed.length) ? [] : [{ kind: 'no-allowed' as const }],
       ...server.failing.map(outgoing => ({ kind: 'outgoing' as const, outgoing }))],
     person: server.person, executor: { running: 2, queued: 0, maxWorkers: server.settings.executor.maxWorkers, idle: 1 },
@@ -530,6 +530,10 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET policy/history': { answer: () => server.history },
   'POST policy-sync/:id': { answer: ({ params }) => ({ policy: server.settings.policy.sources[params.id] }) },
   'POST setup/check': { answer: () => ({ restarting: true }) },
+  'POST admin/reset': { body: true, answer: ({ body: request }) => request.confirm === 'RESET'
+    ? { at: '2026-11-11T00:00:00.000Z', stateDir: '/srv/dsh-superagent/state', backup: '/backup/2026-11-11T00-00-00-000Z',
+      removed: ['orchestrator.sqlite'], kept: [] }
+    : refuse(400, 'Invalid request body') },
   'GET models': { answer: () => ({ default: { provider: 'host', model: 'default' }, routableProviders: [], failures: [],
     groups: [{ id: 'worker-provider', name: 'Worker provider', models: [{ id: 'worker-model', name: 'Worker model',
       reasoning: { efforts: [{ id: 'high', name: 'High' }] } }] }] }) },

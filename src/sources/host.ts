@@ -16,7 +16,11 @@ export const HEALTH_TEXT = {
   pollFailures: '{count} consecutive failed polls; last: {error}',
 } as const
 export type HealthCode = keyof typeof HEALTH_TEXT
-export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail: string; at?: string; code?: HealthCode; values?: Record<string, string> }
+/** 健康条目所属的子系统；面板据此区分运行时、写回、调度、同步与沟通故障。 */
+export const HEALTH_CATEGORIES = ['runtime', 'writeback', 'schedule', 'sync', 'workspace', 'communication'] as const
+export type HealthCategory = typeof HEALTH_CATEGORIES[number]
+export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail: string; at?: string; code?: HealthCode; values?: Record<string, string>;
+  category?: HealthCategory }
 export function health(state: Health['state'], code: HealthCode, values: Record<string, string> = {}): Health {
   return { state, detail: fill(HEALTH_TEXT[code], values), code, ...Object.keys(values).length ? { values } : {} }
 }

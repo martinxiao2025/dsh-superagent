@@ -157,6 +157,8 @@ it('names only the program and how it ended when a command prints no diagnostics
   const timedOut = { killed: true, signal: 'SIGTERM', code: null, stderr: '',
     message: 'Command failed: /path/lark-bot im +messages-reply --markdown withdrawn' }
   expect(commandError(timedOut, '/path/lark-bot')).toMatchObject({ message: 'lark-bot timed out after 90 s' })
+  // 配置的命令时限同样体现在错误里，而不是固定写 90 秒。
+  expect(commandError(timedOut, '/path/lark-bot', 5000)).toMatchObject({ message: 'lark-bot timed out after 5 s' })
   expect(String(commandError(timedOut, '/path/lark-bot'))).not.toContain('withdrawn')
 })
 it('reports failures as CliError with the code the CLI names and the exit status', async () => {

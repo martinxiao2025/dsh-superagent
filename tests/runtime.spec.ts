@@ -751,7 +751,9 @@ it('starts with a broken code repository record: the panel works, that record pa
   const next = await restart({}, { github: { cli: '' } })
   await next.ready
   next.sources.register(feishuKind)
-  const problem = { place: 'github', code: 'agentCliUnset', values: {}, detail: 'The agent GitHub CLI is not set.' }
+  // 记录把 CLI 留空时回退到宿主默认的 `gh`；测试环境里找不到它，因此该记录仍然被排除。
+  const problem = { place: 'github', code: 'agentCliMissing', values: { output: 'gh is not an executable file on PATH' },
+    detail: 'The agent GitHub CLI was not found.\ngh is not an executable file on PATH' }
   // 机器级部署检查通过：只排除出问题的记录，其余来源照常运行。
   expect(next.configured()).toBe(true)
   expect(next.setupProblem).toBeUndefined()

@@ -12,4 +12,6 @@ export const LIMITS = {
   promptMaxChars: { min: 1000, max: 1_000_000 },
   admissionContextMaxPages: { min: 1, max: 100 },
   admissionContextTimeoutMs: { min: 1, max: 90_000 },
+  commandTimeoutMs: { min: 1_000, max: 3_600_000 },
+  workspaceRetentionDays: { min: 0, max: 3650 },
 } as const
