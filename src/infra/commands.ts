@@ -5,6 +5,7 @@ import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { Deployment, ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
 import { hostOf } from '../deployment.ts'
+import { redact } from './text.ts'
 
 const exec = promisify(execFile)
 /** 未配置 `commandTimeoutMs` 时的默认命令超时；与配置 schema 的默认值保持一致。 */
@@ -47,9 +48,9 @@ export function commandError(error: unknown, program = 'command', timeoutMs = TI
     try { parsed = JSON.parse(stderr.slice(stderr.indexOf('{'))) as typeof parsed }
     catch { /* 非 JSON 的 CLI 诊断信息会在下方保留。 */ }
     const code = parsed?.error?.code
-    if (parsed?.error?.message) return new CliError(`${parsed.error.message}${code ? ` (${code})` : ''}`, code, exitCode)
+    if (parsed?.error?.message) return new CliError(redact(`${parsed.error.message}${code ? ` (${code})` : ''}`), code, exitCode)
     // `gh` 在 HTTP 错误（如 `gh: Not Found (HTTP 404)`）和 `gh: HTTP 304` 时会以非零状态退出，ETag 轮询依赖后者。
-    if (stderr) return new CliError(stderr.slice(0, 2000), Number(/\bHTTP (\d{3})\b/.exec(stderr)?.[1]) || undefined, exitCode)
+    if (stderr) return new CliError(redact(stderr.slice(0, 2000)), Number(stderr.match(/\bHTTP (\d{3})\b/)?.[1]) || undefined, exitCode)
   }
   return new CliError(`${basename(program)} ${ended(error, timeoutMs)}`, undefined, exitCode)
 }

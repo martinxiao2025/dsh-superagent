@@ -2,6 +2,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { z } from 'zod'
 import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, type ReplyStatus, type Repositories, type Thread, type ThreadFact,
   type ThreadFacts, type Ticket, type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { KV, type Family, type Key } from '../kv.ts'
@@ -54,6 +55,26 @@ const SETS: Record<string, Record<string, string>> = {
 }
 /** 当前数据库模式版本；只有这一版本的数据库可以被打开，其他版本必须重置。 */
 export const SCHEMA_VERSION = 14
+/** 工单的关键字段形状：读取时校验这些不变量，未知字段放行；与 `entity` 的 fail-fast 策略一致。 */
+const TicketShape = z.object({
+  id: z.string(), title: z.string(), decisionId: z.string(), createdAt: z.string(), updatedAt: z.string(),
+  mandate: z.object({ strength: z.string(), policyVersion: z.string(), basis: z.object({ via: z.string() }).passthrough() }).passthrough(),
+  origin: z.object({ triggerId: z.string(), triggerIds: z.array(z.unknown()) }).passthrough(),
+  channels: z.array(z.unknown()), assignments: z.array(z.unknown()), inputs: z.array(z.unknown()), undelivered: z.array(z.unknown()),
+}).passthrough()
+/** 线程的关键字段形状。 */
+const ThreadShape = z.object({
+  key: z.string(), createdAt: z.string(), lastAt: z.string().optional(),
+  ref: z.object({ source: z.string(), id: z.string() }).passthrough(),
+  subscriptions: z.array(z.unknown()), correlated: z.array(z.unknown()), pending: z.array(z.unknown()),
+  meta: z.object({}).passthrough(),
+}).passthrough()
+/** 决策的关键字段形状。 */
+const DecisionShape = z.object({
+  id: z.string(), evalId: z.string(), threadKey: z.string(), triggerIds: z.array(z.unknown()),
+  policyVersion: z.string(), at: z.string(), kind: z.string(), strength: z.string(),
+  reason: z.array(z.unknown()),
+}).passthrough()
 /** 拒绝打开其他模式版本的错误消息：本版本不做迁移，只能备份后用 `reset` 从空基线重新开始。 */
 const unsupported = (version: number): string =>
   `Unsupported orchestrator database version ${version}: this build opens schema ${SCHEMA_VERSION} only; back it up and start from an empty baseline with reset (the panel's Reset action, \`reset\` command, or the resetState setting)`
@@ -251,7 +272,7 @@ export class Store implements Repositories {
   readonly threads = {
     get: (keyValue: string): Thread | undefined => { const row = this.db.prepare('SELECT value FROM thread WHERE key=?').get(keyValue); return row ? this.entity<Thread>(String(row.value), 'thread', 'key', keyValue) : undefined },
     save: (thread: Thread): void => { this.db.prepare('INSERT INTO thread VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(thread.key, JSON.stringify(thread)) },
-    list: (): Thread[] => this.db.prepare('SELECT value FROM thread ORDER BY rowid').all().map(row => JSON.parse(String(row.value)) as Thread),
+    list: (): Thread[] => this.entityValues('SELECT value FROM thread ORDER BY rowid', ThreadShape),
     active: (): Thread[] => this.values('SELECT value FROM thread WHERE active = 1 ORDER BY rowid'),
     /** 更新人类可读的线程元数据（`label`、`url` 和 `facts`，其中 `null` 会按 ID 删除事实）；线程不存在时为空操作。 */
     describe: (keyValue: string, patch: { label?: string; url?: string; facts?: Record<string, ThreadFact | null> }): void => {
@@ -275,16 +296,17 @@ export class Store implements Repositories {
     get: (id: string): Ticket | undefined => { const row = this.db.prepare('SELECT value FROM ticket WHERE id=?').get(id); return row ? this.entity<Ticket>(String(row.value), 'ticket', 'id', id) : undefined },
     save: (ticket: Ticket): void => { this.db.prepare('INSERT INTO ticket VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value').run(ticket.id, JSON.stringify(ticket)) },
     /** 最新的在前。 */
-    list: (): Ticket[] => this.values('SELECT value FROM ticket ORDER BY rowid DESC'),
+    list: (): Ticket[] => this.entityValues('SELECT value FROM ticket ORDER BY rowid DESC', TicketShape),
     /** 最新的在前。 */
-    open: (): Ticket[] => this.values('SELECT value FROM ticket WHERE open = 1 ORDER BY rowid DESC'),
+    open: (): Ticket[] => this.entityValues('SELECT value FROM ticket WHERE open = 1 ORDER BY rowid DESC', TicketShape),
     /** 最新的在前。 */
-    active: (): Ticket[] => this.values('SELECT value FROM ticket WHERE active = 1 ORDER BY rowid DESC'),
+    active: (): Ticket[] => this.entityValues('SELECT value FROM ticket WHERE active = 1 ORDER BY rowid DESC', TicketShape),
   }
   readonly decisions = {
     get: (id: string): Decision | undefined => { const row = this.db.prepare('SELECT value FROM decision WHERE id=?').get(id); return row ? this.entity<Decision>(String(row.value), 'decision', 'id', id) : undefined },
     save: (decision: Decision): void => { this.db.prepare('INSERT INTO decision VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, thread=excluded.thread').run(decision.id, decision.threadKey, JSON.stringify(decision)) },
-    byThread: (threadKeyValue: string): Decision[] => this.db.prepare('SELECT value FROM decision WHERE thread=? ORDER BY rowid').all(threadKeyValue).map(row => JSON.parse(String(row.value)) as Decision),
+    byThread: (threadKeyValue: string): Decision[] =>
+      this.entityValues('SELECT value FROM decision WHERE thread=? ORDER BY rowid', DecisionShape, threadKeyValue),
   }
   /** 持久化调度队列；`seq` 决定全局 FIFO 顺序，状态列只索引活动条目。读取时按 schema 校验，避免字段漂移被静默接受。 */
   readonly queue = {
@@ -310,6 +332,18 @@ export class Store implements Repositories {
   /** 队列读取统一按 schema 解析，字段缺失或类型变化会明确失败而不是变成 `undefined`。 */
   private queueValues(sql: string): QueueEntry[] {
     return this.db.prepare(sql).all().map(row => QueueEntrySchema.parse(JSON.parse(String(row.value))))
+  }
+  /** 工单/线程/决策的读取校验：关键字段必须存在且类型正确，未知字段放行；损坏行明确报错而不是静默传播。 */
+  private entityValues<T>(sql: string, schema: z.ZodType, ...parameters: SQLInputValue[]): T[] {
+    return this.db.prepare(sql).all(...parameters).map(row => {
+      const value = JSON.parse(String(row.value)) as unknown
+      const parsed = schema.safeParse(value)
+      if (!parsed.success) {
+        throw new Error(`Stored record is corrupt: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`)
+      }
+      // 关键字段已经过校验；其余字段仍以领域类型为准（与 `entity` 的单一记录校验同口径）。
+      return value as T
+    })
   }
   /** 管理视图、编排工具和来源轮询的只读查询（见 `storeReads`）。 */
   readonly read: ReturnType<typeof storeReads>

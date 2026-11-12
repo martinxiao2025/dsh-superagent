@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { CliError, Commands, commandError } from '../src/infra/commands.ts'
+import { redact } from '../src/infra/text.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { feishuChannel } from '../src/sources/feishu-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
@@ -192,4 +193,23 @@ it('stops a running command when the signal of its work aborts, or the lifetime,
   lifetime.abort()
   await expect(other).rejects.toThrow()
   expect(Date.now() - started).toBeLessThan(4000)
+})
+
+describe('redact', () => {
+  it('masks URL credentials, auth headers, tokens and private keys in CLI diagnostics', () => {
+    expect(redact('fatal: unable to access https://user:secret@example.com/x.git/')).toBe('fatal: unable to access https://***@example.com/x.git/')
+    expect(redact('curl -H "authorization: Bearer sk-123" https://api.example.com')).toBe('curl -H "authorization: ***" https://api.example.com')
+    expect(redact('https://api.example.com/x?access_token=abc&page=1')).toBe('https://api.example.com/x?access_token=***&page=1')
+    expect(redact('token=abcdef&x=1')).toBe('token=***&x=1')
+    expect(redact('-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----'))
+      .toBe('-----BEGIN OPENSSH PRIVATE KEY-----***-----END OPENSSH PRIVATE KEY-----')
+    // 无关文本原样保留。
+    expect(redact('gh: Not Found (HTTP 404)')).toBe('gh: Not Found (HTTP 404)')
+  })
+
+  it('redacts command stderr before it reaches tickets or the panel', () => {
+    const error = commandError({ stderr: 'fatal: unable to access https://bot:secret@example.com/x.git/\n' }, 'git')
+    expect(error.message).not.toContain('secret')
+    expect(error.message).toContain('https://***@example.com')
+  })
 })

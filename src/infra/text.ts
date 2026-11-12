@@ -18,3 +18,15 @@ export const fill = (template: string, values: Record<string, string>): string =
 /** 用于 GitHub 登录名和仓库名的大小写不敏感比较。 */
 export const sameName = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
 export const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/**
+ * 统一脱敏：URL 内嵌凭据、Authorization/Bearer 头、令牌型查询参数与私钥块。
+ * CLI 输出与错误消息在进入日志、工单或面板之前统一调用，避免凭据经诊断文本泄漏。
+ */
+export function redact(text: string): string {
+  return text
+    .replace(/([a-zA-Z][\w+.-]*:\/\/)([^/@\s]+)@/g, '$1***@')
+    .replace(/(authorization\s*[:=])[^\n"]*/gi, '$1 ***')
+    .replace(/(bearer\s+)\S+/gi, '$1***')
+    .replace(/((?:access[-_])?token=)[^&\s]+/gi, '$1***')
+    .replace(/(-----BEGIN [A-Z ]*PRIVATE KEY-----)[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----)/g, '$1***$2')
+}
