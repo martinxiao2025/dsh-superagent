@@ -139,7 +139,8 @@ export class Runtime extends Service implements SourceHost {
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart,
         feishuWiki: credential => this.wikiOf(credential), feishuIm: credential => this.imOf(credential),
-        gitCredential: id => this.gitCredentials.metaOf(id), gitAuth: id => this.gitCredentials.authOf(id) })
+        gitCredential: id => this.gitCredentials.metaOf(id), gitAuth: id => this.gitCredentials.authOf(id),
+        commands: repoId => this.commands.scope(repoId) })
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')

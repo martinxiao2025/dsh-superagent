@@ -1,10 +1,11 @@
-/** 飞书凭据设置：与飞书来源记录、Git 凭据相互独立，界面只显示掩码与指纹。 */
+/** 飞书凭据设置：与 Git 凭据相互独立，界面只显示掩码与指纹；「消息接入」页承载消息来源配置。 */
 import { useEffect, useState } from 'react'
 import type { FeishuCredentialInput, FeishuCredentialView } from '../feishu-credentials/kind.ts'
 import type { SourceCheck } from '../setup.ts'
-import { Button, Input, Modal, Tag } from './controls.tsx'
+import { Button, Input, Modal, SegmentedControl, Tag } from './controls.tsx'
 import { usePanel } from './provider.tsx'
-import { Field } from './settings-kit.tsx'
+import { Field, useSettings } from './settings-kit.tsx'
+import { SourceSettings } from './source.tsx'
 import { errorText, sourceCheckText } from './text.ts'
 import { ConfirmButton, Hint } from './widgets.tsx'
 
@@ -179,8 +180,26 @@ function CredentialCard({ record, changed }: { record: FeishuCredentialView; cha
   </div>
 }
 
-/** 飞书凭据设置页：默认显示列表，由「新增」按钮展开新增区块。 */
-export function FeishuCredentialSettings() {
+/** 飞书凭据设置页：「凭据」与「消息接入」两页；消息来源（消息工单入口）在后者配置，与凭据身份同处一个域。 */
+export function FeishuCredentialSettings({ initialTab, focus }: { initialTab?: string; focus?: string }) {
+  const { t } = usePanel()
+  const { settings } = useSettings()
+  const [tab, setTab] = useState<'credentials' | 'ingress'>(initialTab === 'ingress' ? 'ingress' : 'credentials')
+  return <>
+    <SegmentedControl label={t('feishuSettingsTabs')} value={tab} onChange={setTab}
+      options={[{ value: 'credentials' as const, label: t('feishuSettingsTabCredentials') },
+        { value: 'ingress' as const, label: t('feishuSettingsTabIngress') }]} />
+    {tab === 'credentials' ? <CredentialList /> : <>
+      <p className="dt-hint">{t('feishuIngressIntro')}</p>
+      {settings.kinds.length === 0 && settings.sources.length === 0
+        ? <Hint>{t('feishuCredentialNone')}</Hint>
+        : <SourceSettings {...focus ? { focus } : {}} />}
+    </>}
+  </>
+}
+
+/** 凭据列表：默认显示概要，由「新增」按钮展开新增区块。 */
+function CredentialList() {
   const { t, call, notify } = usePanel()
   const [items, setItems] = useState<FeishuCredentialView[] | null>(null)
   const [adding, setAdding] = useState(false)

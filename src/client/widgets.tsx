@@ -115,12 +115,13 @@ export function LoadMore({ onMore }: { onMore: () => void }) {
   return <Button variant="outline" size="sm" icon={<Icon name="chevron-down" size={14} />} onClick={onMore}>{t('loadMore')}</Button>
 }
 
-export function StatusHead({ hint, settings }: { hint: string; settings?: SettingsGroup }) {
+export function StatusHead({ hint, settings, settingsQuery }: { hint: string; settings?: SettingsGroup
+  settingsQuery?: { tab?: string; source?: string } }) {
   const { t, navigate } = usePanel()
   return <div className="dt-status-head">
     <h2 className="dt-status-title">{t('statusTitle')}<InfoTip text={hint} /></h2>
     {settings && <Button variant="ghost" size="sm" icon={<Icon name="settings" />}
-      onClick={() => navigate(settingsRoute(settings))}>{t('tab.settings')}</Button>}
+      onClick={() => navigate(settingsRoute(settings, settingsQuery))}>{t('tab.settings')}</Button>}
   </div>
 }
 export function PageHead({ title, children }: { title: ReactNode; children?: ReactNode }) {

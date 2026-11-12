@@ -14,7 +14,7 @@ describe('text writeback', () => {
   it('updates the status column and preserves BOM, CRLF and the final newline', async () => {
     const file = join(directory(), 'backlog.csv')
     writeFileSync(file, '\uFEFFtask_id,title,status,description,priority\r\nT-1,修复登录,todo,按验收标准,P1\r\n', 'utf8')
-    await writeTaskStatusAt(file, '', columns, target, 'done')
+    await writeTaskStatusAt(file, columns, target, 'done')
     const buffer = readFileSync(file)
     expect(buffer[0]).toBe(0xef)
     expect(/\r\n/.test(buffer.toString('utf8'))).toBe(true)
@@ -25,7 +25,7 @@ describe('text writeback', () => {
   it('writes LF files without a final newline intact', async () => {
     const file = join(directory(), 'backlog.csv')
     writeFileSync(file, 'task_id,title,status\nT-1,修复登录,todo', 'utf8')
-    await writeTaskStatusAt(file, '', columns, target, 'done')
+    await writeTaskStatusAt(file, columns, target, 'done')
     const text = readFileSync(file).toString('utf8')
     expect(text).toBe('task_id,title,status\nT-1,修复登录,done')
   })
@@ -33,14 +33,14 @@ describe('text writeback', () => {
   it('updates a TSV by the id column and keeps the delimiter', async () => {
     const file = join(directory(), 'backlog.tsv')
     writeFileSync(file, 'task_id\ttitle\tstatus\nT-1\t修复登录\ttodo\n', 'utf8')
-    await writeTaskStatusAt(file, '', columns, target, 'blocked')
+    await writeTaskStatusAt(file, columns, target, 'blocked')
     expect(readFileSync(file).toString('utf8')).toContain('T-1\t修复登录\tblocked')
   })
 
   it('locates the row by title when the id column is empty for that row', async () => {
     const file = join(directory(), 'backlog.csv')
     writeFileSync(file, 'task_id,title,status\n,修复登录,todo\n', 'utf8')
-    await writeTaskStatusAt(file, '', columns, target, 'done')
+    await writeTaskStatusAt(file, columns, target, 'done')
     expect(readFileSync(file).toString('utf8')).toContain(',修复登录,done')
   })
 
@@ -48,12 +48,12 @@ describe('text writeback', () => {
     const directory_ = directory()
     const csv = join(directory_, 'backlog.csv')
     writeFileSync(csv, 'task_id,title,status\nT-2,别的任务,todo\n', 'utf8')
-    await expect(writeTaskStatusAt(csv, '', columns, target, 'done')).rejects.toThrow('找不到任务')
+    await expect(writeTaskStatusAt(csv, columns, target, 'done')).rejects.toThrow('找不到任务')
     writeFileSync(csv, 'task_id,title\nT-1,修复登录\n', 'utf8')
-    await expect(writeTaskStatusAt(csv, '', columns, target, 'done')).rejects.toThrow('状态列')
+    await expect(writeTaskStatusAt(csv, columns, target, 'done')).rejects.toThrow('状态列')
     const rst = join(directory_, 'backlog.rst')
     writeFileSync(rst, 'whatever', 'utf8')
-    await expect(writeTaskStatusAt(rst, '', columns, target, 'done')).rejects.toThrow('不支持')
+    await expect(writeTaskStatusAt(rst, columns, target, 'done')).rejects.toThrow('不支持')
     rmSync(directory_, { recursive: true, force: true })
   })
 })
@@ -94,17 +94,17 @@ ${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://sche
   it('writes the status and keeps the workbook readable', async () => {
     const file = join(directory(), 'backlog.xlsx')
     writeFileSync(file, workbook([{ name: 'tasks', rows: [['task_id', 'title', 'status'], ['T-1', '修复登录', 'todo']] }]))
-    await writeTaskStatusAt(file, 'tasks', columns, target, 'done')
+    await writeTaskStatusAt(file, columns, target, 'done')
     // 回写后文件仍是合法 xlsx（ZIP 本地文件头），且能按标准表读出更新后的状态。
     const buffer = readFileSync(file)
     expect(buffer.subarray(0, 2)).toEqual(Buffer.from([0x50, 0x4b]))
-    const table = await readStandardTable(file, 'tasks')
+    const table = await readStandardTable(file)
     expect(table.table.rows.find(item => item.values['task_id'] === 'T-1')?.values['status']).toBe('done')
   })
 
   it('rejects an unknown task row', async () => {
     const file = join(directory(), 'backlog.xlsx')
     writeFileSync(file, workbook([{ name: 'tasks', rows: [['task_id', 'title', 'status'], ['T-2', '别的任务', 'todo']] }]))
-    await expect(writeTaskStatusAt(file, 'tasks', columns, target, 'done')).rejects.toThrow('找不到任务')
+    await expect(writeTaskStatusAt(file, columns, target, 'done')).rejects.toThrow('找不到任务')
   })
 })

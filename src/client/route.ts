@@ -19,14 +19,16 @@ export type Route = { page: 'overview' | 'source'; id?: undefined; query?: undef
   | { page: 'eval'; id?: undefined; query?: { filter?: DecisionFilter; window?: '24h' } }
   | { page: 'execution'; id?: undefined; query?: { filter?: TicketFilter } }
   | { page: 'execution'; id: string; query?: undefined }
-  | { page: 'settings'; id?: undefined; query: { group: SettingsGroup; source?: string; version?: string } }
+  | { page: 'settings'; id?: undefined; query: { group: SettingsGroup; source?: string; version?: string; tab?: string } }
 export const HOME: Route = { page: 'overview' }
-export const settingsRoute = (group: SettingsGroup, query: { source?: string; version?: string } = {}): Route =>
+export const settingsRoute = (group: SettingsGroup, query: { source?: string; version?: string; tab?: string } = {}): Route =>
   ({ page: 'settings', query: { group, ...query } })
 export const setupPage = (place: SetupPlace): Route => {
   if (place === 'deployment') return settingsRoute('deployment')
-  // 项目仓库的来源标识带 `repo-` 前缀；打开对应的项目设置卡片。
-  return settingsRoute('projects', { source: place.startsWith('repo-') ? place.slice(5) : place })
+  // 项目仓库的来源标识带 `repo-` 前缀，打开对应项目卡片；其余是消息来源记录，进入飞书凭据的「消息接入」页。
+  return place.startsWith('repo-')
+    ? settingsRoute('projects', { source: place.slice(5) })
+    : settingsRoute('feishuCredentials', { tab: 'ingress', source: place })
 }
 export const routeLabel = (t: T, route: Route): string =>
   route.id ? t(route.page === 'trigger' ? 'term.thread' : route.page === 'projects' ? 'term.project' : 'term.ticket') : t(`tab.${route.page}`)
@@ -50,7 +52,7 @@ export function parseRoute(value: unknown): Route | undefined {
       window: query?.window === '24h' ? '24h' as const : undefined }) }
     case 'execution': return record ? { page, id: record } : { page, query: compact({ filter: pick(TICKET_FILTERS, query?.filter) }) }
     case 'settings': return { page, query: { group: pick(SETTINGS_GROUPS, query?.group) ?? 'projects',
-      ...compact({ source: text('source'), version: text('version') }) } }
+      ...compact({ source: text('source'), version: text('version'), tab: text('tab') }) } }
     default: return undefined
   }
 }

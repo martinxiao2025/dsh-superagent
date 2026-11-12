@@ -19,7 +19,7 @@ export type FieldSpec =
   | FieldBase & { type: 'number'; min: number; max: number }
   | FieldBase & { type: 'text'; pattern?: string; readonly?: boolean; choose?: Localized }
   | FieldBase & { type: 'sources'; kinds: string[]; choose: Localized }
-  | FieldBase & { type: 'fact'; settings?: 'deployment' }
+  | FieldBase & { type: 'fact' }
   | FieldBase & { type: 'rows'; columns: ({ key: string; label: Localized; type: 'text'; pattern?: string; optional?: boolean; choose?: Localized; refresh?: Localized } | { key: string; label: Localized; type: 'select'; options: { value: string; label: Localized }[] })[] }
 
 export interface VariableSpec { key: string; description: Localized }

@@ -67,8 +67,10 @@ export interface TaskSourceVerifyDeps {
   feishu?(credential: string): Promise<FeishuWikiApi | undefined>
   /** 按飞书凭据 ID 取得群消息读取能力；飞书消息驱动使用。 */
   feishuIm?(credential: string): Promise<FeishuImApi | undefined>
-  /** 同步代码仓库并返回本地工作副本目录。 */
-  syncRepo(repo: string): Promise<string>
+  /** 同步项目代码仓库并返回本地工作副本目录。 */
+  syncRepo(): Promise<string>
+  /** 绑定到代码仓库记录的 git 命令入口；Excel 驱动在清单缺失时用它提交初始版本。 */
+  git?(args: string[], cwd: string): Promise<string>
 }
 
 /** 读取任务时的上下文：`syncRepo` 由项目调度或预检注入，Excel 驱动在读取前调用它。 */
@@ -76,8 +78,8 @@ export interface TaskSourceRunContext {
   signal: AbortSignal
   /** 已绑定到任务来源所需记录的宿主命令入口。 */
   commands: Commands
-  /** 同步并返回代码仓库的本地工作副本；Excel 驱动配置了 `repo` 时必须提供。 */
-  syncRepo?(repo: string): Promise<string>
+  /** 同步并返回项目代码仓库的本地工作副本；Excel 驱动读取仓库内清单时必须提供。 */
+  syncRepo?(): Promise<string>
   /** 按飞书凭据 ID 取得知识库读取能力；飞书知识库驱动使用。 */
   feishu?(credential: string): Promise<FeishuWikiApi | undefined>
   /** 按飞书凭据 ID 取得群消息读取能力；飞书消息驱动使用。 */
@@ -87,7 +89,7 @@ export interface TaskSourceRunContext {
 /** 回写上下文：回写前同样需要代码仓库工作副本，但不需要读取任务。 */
 export interface TaskSourceWriteContext {
   signal?: AbortSignal
-  syncRepo?(repo: string): Promise<string>
+  syncRepo?(): Promise<string>
   /** 绑定到代码仓库记录的命令入口；用于在回写后把工作副本恢复干净。 */
   commands?: Commands
 }
@@ -128,8 +130,6 @@ export interface TaskSourceDriver<C extends Record<string, unknown> = Record<str
   fields: FieldSpec[]
   /** 默认字段映射与必须映射的字段；用户可在记录配置里覆盖。 */
   fieldMap: { defaults: TaskFieldMap; required: readonly (keyof TaskFieldMap)[] }
-  /** 驱动读取的代码仓库记录 ID；项目必须绑定同一个仓库。只读、不产生任务的来源可省略。 */
-  repo?(config: C): string
   /** 驱动独占的外部范围（如飞书 `spaceId`）；同一范围只能绑定一个任务来源。 */
   knowledgeBase?(config: C): string
   /** 真实访问来源做字段级预检；`field` 是驱动字段键，不处理 `name` / `id` / `kind`。 */

@@ -67,7 +67,7 @@ it('leads the task source step with its type and hides fields the type does not 
   await mount()
   await click(zh['tab.settings'])
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
-  await type(field(zh.sourceName), '内容运营')
+  await type(field(zh.projectName), '内容运营')
   await click(zh.projectNext)
   // 仓库步必须先验证连通并选定分支，才允许进入任务来源步。
   await type(field('仓库地址'), 'https://github.com/acme/content.git')
@@ -90,7 +90,7 @@ it('creates a project through the four-step wizard and saves the full configurat
   await click(find(zh['tab.settings'], '.dt-status-head button'))
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   expect(text()).toContain(zh.projectWizardTitle)
-  await type(field(zh.sourceName), '内容运营')
+  await type(field(zh.projectName), '内容运营')
   await click(zh.projectNext)
   // 仓库步：填地址、验证连通，分支由向导按远端默认分支自动选中。
   await type(field('仓库地址'), 'https://github.com/acme/content.git')
@@ -139,21 +139,20 @@ it('edits the code repository embedded in the project', async () => {
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:content'])
 })
 
-it('locks the repository kind and records the auth mode when a Git credential is bound', async () => {
+it('derives the repository kind from the bound Git credential and records the auth mode', async () => {
   server.gitCredentials = [{ id: 'cred', name: '机器人凭据', kind: 'https', provider: 'github', username: 'agent-bot', note: '',
     origin: 'pasted' as const, keyPath: '', revision: 1, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••oken' }]
   await mount()
   await click(zh['tab.projects'])
   await click(find(zh['tab.settings'], '.dt-status-head button'))
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
-  await type(field(zh.sourceName), '内容运营')
+  await type(field(zh.projectName), '内容运营')
   await click(zh.projectNext)
   await type(field<HTMLSelectElement>(zh.projectGitCredentialLabel), 'cred')
-  // 仓库类型随凭据锁定为 GitHub；cli 与 SSH key 等低级栏位不再出现，只剩仓库地址。
+  // 仓库类型不再是表单字段：随凭据推导为 GitHub，以只读标签展示；只剩仓库地址可填。
   const wizard = document.querySelector(`[aria-label="${zh.projectWizardTitle}"]`)!
-  const kindSelect = field<HTMLSelectElement>(zh.projectRepoKind, wizard)
-  expect(kindSelect.disabled).toBe(true)
-  expect(kindSelect.value).toBe('github')
+  expect(() => field<HTMLSelectElement>(zh.projectRepoKind, wizard)).toThrow()
+  expect(wizard.textContent).toContain('GitHub')
   expect(() => field('智能体的 GitHub CLI', wizard)).toThrow()
   expect(field(zh.projectRepoUrl, wizard)).toBeTruthy()
 })
@@ -163,7 +162,7 @@ it('picks the Feishu chat from the bot chat list in the task source step', async
   await click(zh['tab.projects'])
   await click(find(zh['tab.settings'], '.dt-status-head button'))
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
-  await type(field(zh.sourceName), '内容运营')
+  await type(field(zh.projectName), '内容运营')
   await click(zh.projectNext)
   await type(field('仓库地址'), 'https://github.com/acme/content.git')
   await click(document.querySelector(`[aria-label="${zh.verify} · 仓库地址"]`) as HTMLElement)

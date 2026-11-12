@@ -21,27 +21,6 @@ export interface TaskTable { header: string[]; rows: TaskTableRow[] }
 /** 表格的原始形态：保留行号与未映射的单元格，供表头校验与行号定位共用。 */
 interface NumberedCells { number: number; cells: string[] }
 
-/**
- * 读取清单为带行号的表格；第一张表或 `sheet` 指定的表。
- * @throws TaskFileError 当文件不可读、格式不支持或缺少表头时。
- */
-export async function readTaskTable(file: string, sheet: string): Promise<TaskTable> {
-  const extension = extname(file).toLowerCase()
-  const buffer = await readFile(file).catch(error => { throw new TaskFileError(`无法读取任务清单：${messageOf(error)}`) })
-  if (extension === '.xlsx') return tableOf(sheetRows(buffer, sheet))
-  if (extension === '.csv' || extension === '.tsv') {
-    const delimiter = extension === '.tsv' ? '\t' : ','
-    return tableOf(numbered(parseDelimited(buffer.toString('utf8').replace(/^\uFEFF/, ''), delimiter)))
-  }
-  throw new TaskFileError(`不支持的任务清单格式：${extension || '(无扩展名)'}`)
-}
-
-/** 读取清单并返回以表头为键的行；需要行号的调用方应使用 `readTaskTable`。 */
-export async function readTaskRows(file: string, sheet: string): Promise<Record<string, string>[]> {
-  const table = await readTaskTable(file, sheet)
-  return table.rows.map(row => row.values)
-}
-
 /** 标准工作簿读取结果：任务表、`_meta` 中的版本与读取警告。 */
 export interface StandardTable {
   table: TaskTable
@@ -51,11 +30,11 @@ export interface StandardTable {
 }
 
 /**
- * 按 016 读取标准工作簿：优先 `tasks` 工作表，`_meta` 只读版本，其他表忽略并记录警告。
+ * 按 010 标准读取工作簿：优先 `tasks` 工作表（缺失时回退第一张并警告），`_meta` 只读版本，其他表忽略并记录警告。
  * CSV / TSV 等价于只有 `tasks` 一张表，同样要求 UTF-8。
  * @throws TaskFileError 文件不可读、非 UTF-8、找不到工作表或版本高于当前支持。
  */
-export async function readStandardTable(file: string, sheet: string): Promise<StandardTable> {
+export async function readStandardTable(file: string): Promise<StandardTable> {
   const extension = extname(file).toLowerCase()
   const buffer = await readFile(file).catch(error => { throw new TaskFileError(`无法读取任务清单：${messageOf(error)}`) })
   if (extension === '.csv' || extension === '.tsv') {
@@ -67,9 +46,9 @@ export async function readStandardTable(file: string, sheet: string): Promise<St
   const sharedEntry = entries.find(item => item.name === 'xl/sharedStrings.xml')
   const shared = sharedStrings(sharedEntry ? zipRead(buffer, sharedEntry).toString('utf8') : '')
   const sheets = workbookSheets(buffer, entries)
-  const chosen = pickSheet(sheets, sheet)
+  const chosen = pickSheet(sheets)
   const warnings: string[] = []
-  if (!sheet && chosen.name.toLowerCase() !== TASK_SHEET) {
+  if (chosen.name.toLowerCase() !== TASK_SHEET) {
     warnings.push(`没有找到 ${TASK_SHEET} 工作表，已回退到“${chosen.name}”`)
   }
   const ignored = sheets.filter(item => item !== chosen && item.name !== META_SHEET)
@@ -88,14 +67,9 @@ export async function readStandardTable(file: string, sheet: string): Promise<St
   return { table: tableOf(xmlRows(chosen.xml, shared)), version, warnings }
 }
 
-/** 标准工作簿按名称取表：显式指定时精确匹配，否则优先 `tasks`，再回退到第一张表。 */
-function pickSheet(sheets: readonly { name: string; path: string; xml: string }[], sheet: string):
+/** 标准工作簿取表：优先 `tasks`，缺失时回退到第一张表。 */
+function pickSheet(sheets: readonly { name: string; path: string; xml: string }[]):
 { name: string; path: string; xml: string } {
-  if (sheet) {
-    const found = sheets.find(item => item.name === sheet)
-    if (!found) throw new TaskFileError(`找不到工作表：${sheet}`)
-    return found
-  }
   const found = sheets.find(item => item.name.toLowerCase() === TASK_SHEET) ?? sheets[0]
   if (!found) throw new TaskFileError('工作簿没有工作表')
   return found
@@ -186,22 +160,6 @@ interface ZipEntry {
   comment: Buffer
   internal: number
   external: number
-}
-
-/** 从 xlsx（ZIP）中取出指定文档的文本；`sheet` 为空时取第一张表。 */
-function sheetRows(buffer: Buffer, sheet: string): NumberedCells[] {
-  const entries = zipEntries(buffer)
-  const entry = (name: string): Buffer | undefined => {
-    const found = entries.find(item => item.name === name)
-    return found ? zipRead(buffer, found) : undefined
-  }
-  const shared = sharedStrings(entry('xl/sharedStrings.xml')?.toString('utf8') ?? '')
-  const workbook = entry('xl/workbook.xml')?.toString('utf8') ?? ''
-  const rels = entry('xl/_rels/workbook.xml.rels')?.toString('utf8') ?? ''
-  const target = sheetPath(workbook, rels, sheet)
-  const xml = entry(target)?.toString('utf8')
-  if (!xml) throw new TaskFileError(`找不到工作表：${sheet || '(第一张表)'}`)
-  return xmlRows(xml, shared)
 }
 
 /** 读取 ZIP 中央目录；不支持 ZIP64 与加密条目。 */

@@ -15,13 +15,14 @@ const STAGE_GROUPS: readonly SettingsGroup[] = ['gitCredentials', 'feishuCredent
 /** 与主菜单同名但含义是配置的分组；导航上追加“配置”标记，避免与运行页混淆。 */
 const CONFIG_GROUPS: readonly SettingsGroup[] = ['projects', 'eval', 'execution']
 export function SettingsPage({ group, query, state, deploymentForm }: {
-  group: SettingsGroup; query: { source?: string; version?: string }; state: StateView; deploymentForm: DeploymentForm
+  group: SettingsGroup; query: { source?: string; version?: string; tab?: string }; state: StateView; deploymentForm: DeploymentForm
 }) {
   const { t, navigate } = usePanel()
   const content = (() => {
     switch (group) {
       case 'gitCredentials': return <SettingsProvider><GitCredentialSettings /></SettingsProvider>
-      case 'feishuCredentials': return <SettingsProvider><FeishuCredentialSettings /></SettingsProvider>
+      case 'feishuCredentials': return <SettingsProvider>
+        <FeishuCredentialSettings initialTab={query.tab} focus={query.source} /></SettingsProvider>
       case 'projects': return <SettingsProvider><ProjectSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>
       case 'eval': return <SettingsProvider><EvalSettings version={query.version} /></SettingsProvider>
       case 'execution': return <SettingsProvider><ExecutionSettings /></SettingsProvider>

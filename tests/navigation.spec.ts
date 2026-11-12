@@ -63,9 +63,11 @@ it('reads each page a tab remembered with the parameters it takes, and leaves ou
     .toEqual({ page: 'settings', query: { group: 'projects', source: 'feishu' } })
   expect([parseRoute('overview'), parseRoute(null)]).toEqual([undefined, undefined])
 })
-it('opens the settings that fix each setup problem: the Deployment group, or the card of the Source it names', () => {
+it('opens the settings that fix each setup problem: the Deployment group, or the message-intake page of the Source it names', () => {
   expect(setupPage('deployment')).toEqual({ page: 'settings', query: { group: 'deployment' } })
-  for (const place of ['github', 'feishu'] as const) expect(setupPage(place)).toEqual({ page: 'settings', query: { group: 'projects', source: place } })
+  // 消息来源记录进入飞书凭据的「消息接入」页签。
+  for (const place of ['github', 'feishu'] as const) expect(setupPage(place))
+    .toEqual({ page: 'settings', query: { group: 'feishuCredentials', tab: 'ingress', source: place } })
   // 项目仓库来源标识带 `repo-` 前缀，打开对应项目卡片。
   expect(setupPage('repo-content')).toEqual({ page: 'settings', query: { group: 'projects', source: 'content' } })
 })

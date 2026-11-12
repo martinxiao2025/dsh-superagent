@@ -29,6 +29,14 @@ export interface GitCredentialsOptions {
 
 /** SSH 私钥的最小形状检查；不做口令解密。 */
 const KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/
+/**
+ * 规范化 SSH 私钥文本：去 BOM、CRLF 转 LF、保证以换行结尾。
+ * OpenSSH 拒绝不以换行结尾的私钥文件（`is not a key file` / `invalid format`），
+ * 因此这里不能用会剥掉尾部换行的整串 `trim()`。
+ */
+export function normalizePrivateKey(text: string): string {
+  return text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/^\n+/, '').replace(/\s*$/, '\n')
+}
 /** 把探测错误归入面板可本地化的失败原因。 */
 export function classifyProbeError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
@@ -183,13 +191,13 @@ export class GitCredentials {
   private material(input: Partial<GitCredentialInput>): SecretMaterial {
     const material: SecretMaterial = {}
     if (input.kind === undefined || input.kind === 'ssh') {
-      const pasted = input.privateKey?.trim() ?? ''
+      const pasted = input.privateKey ?? ''
       const path = input.keyPath?.trim() ?? ''
-      if (pasted) material.privateKey = pasted
+      if (pasted.trim()) material.privateKey = normalizePrivateKey(pasted)
       else if (path) {
         if (!isAbsolute(path)) throw new UserError('gitCredentialKeyPath', { path })
         if (!existsSync(path)) throw new UserError('gitCredentialKeyPathMissing', { path })
-        material.privateKey = readFileSync(path, 'utf8').trim()
+        material.privateKey = normalizePrivateKey(readFileSync(path, 'utf8'))
       }
       if (input.passphrase) material.passphrase = input.passphrase
     }

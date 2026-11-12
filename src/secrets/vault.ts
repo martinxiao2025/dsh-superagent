@@ -2,8 +2,10 @@
  * 凭据材料的加密存储与掩码：Git 凭据与飞书凭据各自一个目录，每条记录一个文件。
  * 密钥保存在 `<stateDir>/secrets/key`，首次使用时生成；材料不会进入设置快照。
  */
+import { spawnSync } from 'node:child_process'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { userInfo } from 'node:os'
 import { join } from 'node:path'
 
 /** 独立凭据区域：两个模块各自一个目录，互不读取对方的材料。 */
@@ -49,6 +51,21 @@ export class SecretVault {
   /** Windows 没有 POSIX 权限位，`chmod` 失败时保持默认权限即可。 */
   private restrict(file: string): void {
     try { chmodSync(file, 0o600) } catch { /* 非 POSIX 平台忽略。 */ }
+    this.restrictToUser(file)
+  }
+
+  /**
+   * Windows 上 `chmod` 无效：OpenSSH 检查 NTFS ACL，继承的宽 ACL（如
+   * Authenticated Users 可读）会让 ssh 以 `invalid format` 拒绝加载私钥。
+   * 用 `icacls` 移除继承、仅保留当前用户，等价于 POSIX 0600。
+   */
+  private restrictToUser(file: string): void {
+    if (process.platform !== 'win32') return
+    const result = spawnSync('icacls', [file, '/inheritance:r', '/grant:r', `${userInfo().username}:F`], { windowsVerbatimArguments: true })
+    if (result.status !== 0) {
+      throw new SecretError('secretUnreadable',
+        `Could not restrict ${file} to the current user (icacls exit ${result.status}): ${String(result.stderr).trim()}`)
+    }
   }
   private file(area: SecretArea, id: string): string {
     if (!ID.test(id)) throw new SecretError('secretInvalidId', `Invalid credential id: ${id}`)

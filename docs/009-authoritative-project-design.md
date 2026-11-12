@@ -418,7 +418,7 @@ const FeishuWikiTaskSourceSchema = z.object({
 }).strict()
 
 const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('excel'), config: ExcelConfigWithoutRepo, fieldMap: TaskFieldMapSchema }).strict(),
+  z.object({ kind: z.literal('excel'), config: ExcelConfigWithoutRepo }).strict(),
   FeishuWikiTaskSourceSchema,
 ])
 ```
@@ -543,7 +543,7 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 | 10.7 被引用凭据删除 | 默认不可删并返回引用列表 |
 | 10.8 停用语义 | 保留 `queued`、不派工、详情页显示计数；「清空排队」是显式动作 |
 | 10.12 跨文档 `task_id` | 默认按文档隔离；严格模式可选 |
-| 10.13 Excel 标准格式 | 标准格式为唯一默认路径（`tasks` 表 + 固定枚举 + 行级错误码 + 模板），自定义映射为高级开关 |
+| 10.13 Excel 标准格式 | 标准格式为唯一路径（`tasks` 表 + 固定枚举 + 行级错误码 + 模板）；自定义映射与工作表选择已移除，非标准清单整批拒绝并提示模板改造 |
 
 ### 13.2 实测定案的新契约
 
@@ -555,6 +555,10 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
   执行 worktree 落在同一分支。
 - **项目表单只填仓库全地址**（`config.remote`），站点与仓库路径由 `repositoryOfRemote` 推导；
   Git 凭据的 provider/kind 决定仓库类型与认证方式。`instanceUrl/cli/sshKey` 不再出现在项目表单。
+- **项目表单收敛（2026-11-12）**：仓库类型不再是表单字段——随所选凭据或地址站点推导为只读标签，
+  仅未绑凭据且地址无法识别站点时保留选择；Excel 任务来源只剩「清单文件」一个字段（标准格式唯一
+  路径，`repo` 配置项随项目注入改为 `syncRepo()` 无参注入而删除）；消息来源（消息工单入口）迁入
+  设置 → 飞书凭据 → 消息接入 页签，项目设置页只保留项目。
 - **新增接口**：`POST code-repos/branches`（凭据 + 候选配置 → 分支列表与默认分支）、
   `POST feishu-im/chats`（凭据 → 机器人已加入的群）；面板仓库步与群消息来源的群 ID 选择据此工作。
 - **读取校验**：queue 按完整 schema，ticket/thread/decision 按关键字段形状（未知字段放行），

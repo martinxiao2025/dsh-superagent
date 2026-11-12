@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { UserError } from '../src/core/index.ts'
 import type { GitCredential } from '../src/git-credentials/kind.ts'
-import { GitCredentials, classifyProbeError, type GitCredentialRepository } from '../src/git-credentials/service.ts'
+import { GitCredentials, classifyProbeError, normalizePrivateKey, type GitCredentialRepository } from '../src/git-credentials/service.ts'
 import { SecretVault } from '../src/secrets/vault.ts'
 
 const temporary = (): string => mkdtempSync(join(tmpdir(), 'dsh-git-credential-'))
@@ -31,12 +31,21 @@ describe('Git credentials', () => {
     const { id, revision } = credentials.create(ssh('Deploy Bot Key'))
     expect(id).toBe('deploy-bot-key')
     expect(revision).toBe(1)
-    expect(vault.read('git', id)).toEqual({ privateKey: KEY })
+    // 规范化保证私钥以换行结尾：OpenSSH 拒绝没有尾部换行的私钥文件。
+    expect(vault.read('git', id)).toEqual({ privateKey: `${KEY}\n` })
     const view = credentials.get(id)
     expect(view).toMatchObject({ id, name: 'Deploy Bot Key', kind: 'ssh', configured: true, origin: 'pasted', revision: 1 })
     expect(view.fingerprint).toHaveLength(16)
     expect(view.hint).toBe('private key')
     expect(JSON.stringify(view)).not.toContain('BEGIN OPENSSH')
+  })
+
+  it('normalizes a key to LF with exactly one trailing newline, whatever it was given', () => {
+    expect(normalizePrivateKey(KEY)).toBe(`${KEY}\n`)
+    expect(normalizePrivateKey(`${KEY}\n`)).toBe(`${KEY}\n`)
+    expect(normalizePrivateKey(`${KEY}\n\n\n`)).toBe(`${KEY}\n`)
+    // Windows 编辑器常见的 BOM 与 CRLF 都要被清理。
+    expect(normalizePrivateKey(`\uFEFF${KEY.split('\n').join('\r\n')}\r\n`)).toBe(`${KEY}\n`)
   })
 
   it('refuses to create a credential without material', () => {

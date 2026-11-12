@@ -282,10 +282,6 @@ export function SourceField({ field, value, saved, fact, onChange, labels, refre
     case 'fact': return <div className="dt-field">
       <span className="dt-field-head">{label}{hint && <InfoTip text={hint} />}</span>
       <span className="dt-mono">{localized(t, fact) || t('empty')}</span>
-      {field.settings && <small>
-        <button type="button" className="dt-textlink"
-          onClick={() => navigate(settingsRoute(field.settings!))}>{t(`openSettingsOf.${field.settings}`)}</button>
-      </small>}
     </div>
     case 'rows': return <RowsField field={field} value={value} saved={saved} onChange={onChange} labels={labels}
       refreshLabels={refreshLabels} />

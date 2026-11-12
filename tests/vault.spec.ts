@@ -1,6 +1,7 @@
 /** 凭据材料存储：分区隔离、AES-GCM 加密、掩码与指纹、损坏与 ID 校验。 */
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SecretError, SecretVault, fingerprint, mask } from '../src/secrets/vault.ts'
@@ -65,6 +66,18 @@ describe('secret vault', () => {
     expect(readFileSync(file, 'utf8')).toBe('key material')
     rmSync(file)
     expect(existsSync(file)).toBe(false)
+  })
+
+  // Windows 上 chmod 无效；OpenSSH 检查 NTFS ACL，宽 ACL 会让 ssh 拒绝加载私钥。
+  it.skipIf(process.platform !== 'win32')('restricts temporary and stored files to the current user on Windows', () => {
+    const stateDir = temporary()
+    const vault = new SecretVault(stateDir)
+    vault.save('git', 'acl-check', { token: 'x' })
+    for (const file of [join(stateDir, 'secrets', 'git', 'acl-check.json'), vault.temporary('git', 'probe_key', 'k')]) {
+      const listing = execFileSync('icacls', [file]).toString()
+      expect(listing).toContain(userInfo().username)
+      expect(listing).not.toContain('Authenticated Users')
+    }
   })
 
   it('masks all but the last four characters and fingerprints material stably', () => {

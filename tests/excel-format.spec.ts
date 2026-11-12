@@ -94,7 +94,7 @@ describe('standard task format', () => {
   it('round-trips the generated template as an empty standard workbook', async () => {
     const file = join(directory(), TASK_TEMPLATE_FILENAME)
     writeFileSync(file, taskTemplate())
-    const result = await readStandardTable(file, '')
+    const result = await readStandardTable(file)
     expect(result.table.header).toEqual(['task_id', 'title', 'status', 'description', 'priority',
       'owner', 'acceptance', 'depends_on', 'tags', 'updated_at'])
     expect(result.table.rows).toEqual([])
@@ -109,7 +109,7 @@ describe('standard task format', () => {
       { name: 'Sheet1', rows: [header, ['1', '登录', 'todo', '', '']] },
       { name: '_meta', rows: [['key', 'value'], ['schema_version', '1']] },
     ]))
-    const result = await readStandardTable(file, '')
+    const result = await readStandardTable(file)
     expect(result.table.rows).toHaveLength(1)
     expect(result.warnings).toEqual(['没有找到 tasks 工作表，已回退到“Sheet1”'])
   })
@@ -120,7 +120,7 @@ describe('standard task format', () => {
       { name: 'tasks', rows: [header] },
       { name: '_meta', rows: [['key', 'value'], ['schema_version', '9']] },
     ]))
-    await expect(readStandardTable(file, '')).rejects.toThrow(expect.objectContaining({ code: 'taskSchemaUnsupported' }))
+    await expect(readStandardTable(file)).rejects.toThrow(expect.objectContaining({ code: 'taskSchemaUnsupported' }))
   })
 
   it('warns when _meta exists without schema_version', async () => {
@@ -129,7 +129,7 @@ describe('standard task format', () => {
       { name: 'tasks', rows: [header, ['1', '登录', 'todo', '', ''], ['2', '支付', 'todo', '', '']] },
       { name: '_meta', rows: [['key', 'value'], ['generator', 'test']] },
     ]))
-    const result = await readStandardTable(file, '')
+    const result = await readStandardTable(file)
     expect(result.version).toBe(1)
     expect(result.warnings).toContain('_meta 缺少 schema_version，按版本 1 读取')
     expect(result.table.rows).toHaveLength(2)

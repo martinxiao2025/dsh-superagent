@@ -35,6 +35,52 @@
 - 向导全流程（凭据 → 验证 → 分支 → 建项目 → 真实 DSH 会话执行 → 回写）与删除闭环
   （运行中删除）均在桌面版实测通过；1272 个单元/集成测试全绿。
 
+### 任务清单自动初始化（2026-11-12）
+
+- Excel 任务来源的清单文件缺失时**自动创建初始版本**（`ensureTaskFile`）：`.xlsx` 写标准模板
+  工作簿、`.csv`/`.tsv` 写全部标准表头行，并提交进工作副本（`chore: initialize the standard
+  task list`）。字段验证（`taskFileCreated` 结果码）与首轮轮询均自愈，项目不需要预先手工
+  准备清单文件。测试覆盖 csv/xlsx 创建、重复验证不重建、git 提交与后续任务行的领取。
+
+### SSH 凭据 Windows 修复（2026-11-12）
+
+- **修复私钥规范化 bug**：`GitCredentials.material()` 对粘贴/文件读取的私钥做整串 `trim()`，
+  会去掉 OpenSSH 要求的尾部换行，导致 `ssh` 报 `invalid format` 拒绝加载（Linux 同样受影响）。
+  改为 `normalizePrivateKey()`：去 BOM、CRLF→LF、保证恰好一个尾部换行。单元用例覆盖
+  BOM/CRLF/多余尾部换行/无尾部换行四种输入。
+- **修复 Windows ACL bug**：`chmod 0o600` 在 Windows 是 no-op，临时私钥文件继承的宽 ACL
+  （Authenticated Users 可读）使 OpenSSH 直接拒绝加载。`SecretVault.restrict()` 现在在
+  win32 上用 `icacls /inheritance:r /grant:r <user>:F` 收紧（覆盖主密钥、加密材料文件与
+  临时私钥文件）；vault.spec 增加 win32-only ACL 断言。
+- 实测验证：DemoWebApp 凭据（`C:\Users\…\.ssh\id_rsa`，keyPath 来源）→ verify 身份 ok +
+  远端 1 分支；向导仓库步 `code-repos/verify` 四项全绿，分支列表返回 `master`。
+
+### 导航与菜单审查修复（2026-11-12）
+
+- 概览「没有运行中的来源」问题行与按钮改指 **设置 › 飞书凭据 › 消息接入**（原误指项目组）。
+- 消息来源状态页：头部「设置」按钮直达消息接入页签；移除与项目页重复的「任务清单」区块
+  （每概念一处）；页面标签从「任务来源」更正为「消息来源」，简介注明配置位置。
+- 「来源名称」键名陷阱修正：项目向导/项目卡片使用的 `sourceName` 键（文本为「项目名称」）
+  重命名为 `projectName`/`projectNameHint`；清理无引用死键（`sourceNamePlaceholder`、
+  `sourceRepoKind*`、`sourceTaskHint`、`sourceTaskList*`、`openSettingsOf.deployment`）与
+  `FieldSpec.fact.settings` 死分支。
+- 安装问题修复提示文案通用化（消息接入页或项目卡片），不再指向已移除的「设置 › 来源」。
+
+### 项目表单收敛（2026-11-12）
+
+- **仓库类型不再是表单字段**：随所选 Git 凭据或仓库地址站点推导并以只读标签展示；仅未绑凭据
+  且地址无法识别站点时保留类型选择。
+- **Excel 任务来源只剩「清单文件」一个字段**：自定义列映射、工作表选择与 `repo` 配置项全部
+  移除——标准格式（`tasks` 表 + 固定表头与枚举）是唯一路径，非标准清单整批拒绝并提示下载模板
+  改造；`repo` 原是被调度器注入覆盖的死字段（用户填写的值从不生效），随 `syncRepo()` 改为
+  无参项目注入一并删除。`readTaskTable`/`sheetRows` 等兼容读取路径与六个旧记录模型错误码
+  （`codeRepoInUse`/`taskSourceExists` 等）随之清理。
+- **消息来源迁入设置 → 飞书凭据 → 消息接入 页签**：项目设置页只保留项目；消息来源（消息工单
+  入口）与机器人身份同域配置，类型固定为飞书（单一类型不再显示选择器），来源名称文案从「项目
+  名称」修正为「来源名称」；来源状态页与安装问题的直达链接随之指向新页签。
+- 测试：`panel-source` 全部用例迁移到新入口；Excel 用例改为标准格式路径（含绝对路径拒绝与
+  旧表头拒绝）。
+
 ### 开发调试（2026-11-12）
 
 - 新增 `pnpm dev`（[scripts/dev-web.mjs](scripts/dev-web.mjs)）：推荐回路一键入口——构建、

@@ -5,6 +5,7 @@
  */
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { extname } from 'node:path'
+import { TASK_SHEET } from './excel-format.ts'
 import { parseDelimited, writeXlsxStatus } from './table.ts'
 import type { TaskFieldMap } from './kind.ts'
 
@@ -25,11 +26,11 @@ export function detectStyle(buffer: Buffer): TextStyle {
 
 /**
  * 把任务状态写入指定清单文件；任务来源驱动据此回写工作副本。
+ * xlsx 固定写 `tasks` 工作表；文本清单保留原文件字节风格。
  * @throws 当文件格式不支持、找不到对应行或写入失败时。
  */
 export async function writeTaskStatusAt(
   file: string,
-  sheet: string,
   columns: TaskFieldMap,
   target: WriteTarget,
   status: string,
@@ -37,7 +38,7 @@ export async function writeTaskStatusAt(
   const extension = extname(file).toLowerCase()
   if (extension === '.xlsx') {
     const updated = writeXlsxStatus(await readFile(file), {
-      sheet,
+      sheet: TASK_SHEET,
       columns: { id: columns.id, title: columns.title, status: columns.status },
       target,
       status,

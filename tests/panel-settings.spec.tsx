@@ -99,7 +99,8 @@ it('shows save and discard only while a settings block has edits, at the end of 
   await click(save)
   expect(all('.dt-savebar')).toHaveLength(0)
   expect(document.activeElement).toBe(workers.form)
-  await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
+  await click(find(zh['settingsGroup.feishuCredentials'], '.dt-settings-link'))
+  await click(zh.feishuSettingsTabIngress)
   expect(all('.dt-savebar')).toHaveLength(0)
   const feishu = document.getElementById('dt-source-feishu')!
   const cli = field<HTMLInputElement>('机器人的 lark-cli', feishu)
@@ -129,7 +130,7 @@ it('builds the task source kind dropdown from the driver catalog inside the proj
   await mount()
   await click(zh['tab.settings'])
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
-  await type(field(zh.sourceName), '内容运营')
+  await type(field(zh.projectName), '内容运营')
   await click(zh.projectNext)
   // 仓库步先验证连通并选定分支，才能进入任务来源步查看类型目录。
   await type(field('仓库地址'), 'https://github.com/acme/content.git')
@@ -146,7 +147,7 @@ it('offers a Git credential for the project repository instead of auth fields', 
   await click(zh['tab.settings'])
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   // 仓库认证统一由项目选择的 Git 凭据决定，认证方式与 SSH key 字段不再出现。
-  await type(field(zh.sourceName), '内容运营')
+  await type(field(zh.projectName), '内容运营')
   await click(zh.projectNext)
   expect(field<HTMLSelectElement>(zh.projectGitCredentialLabel).value).toBe('')
   expect(document.querySelector(`[aria-label="${zh.projectWizardTitle}"] .dt-field-segmented`)).toBeNull()

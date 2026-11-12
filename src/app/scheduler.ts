@@ -153,7 +153,7 @@ export class ProjectScheduler {
     this.nextPoll.set(projectId, this.now() + interval)
     const driver = this.registry.kind(project.taskSource.kind)
     if (!driver) return this.fail(projectId, `Unknown task source type: ${project.taskSource.kind}`)
-    const parsed = driver.schema.safeParse(this.sourceConfig(projectId, driver.fields, project.taskSource.config, project.feishuCredential))
+    const parsed = driver.schema.safeParse(this.sourceConfig(driver.fields, project.taskSource.config, project.feishuCredential))
     if (!parsed.success) return this.fail(projectId, `Invalid task source configuration: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
     const repoId = projectRepoId(projectId)
     let tasks: RawTask[]
@@ -513,7 +513,7 @@ export class ProjectScheduler {
     const project = settings.projects[payload.project]
     const driver = project && this.registry.kind(project.taskSource.kind)
     if (!project || !driver?.writeback) throw new Error(`The task source for ${payload.project} is unavailable`)
-    const parsed = driver.schema.safeParse(this.sourceConfig(payload.project, driver.fields, project.taskSource.config, project.feishuCredential))
+    const parsed = driver.schema.safeParse(this.sourceConfig(driver.fields, project.taskSource.config, project.feishuCredential))
     if (!parsed.success) throw new Error(`Invalid task source configuration: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
     await driver.writeback(parsed.data, { taskId: payload.task, taskTitle: payload.taskTitle }, payload.status,
       { signal: this.host.lifetime, syncRepo: () => this.syncRepo(payload.project),
@@ -539,11 +539,10 @@ export class ProjectScheduler {
     return `task-${slug || entry.item}`
   }
 
-  /** 把项目级凭据与仓库注入驱动配置；驱动未声明这些字段时不添加，避免严格 schema 拒绝。 */
-  private sourceConfig(projectId: string, fields: readonly { key: string }[],
+  /** 把项目级飞书凭据注入驱动配置；驱动未声明该字段时不添加，避免严格 schema 拒绝。 */
+  private sourceConfig(fields: readonly { key: string }[],
     config: Record<string, unknown>, feishuCredential: string): Record<string, unknown> {
     const injected: Record<string, unknown> = {}
-    if (fields.some(field => field.key === 'repo')) injected.repo = projectRepoId(projectId)
     if (fields.some(field => field.key === 'feishuCredential')) injected.feishuCredential = feishuCredential
     return { ...config, ...injected }
   }

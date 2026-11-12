@@ -37,6 +37,8 @@ export interface SetupHost {
   gitCredential?(id: string): { kind: 'ssh' | 'https'; username: string } | undefined
   /** 按 Git 凭据 ID 取一次同步使用的材料；未安装时返回 undefined。 */
   gitAuth?(id: string): GitAuth | undefined
+  /** 已绑定到仓库记录的命令入口；Excel 清单缺失时用它提交初始版本。 */
+  commands(repoId: string): Pick<Commands, 'git'>
   restart(): void
 }
 
@@ -192,14 +194,15 @@ export class Setup {
     const driver = taskSources.kind(kind)
     const repoId = projectRepoId(meta.projectId || 'candidate')
     const injected: Record<string, unknown> = {}
-    if (driver?.fields.some(item => item.key === 'repo')) injected.repo = repoId
     if (driver?.fields.some(item => item.key === 'feishuCredential')) injected.feishuCredential = meta.feishuCredential ?? ''
     const merged = config && typeof config === 'object'
       ? { ...config as Record<string, unknown>, ...injected } : injected
+    const commands = this.host.commands(repoId)
     return taskSources.verify(kind, merged, field, {}, {
       feishu: async credential => this.host.feishuWiki?.(credential) ?? undefined,
       feishuIm: async credential => this.host.feishuIm?.(credential) ?? undefined,
       syncRepo: async () => this.projectRepo(repoId, meta.repo, meta.gitCredential),
+      git: (args, cwd) => commands.git(args, cwd),
     })
   }
   /**

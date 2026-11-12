@@ -8,7 +8,7 @@ import { z } from 'zod'
 import type { Commands } from '../src/infra/commands.ts'
 import { commitWorkCopy } from '../src/code-repos/work.ts'
 import { gitEnv } from './fixtures/git.ts'
-import { readTaskTable } from '../src/task-sources/table.ts'
+import { readStandardTable } from '../src/task-sources/table.ts'
 import { TASK_SOURCE_DRIVERS, TaskSourceRegistry, taskSources } from '../src/task-sources/index.ts'
 import { excelTaskSource } from '../src/task-sources/excel.ts'
 import { feishuImTaskSource } from '../src/task-sources/feishu-im.ts'
@@ -26,44 +26,98 @@ describe('excel task source', () => {
     const root = temporary()
     mkdirSync(join(root, 'tasks'))
     writeFileSync(join(root, 'tasks', 'backlog.csv'), 'task_id,title,description,status\n1,登录,修复,todo\n', 'utf8')
-    const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
     const sync = vi.fn(async () => root)
     const tasks = await excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: sync })
-    expect(sync).toHaveBeenCalledWith('repo-1')
+    expect(sync).toHaveBeenCalledTimes(1)
     expect(tasks).toEqual([{ id: '1', title: '登录', description: '修复', status: 'todo' }])
   })
 
-  it('reports a missing file, a missing repository and a successful sync as distinct checks', async () => {
+  it('creates the initial csv task list from the standard template when the file is missing', async () => {
     const root = temporary()
-    const missing = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/none.csv' })
-    const fileCheck = await excelTaskSource.verify(missing, 'file', deps(async () => root))
-    expect(fileCheck[0]).toMatchObject({ field: 'file', ok: false, code: 'taskFileMissing' })
+    const missing = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
+    const created = await excelTaskSource.verify(missing, 'file', deps(async () => root))
+    expect(created[0]).toMatchObject({ field: 'file', ok: true, code: 'taskFileCreated', values: { rows: '0' } })
+    // 初始版本是标准表头的空表：全部标准列 + 换行结尾。
+    const file = join(root, 'tasks', 'backlog.csv')
+    expect(readFileSync(file, 'utf8')).toBe('task_id,title,status,description,priority,owner,acceptance,depends_on,tags,updated_at\n')
+    // 再次验证不再创建，走正常读取路径。
+    const again = await excelTaskSource.verify(missing, 'file', deps(async () => root))
+    expect(again[0]).toMatchObject({ field: 'file', ok: true, code: 'taskFileStandardOk' })
+  })
 
-    const repoCheck = await excelTaskSource.verify(missing, 'repo', deps(async () => {
+  it('creates the initial xlsx task list from the standard template when the file is missing', async () => {
+    const root = temporary()
+    const missing = excelTaskSource.schema.parse({ file: 'tasks/backlog.xlsx' })
+    const created = await excelTaskSource.verify(missing, 'file', deps(async () => root))
+    expect(created[0]).toMatchObject({ field: 'file', ok: true, code: 'taskFileCreated', values: { rows: '0' } })
+    // 生成的 xlsx 可被标准读取器直接读回（模板工作簿含 tasks 表头与 _meta 版本）。
+    const standard = await readStandardTable(join(root, 'tasks', 'backlog.xlsx'))
+    expect(standard.version).toBe(1)
+    expect(standard.table.rows).toHaveLength(0)
+  })
+
+  it('commits the initial task list into the repository working copy when git is provided', async () => {
+    const root = temporary()
+    const run = (args: string[], cwd: string): string => execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' })
+    run(['init', '-q'], root)
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
+    const git = async (args: string[], cwd: string) => run(args, cwd)
+    await excelTaskSource.verify(config, 'file', { ...deps(async () => root), git })
+    expect(run(['status', '--porcelain'], root).trim()).toBe('')
+    expect(run(['show', 'HEAD:tasks/backlog.csv'], root)).toContain('task_id')
+  })
+
+  it('reports repository sync failures as distinct checks', async () => {
+    const missing = excelTaskSource.schema.parse({ file: 'tasks/none.csv' })
+    const missingRepo = await excelTaskSource.verify(missing, 'file', deps(async () => {
       throw new TaskRepoError('repoMissing', '代码仓库记录不存在：repo-1') }))
-    expect(repoCheck[0]).toMatchObject({ field: 'repo', ok: false, code: 'taskRepoMissing' })
+    expect(missingRepo[0]).toMatchObject({ field: 'file', ok: false, code: 'taskRepoMissing' })
 
-    const notReady = await excelTaskSource.verify(missing, 'repo', deps(async () => {
+    const notReady = await excelTaskSource.verify(missing, 'file', deps(async () => {
       throw new TaskRepoError('repoNotReady', '代码仓库记录尚未配置仓库：repo-1') }))
-    expect(notReady[0]).toMatchObject({ field: 'repo', ok: false, code: 'taskRepoNotReady' })
+    expect(notReady[0]).toMatchObject({ field: 'file', ok: false, code: 'taskRepoNotReady' })
 
-    const syncFailed = await excelTaskSource.verify(missing, 'repo', deps(async () => {
+    const syncFailed = await excelTaskSource.verify(missing, 'file', deps(async () => {
       throw new TaskRepoError('syncFailed', '鉴权失败') }))
-    expect(syncFailed[0]).toMatchObject({ field: 'repo', ok: false, code: 'taskRepoSyncFailed', values: { output: '鉴权失败' } })
+    expect(syncFailed[0]).toMatchObject({ field: 'file', ok: false, code: 'taskRepoSyncFailed', values: { output: '鉴权失败' } })
 
-    const empty = await excelTaskSource.verify(missing, 'repo', deps(async () => {
+    const empty = await excelTaskSource.verify(missing, 'file', deps(async () => {
       throw new TaskRepoError('repoEmpty', '代码仓库为空，没有分支或提交：repo-1') }))
-    expect(empty[0]).toMatchObject({ field: 'repo', ok: false, code: 'taskRepoEmpty', values: { output: '代码仓库为空，没有分支或提交：repo-1' } })
+    expect(empty[0]).toMatchObject({ field: 'file', ok: false, code: 'taskRepoEmpty', values: { output: '代码仓库为空，没有分支或提交：repo-1' } })
+  })
 
-    const syncCheck = await excelTaskSource.verify(missing, 'repo', deps(async () => root))
-    expect(syncCheck[0]).toMatchObject({ field: 'repo', ok: true, code: 'taskRepoOk', values: { directory: root } })
+  it('rejects an absolute path and a non-standard manifest with distinct codes', async () => {
+    const root = temporary()
+    mkdirSync(join(root, 'tasks'))
+    writeFileSync(join(root, 'tasks', 'legacy.csv'), 'id,title\n1,旧表头\n', 'utf8')
+    const absolute = excelTaskSource.schema.parse({ file: 'C:/abs/backlog.csv' })
+    const absoluteCheck = await excelTaskSource.verify(absolute, 'file', deps())
+    expect(absoluteCheck[0]).toMatchObject({ field: 'file', ok: false, code: 'taskFileAbsolute' })
+
+    const legacy = excelTaskSource.schema.parse({ file: 'tasks/legacy.csv' })
+    const legacyCheck = await excelTaskSource.verify(legacy, 'file', deps(async () => root))
+    expect(legacyCheck[0]).toMatchObject({ field: 'file', ok: false, values: { output: expect.stringContaining('task_id') } })
+  })
+
+  it('lists tasks from an auto-created initial list and picks up rows added later', async () => {
+    const root = temporary()
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
+    // 轮询同样自愈：文件缺失时先建初始版本再读取。
+    await expect(excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: async () => root }))
+      .resolves.toEqual([])
+    expect(readFileSync(join(root, 'tasks', 'backlog.csv'), 'utf8')).toContain('task_id')
+    // 队友在清单里加了任务行，下一轮读取即看到。
+    writeFileSync(join(root, 'tasks', 'backlog.csv'), 'task_id,title,status\n1,登录,todo\n', 'utf8')
+    await expect(excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: async () => root }))
+      .resolves.toEqual([{ id: '1', title: '登录', description: '', status: 'todo' }])
   })
 
   it('writes a status back into the repository working copy and lists it again', async () => {
     const root = temporary()
     mkdirSync(join(root, 'tasks'))
     writeFileSync(join(root, 'tasks', 'backlog.csv'), 'task_id,title,description,status\n1,登录,修复,todo\n', 'utf8')
-    const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
     await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成', { syncRepo: async () => root })
     await expect(excelTaskSource.list(config, { signal: new AbortController().signal, commands: {} as Commands, syncRepo: async () => root }))
       .resolves.toEqual([{ id: '1', title: '登录', description: '修复', status: 'done' }])
@@ -74,7 +128,7 @@ describe('excel task source', () => {
     mkdirSync(join(root, 'tasks'))
     const file = join(root, 'tasks', 'backlog.csv')
     writeFileSync(file, '\uFEFFtask_id,title,description,status\r\n1,登录,修复,todo\r\n2,注册,新建,todo\r\n', 'utf8')
-    const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
     await excelTaskSource.writeback!(config, { taskId: '1', taskTitle: '登录' }, '已完成', { syncRepo: async () => root })
     const bytes = readFileSync(file)
     expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
@@ -94,7 +148,7 @@ describe('excel task source', () => {
     writeFileSync(file, 'task_id,title,description,status\n1,登录,修复,todo\n', 'utf8')
     run(['add', '.'], root)
     run(['commit', '-qm', 'initial'], root)
-    const config = excelTaskSource.schema.parse({ repo: 'repo-1', file: 'tasks/backlog.csv' })
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
     const calls: string[][] = []
     const git = async (args: string[], cwd: string): Promise<string> => {
       calls.push(args)
@@ -211,10 +265,11 @@ describe('task source registry', () => {
 
   it('reads a manifest with the physical row numbers the table reader reports', async () => {
     const file = join(temporary(), 'tasks.csv')
-    writeFileSync(file, 'id,title\n1,登录\n\n2,登出\n', 'utf8')
-    expect(await readTaskTable(file, '')).toEqual({
-      header: ['id', 'title'],
-      rows: [{ number: 2, values: { id: '1', title: '登录' } }, { number: 4, values: { id: '2', title: '登出' } }],
+    writeFileSync(file, 'task_id,title,status\n1,登录,todo\n\n2,登出,todo\n', 'utf8')
+    const standard = await readStandardTable(file)
+    expect(standard.table).toEqual({
+      header: ['task_id', 'title', 'status'],
+      rows: [{ number: 2, values: { task_id: '1', title: '登录', status: 'todo' } }, { number: 4, values: { task_id: '2', title: '登出', status: 'todo' } }],
     })
   })
 })

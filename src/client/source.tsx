@@ -50,8 +50,9 @@ function AddSource() {
     setName(''); setId(''); setConfig({}); setChecks({})
   }, { reload })
   if (kinds.length === 0) return null
-  // 类型目录到达后默认选中第一项；`kind` 只记录用户的显式选择。
-  const selected = kind || kinds[0]?.kind || ''
+  // 类型目录到达后默认选中第一项；`kind` 只记录用户的显式选择。只有一种类型时不显示选择器。
+  const single = kinds.length === 1
+  const selected = single ? kinds[0]!.kind : kind || kinds[0]?.kind || ''
   const spec = kinds.find(item => item.kind === selected)
   const keys = ADD_FIELDS[selected]
   const visible = (spec?.fields ?? []).filter(field => keys ? keys.includes(field.key) : !field.advanced)
@@ -77,21 +78,21 @@ function AddSource() {
       <div className="dt-row-title"><span className="dt-card-title">{t('sourceAddTitle')}</span><InfoTip text={t('sourceAddHint')} /></div>
     </div>
     <div className="dt-add-grid">
-      <VerifyRow label={t('sourceName')} busy={checking.name === true} check={checks.name}
+      <VerifyRow label={t('sourceRecordName')} busy={checking.name === true} check={checks.name}
         onVerify={() => { void runVerify('name') }}>
-        <Field label={t('sourceName')} hint={t('sourceNameHint')}>
-          <Input required value={name} placeholder={t('sourceNamePlaceholder')} aria-invalid={checks.name?.ok === false}
+        <Field label={t('sourceRecordName')} hint={t('sourceRecordNameHint')}>
+          <Input required value={name} placeholder={t('sourceRecordNamePlaceholder')} aria-invalid={checks.name?.ok === false}
             onChange={event => setName(event.target.value)} />
         </Field>
       </VerifyRow>
-      <VerifyRow label={t('sourceAddKind')} busy={checking.kind === true} check={checks.kind}
+      {!single && <VerifyRow label={t('sourceAddKind')} busy={checking.kind === true} check={checks.kind}
         onVerify={() => { void runVerify('kind') }}>
         <Field label={t('sourceAddKind')}>
           <select className="dt-select" value={selected} onChange={event => chooseKind(event.target.value)}>
             {kinds.map(item => <option key={item.kind} value={item.kind}>{localized(t, item.title)}</option>)}
           </select>
         </Field>
-      </VerifyRow>
+      </VerifyRow>}
       <VerifyRow label={t('sourceAddId')} busy={checking.id === true} check={checks.id}
         onVerify={() => { void runVerify('id') }}>
         <Field label={t('sourceAddId')} hint={t('sourceAddIdHint')}>
@@ -166,8 +167,8 @@ function SourceCard({ source, records }: { source: SourceView; records: readonly
         <p className="dt-error" role="status"><SetupMessage problem={problem} lead /></p><CheckSetupButton />
       </div>}
       {!source.installed && <Hint>{t('sourceNotInstalledHint')}</Hint>}
-      <Field label={t('sourceName')} hint={t('sourceNameHint')}>
-        <Input required value={value.name} placeholder={t('sourceNamePlaceholder')}
+      <Field label={t('sourceRecordName')} hint={t('sourceRecordNameHint')}>
+        <Input required value={value.name} placeholder={t('sourceRecordNamePlaceholder')}
           onChange={event => draft.edit({ ...value, name: event.target.value })} />
       </Field>
       {source.installed && source.fields.filter(spec => !spec.advanced).map(field)}
@@ -238,7 +239,7 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
       </div>
       {problem && <p className="dt-error">
         <SetupMessage problem={problem} lead /> <button type="button" className="dt-textlink"
-          onClick={() => navigate(settingsRoute('projects'))}>
+          onClick={() => navigate(settingsRoute('feishuCredentials', { tab: 'ingress' }))}>
           {t('sourceOpenSettings')}
         </button>
       </p>}
@@ -280,26 +281,9 @@ export function SourceHealth() {
 }
 
 export function SourceStatus() {
-  const { t, call } = usePanel()
-  const settings = usePoll(() => call('GET settings'), [])
-  const projects = settings.data?.projects ?? []
+  const { t } = usePanel()
   return <div className="dt-form">
-    <StatusHead hint={t('sourceStatusIntro')} settings="projects" />
+    <StatusHead hint={t('sourceStatusIntro')} settings="feishuCredentials" settingsQuery={{ tab: 'ingress' }} />
     <SourceHealth />
-    <Section title={t('sourceTaskListTitle')} hint={t('sourceTaskListHint')}
-      count={settings.data ? projects.length : undefined}>
-      <LoadState error={settings.error} loading={!settings.data} />
-      {settings.data && (projects.length === 0 ? <Hint>{t('projectNone')}</Hint>
-        : <ul className="dt-list">{projects.map(project => <li className="dt-row" key={project.id}>
-          <div className="dt-row-main">
-            <div className="dt-row-title"><span className="dt-row-name">{project.name}</span>
-              <Tag>{project.value.taskSource.kind}</Tag></div>
-            <div className="dt-row-meta">
-              <LabelValue label={t('projectCodeRepoLabel')} value={project.value.codeRepo.kind} />
-              <LabelValue label={t('projectInterval')} value={project.value.schedule.intervalMinutes} />
-            </div>
-          </div>
-        </li>)}</ul>)}
-    </Section>
   </div>
 }

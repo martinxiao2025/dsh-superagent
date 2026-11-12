@@ -10,7 +10,6 @@ import { Button, Input, SegmentedControl, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { useAction, usePanel } from './provider.tsx'
 import { Field, Fields, numberOf, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
-import { SourceSettings } from './source.tsx'
 import { errorText, localized, sourceCheckText, when, type T } from './text.ts'
 import { ConfirmButton, Hint, LabelValue, LoadState, PageHead, Section, StatusHead } from './widgets.tsx'
 
@@ -36,6 +35,13 @@ function sourceSummary(t: T, settings: SettingsView, value: ProjectView['value']
 /** 任务来源的主字段：连通性验证以它为准（Excel 读真实清单，飞书读真实空间或群）。 */
 const SOURCE_PRIMARY: Record<string, string> = { excel: 'file', 'feishu-wiki': 'spaceId', 'feishu-im': 'chatId' }
 const sourcePrimaryField = (kind: string): string => SOURCE_PRIMARY[kind] ?? 'file'
+
+/** 从仓库地址识别站点：gitlab 站点返回 gitlab，github 站点返回 github，其余 undefined（由用户选择）。 */
+function hostKind(remote: string): RepoKind | undefined {
+  const info = repositoryOfRemote(remote.trim())
+  if (!info) return undefined
+  return info.host.includes('gitlab') ? 'gitlab' : info.host.includes('github') ? 'github' : undefined
+}
 
 /** 读取 Git 与飞书凭据；它们不属于设置快照，进入项目表单时单独读取一次。 */
 function useCredentials() {
@@ -85,6 +91,10 @@ function RepoEditor({ kinds, value, credential, credentials, checks, checking, c
   /** 绑定的凭据决定仓库类型（github/gitlab 凭据）与认证方式；generic 凭据或未绑定时由用户选择。 */
   const bound = credentials.find(item => item.id === credential)
   const kindLocked = bound !== undefined && bound.provider !== 'generic'
+  /** 类型推导：绑定了 github/gitlab 凭据时随凭据；否则从仓库地址的站点识别；识别不出时由用户选择。 */
+  const inferredKind: RepoKind | undefined = kindLocked
+    ? bound!.provider as RepoKind
+    : hostKind(String(value.config.remote ?? ''))
   /** 旧记录回填：没有全地址时按 owner/name 推导一个展示地址，用户不改动就不落回配置。 */
   const displayUrl = String(value.config.remote ?? '')
     || (typeof value.config.repository === 'string' && value.config.repository
@@ -120,12 +130,18 @@ function RepoEditor({ kinds, value, credential, credentials, checks, checking, c
         </select>
       </Field>
     </VerifyRow>
-    <Field label={t('projectRepoKind')} hint={kindLocked ? t('projectRepoKindLockedHint') : t('projectRepoKindHint')}>
-      <select className="dt-select" value={value.kind} disabled={kindLocked}
-        onChange={event => onChange({ kind: event.target.value as RepoKind, config: {} })}>
-        {kinds.map(item => <option key={item.kind} value={item.kind}>{localized(t, item.title)}</option>)}
-      </select>
-    </Field>
+    {inferredKind
+      ? <div className="dt-row-meta">
+          <LabelValue label={t('projectRepoKind')}
+            value={localized(t, kinds.find(item => item.kind === inferredKind)?.title ?? { zh: inferredKind, en: inferredKind })} />
+          <span className="dt-hint">{t('projectRepoKindAutoHint')}</span>
+        </div>
+      : <Field label={t('projectRepoKind')} hint={t('projectRepoKindHint')}>
+          <select className="dt-select" value={value.kind}
+            onChange={event => onChange({ kind: event.target.value as RepoKind, config: {} })}>
+            {kinds.map(item => <option key={item.kind} value={item.kind}>{localized(t, item.title)}</option>)}
+          </select>
+        </Field>}
     <VerifyRow label={t('projectRepoUrl')} busy={checking.remote === true} check={checks.remote} onVerify={() => onVerify('remote')}>
       <Field label={t('projectRepoUrl')} hint={t('projectRepoUrlHint')}>
         <Input className="dt-mono" value={displayUrl} placeholder={t('projectRepoUrlEmpty')}
@@ -322,7 +338,7 @@ export function ProjectPage({ id }: { id: string }) {
   </>
 }
 
-/** 项目设置分区：新建项目向导 + 已保存项目的编辑与删除；仓库、任务来源与消息来源在同一页配置。 */
+/** 项目设置分区：新建项目向导 + 已保存项目的编辑与删除；消息来源在飞书凭据的「消息接入」页配置。 */
 export function ProjectSettings({ focus }: { focus?: string }) {
   const { t } = usePanel()
   const { settings } = useSettings()
@@ -332,7 +348,6 @@ export function ProjectSettings({ focus }: { focus?: string }) {
       {settings.projects.length === 0 ? <p className="dt-hint">{t('projectNone')}</p>
         : settings.projects.map(project => <ProjectCard key={project.id} project={project} focus={focus === project.id} />)}
     </div>
-    <SourceSettings {...focus ? { focus } : {}} />
   </>
 }
 
@@ -450,7 +465,7 @@ function ProjectWizard() {
       onChange={setStep} />
     <div className="dt-form dt-block">
       {step === 'basics' && <>
-        <Field label={t('sourceName')} hint={t('sourceNameHint')}>
+        <Field label={t('projectName')} hint={t('projectNameHint')}>
           <Input required value={name} placeholder={t('projectNamePlaceholder')} onChange={event => setName(event.target.value)} />
         </Field>
         <Field label={t('projectEnabled')} hint={t('projectEnabledHint')}>
@@ -624,7 +639,7 @@ function ProjectForm({ project }: { project: ProjectView }) {
   return <form className="dt-form" onSubmit={event => { void draft.submit(event) }}>
     <Fields disabled={draft.busy}>
       <div className="dt-form dt-block">
-        <Field label={t('sourceName')} hint={t('sourceNameHint')}>
+        <Field label={t('projectName')} hint={t('projectNameHint')}>
           <Input required value={value.name} onChange={event => edit({ name: event.target.value })} />
         </Field>
         <Field label={t('projectEnabled')} hint={t('projectEnabledHint')}>
