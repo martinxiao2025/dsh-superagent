@@ -1,0 +1,116 @@
+{
+  "startedAt": "2026-11-11T23:49:14.656Z",
+  "stateDir": "C:\\Users\\61054\\.dsh\\state\\superagent",
+  "phases": [
+    {
+      "phase": "插件就绪",
+      "at": "2026-11-11T23:49:14.679Z",
+      "detail": {
+        "port": 54627,
+        "pid": 28784,
+        "at": "2026-11-11T23:23:15.252Z"
+      }
+    },
+    {
+      "phase": "启动本地 dumb HTTP git 服务",
+      "at": "2026-11-11T23:49:16.381Z",
+      "detail": {
+        "remote": "http://127.0.0.1:59322/live.git"
+      }
+    },
+    {
+      "phase": "项目创建完成",
+      "at": "2026-11-11T23:49:17.542Z",
+      "detail": {
+        "port": 54627,
+        "pid": 28784,
+        "at": "2026-11-11T23:49:16.723Z"
+      }
+    },
+    {
+      "phase": "工单运行中",
+      "at": "2026-11-11T23:49:17.554Z",
+      "detail": {
+        "ticketId": "4ae8fe10061987fcc5906dfd4243c300",
+        "state": "running"
+      }
+    },
+    {
+      "phase": "删除项目",
+      "at": "2026-11-11T23:49:17.586Z",
+      "detail": {
+        "removed": true,
+        "restarting": true,
+        "context_delivery": "pending"
+      }
+    },
+    {
+      "phase": "工单已停止",
+      "at": "2026-11-11T23:49:18.622Z",
+      "detail": {
+        "at": "2026-11-11T23:49:17.557Z",
+        "by": "human",
+        "outcome": "stopped",
+        "reason": "The project was removed"
+      }
+    },
+    {
+      "phase": "队列已清理",
+      "at": "2026-11-11T23:49:18.624Z",
+      "detail": {
+        "items": 0
+      }
+    },
+    {
+      "phase": "设置已无该项目",
+      "at": "2026-11-11T23:49:18.632Z",
+      "detail": {
+        "projects": 0
+      }
+    },
+    {
+      "phase": "完成",
+      "at": "2026-11-11T23:49:53.651Z",
+      "detail": {
+        "ok": true
+      }
+    }
+  ],
+  "startup": {
+    "port": 54627,
+    "pid": 28784,
+    "at": "2026-11-11T23:23:15.252Z"
+  },
+  "runningEntry": {
+    "id": "7fc85f0dc3300a429e5718393e9a1a18",
+    "project": "wizard-project",
+    "projectName": "删除闭环验证",
+    "task": "DEL-1794440955942",
+    "item": 0,
+    "title": "这是删除闭环验证任务：请先调用 orchestrator_report 报告 state=progress，等待 60 秒后再调用 orchestrator_report 报告 state=ready、summary=delete-live-ok，不要修改任何文件。",
+    "state": "running",
+    "attempt": 0,
+    "dueAt": 1794440957525,
+    "ticketId": "4ae8fe10061987fcc5906dfd4243c300",
+    "enqueuedAt": "2026-11-11T23:49:17.507Z",
+    "updatedAt": "2026-11-11T23:49:17.533Z"
+  },
+  "removed": {
+    "removed": true,
+    "restarting": true,
+    "context_delivery": "pending"
+  },
+  "ticket": {
+    "ended": {
+      "at": "2026-11-11T23:49:17.557Z",
+      "by": "human",
+      "outcome": "stopped",
+      "reason": "The project was removed"
+    }
+  },
+  "queueAfter": [],
+  "projectsAfter": [],
+  "stableAfterMs": 35000,
+  "finishedAt": "2026-11-11T23:49:53.650Z",
+  "ok": true
+}

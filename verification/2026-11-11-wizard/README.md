@@ -51,10 +51,24 @@
    修复：`defaultSync` 把 `project.execution.branch` 传给 `syncRepoWorkCopy`
    （[scheduler.ts](../../src/app/scheduler.ts)）。
 
+## 项目删除闭环实测（`run-delete.ts`，`DELETE_LIVE_OK`）
+
+把项目跑到**工单执行中**再删除，验证闭环（证据在 `result-delete.json`）：
+
+1. 任务要求先报 progress、等待 60 秒再报 ready，保证删除发生在执行中。
+2. `DELETE projects/:id`：响应 `restarting: true`（删除同样改变部署材料，触发初始化重跑）。
+3. 运行中的工单立即结束：`outcome=stopped`、`by=human`、原因 `The project was removed`；
+   真实引擎以 `by=human` 停止，队列结算走取消分支而不是重试，不会产生复活条目。
+4. 该项目全部队列记录被清理（`GET queue` 0 条），设置里项目消失。
+5. 再观察一个调度周期（35 秒），无孤儿条目复活。
+
+单测对应 [queue.spec.ts](../../tests/queue.spec.ts)「删除项目时停止运行中的工单并清理队列记录」。
+
 ## 运行
 
 ```
 node --experimental-transform-types verification/2026-11-11-wizard/reset-state.ts   # 仅在启动失败时需要
 node --experimental-transform-types verification/2026-11-11-wizard/run-wizard.ts
+node --experimental-transform-types verification/2026-11-11-wizard/run-delete.ts
 ```
 前置：桌面版已加载 dsh-superagent 且 `stateDir/startup.json` 为 ready。
