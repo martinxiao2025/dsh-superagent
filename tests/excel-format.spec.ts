@@ -1,4 +1,4 @@
-/** 016 标准任务格式：表头与枚举校验、版本门禁、标准状态映射与模板往返读取。 */
+/** 010 标准任务格式：表头与枚举校验、版本门禁、标准状态映射与模板往返读取。 */
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

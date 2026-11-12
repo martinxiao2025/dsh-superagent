@@ -1,6 +1,6 @@
-# 016 任务清单格式规范（标准工作簿与知识库任务表）
+# 010 任务清单格式规范（标准工作簿与知识库任务表）
 
-> 状态：设计规范建议，配套 [013-authoritative-project-design.md](013-authoritative-project-design.md) 第 6 章。本轮只写文档，不改代码、不提交。
+> 状态：已实现（0.2.0：`src/task-sources/excel-format.ts`、`excel-template.ts` 与 `GET task-format/template`），配套 [009-authoritative-project-design.md](009-authoritative-project-design.md) 第 6 章；第 7 节记录已定案的取舍。
 > 适用范围：Excel / CSV / TSV 任务清单，以及飞书知识库中承载任务的文档与多维表格。
 > 结论先行：**由系统定义标准格式，并作为默认路径**；自定义列映射只作为高级逃生通道。理由见第 1 节。
 
@@ -82,7 +82,7 @@
 
 - 项目内的 Excel 任务来源只能指向一个文件；文件必须是仓库内相对路径（如 `docs/backlog.xlsx`），随项目仓库同步。
 - 文件不存在、被移出仓库、被 `.gitignore` 忽略导致同步缺失 → 校验失败并提示「文件不在仓库工作副本中」。
-- 不在仓库内的绝对路径仅供本机调试，不作为生产形态（与 013 的「一项目一仓库」一致）。
+- 不在仓库内的绝对路径仅供本机调试，不作为生产形态（与 009 的「一项目一仓库」一致）。
 
 ## 2. 飞书知识库任务表
 
@@ -116,7 +116,7 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 
 ### 4.1 校验项
 
-`POST projects/task-source/verify` 与独立的 `task-format/validate` 都按同一套规则输出：
+`POST task-sources/verify`（字段级预检，`field` 缺省为 `all`）按同一套规则输出：
 
 | 检查 | 失败码 | 说明 |
 | --- | --- | --- |
@@ -131,7 +131,7 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 
 ### 4.2 模板
 
-- 面板「下载模板」与命令 `task-template --out <path>` 生成同一份工作簿：`tasks`（含一行示例 + 必填列）、`_meta`（`schema_version=1`）。
+- 面板「下载模板」通过 `GET task-format/template` 生成工作簿：`tasks`（表头 + 必填列）、`_meta`（`schema_version=1`）；没有单独的 CLI 命令。
 - 模板不预填业务数据；示例行在校验时会被识别为普通任务，因此默认注释掉（放在 `_meta` 的 `example` 键里）。
 
 ## 5. 边界处理
@@ -156,11 +156,11 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 - 自定义映射不改变稳定键规则，仍以 `task_id` 为外部编号；没有 `task_id` 列时要求指定一列作为编号，并提示「该列必须稳定且唯一」。
 - 使用自定义映射时，校验结果顶部标注「非标准格式」，提醒后续扩列不会自动生效。
 
-## 7. 待拍板
+## 7. 已定案的取舍
 
-1. 标准格式是否作为唯一默认路径（自定义映射仅高级），还是允许项目级默认切换。
-2. `status` 枚举是否就用这五个值，是否需要 `review`（待验收）。
-3. `depends_on` 是否在本期就参与调度阻塞，还是仅作元数据。
-4. 飞书文档的「清单模式」（复选框）是否保留，还是只支持任务表。
-5. 模板生成放在 CLI、面板，还是两者都做。
-6. 严格模式（跨文档 `task_id` 唯一）默认开启还是默认关闭。
+1. **标准格式是唯一默认路径**（自定义映射仅高级开关）——见 009 §13.1 第 10.13 项。
+2. **`status` 就用这五个值**（`todo` / `in_progress` / `blocked` / `done` / `cancelled`，见 `excel-format.ts` 的 `TASK_STATUSES`）；未引入 `review`，需要验收语义时由 `taskPolicy` 的状态映射表达。
+3. **`depends_on` 仅作元数据列**，不参与调度阻塞（调度器不读取该列）；引入依赖调度前不改变这一语义。
+4. **清单模式保留但非默认**：复选框解析保留在 `feishu-doc.ts`（`checklistTasks`），仅当文档没有任务表且项目显式开启时才解析。
+5. **模板生成只在面板**（`GET task-format/template`），不做 CLI 命令。
+6. **严格模式默认关闭**：跨文档 `task_id` 默认按文档隔离（见 009 §13.1 第 10.12 项），严格模式留作可选。

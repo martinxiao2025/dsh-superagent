@@ -4,3 +4,5 @@ lib/
 .env
 coverage/
 .mimosa/
+.dsh-dev-state/
+.zcode/

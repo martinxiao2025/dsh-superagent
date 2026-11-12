@@ -1,4 +1,4 @@
-/** 016 标准工作簿模板：tasks 表只放表头，_meta 表记录版本与示例，生成的 xlsx 可直接提交到仓库。 */
+/** 010 标准工作簿模板：tasks 表只放表头，_meta 表记录版本与示例，生成的 xlsx 可直接提交到仓库。 */
 import { createZip } from './table.ts'
 import { META_SHEET, STANDARD_COLUMNS, TASK_FORMAT_VERSION, TASK_SHEET } from './excel-format.ts'
 
@@ -25,7 +25,7 @@ function row(number: number, values: readonly string[]): string {
   return `<row r="${number}">${cells.join('')}</row>`
 }
 
-/** 生成 016 §4.2 的标准工作簿：`tasks` 表头 + `_meta` 版本与示例。 */
+/** 生成 010 §4.2 的标准工作簿：`tasks` 表头 + `_meta` 版本与示例。 */
 export function taskTemplate(now: () => string = () => new Date().toISOString()): Buffer {
   const meta = [
     ['key', 'value'],

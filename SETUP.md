@@ -77,3 +77,4 @@ grep -l -E 'id: dsh-superagent\b' "${DSH_HOME:-$HOME/.dsh}"/profiles/*/cordis.pa
 - 如何试用：从允许名单上的账号，在仓库的某个 Issue 中评论 `@<agent login> <request>`。大约一分钟内，概览中会出现一个工单。
 - 来自 `docs/000-philosophy.md` 责任一节的三条规则：从小范围开始，为减少噪音而调优，对智能体所说的负责。
 - 进一步阅读的位置：`docs/` 中按顺序排列的编号文档。
+- 操作者以后想移除插件时：`docs/006-deployment.md` 的「卸载与清理」一节（`scripts/dsh-superagent.mjs clean --yes`）。

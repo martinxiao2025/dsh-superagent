@@ -259,3 +259,133 @@ it('does not signal a process that took the recorded service PID, and keeps a st
   expect(await run('stop', '--stop-timeout', '1')).toMatchObject({ code: 1, stderr: expect.stringContaining('Graceful stop timed out') })
   expect(existsSync(join(control('superagent'), 'manually-stopped'))).toBe(true)
 }, 20_000)
+
+// ── clean：卸载清理 ─────────────────────────────────────────────────────────
+/** 在 `root` 下伪造一个 DSH home：一个引用了本插件的 profile 及其状态目录。 */
+function fakeDshHome() {
+  const home = join(root, 'dsh-home')
+  const profileDir = join(home, 'profiles', 'superagent')
+  mkdirSync(join(profileDir, 'node_modules'), { recursive: true })
+  const stateDir = join(root, 'state superagent')
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(join(profileDir, 'cordis.patch.yml'), `- id: webserver
+  config:
+    host: 127.0.0.1
+    port: 3082
+- id: dsh-superagent
+  config:
+    stateDir: ${stateDir}
+`)
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+    name: 'superagent-profile',
+    private: true,
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-web', 'dsh-superagent'] } },
+    dependencies: { '@deepseek-ai/dsh-web': '0.2.1', 'dsh-superagent': `link:${root.replaceAll('\\', '/')}` },
+  }, null, 2) + '\n')
+  writeFileSync(join(profileDir, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'
+
+importers:
+  .:
+    dependencies:
+      '@deepseek-ai/dsh-web':
+        specifier: 0.2.1
+        version: 0.2.1
+      dsh-superagent:
+        specifier: link:${root.replaceAll('\\', '/')}
+        version: link:${root.replaceAll('\\', '/')}
+
+packages: {}
+`)
+  mkdirSync(join(profileDir, 'node_modules', 'dsh-superagent'), { recursive: true })
+  writeFileSync(join(profileDir, 'node_modules', 'dsh-superagent', 'package.json'), '{"name": "dsh-superagent"}\n')
+  writeFileSync(join(stateDir, 'orchestrator.sqlite'), '')
+  writeFileSync(join(stateDir, 'notes.txt'), 'foreign')
+  return { home, profileDir, stateDir }
+}
+/** `run`，但把脚本看到的用户主目录重定向到 `home`（备份写入那里）。 */
+function runAs(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise(resolve => execFile(process.execPath, [join(root, 'scripts', 'dsh-superagent.mjs'), ...args],
+    { env: { ...process.env, HOME: home, USERPROFILE: home, PATH: [join(root, 'bin'), process.env.PATH].join(delimiter), DSH_SUPERAGENT_PROFILE: '', DSH_SUPERAGENT_URL: '' },
+      timeout: 20_000 },
+    (error, stdout, stderr) => resolve({ code: typeof error?.code === 'number' ? error.code : 0, stdout, stderr })))
+}
+
+it('clean refuses without --yes and leaves the install in place', async () => {
+  const { home, profileDir, stateDir } = fakeDshHome()
+  const before = readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')
+  expect(await run('clean', '--dsh-home', home)).toMatchObject({ code: 1, stderr: expect.stringContaining('pass --yes to confirm') })
+  expect(readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')).toBe(before)
+  expect(existsSync(stateDir)).toBe(true)
+})
+it('clean removes plugin references, the module directory, the state and this profile\'s artifacts, and backs everything up', async () => {
+  const { home, profileDir, stateDir } = fakeDshHome()
+  mkdirSync(control('superagent'), { recursive: true })
+  writeFileSync(join(control('superagent'), 'manually-stopped'), '')
+  mkdirSync(join(root, '.artifacts'), { recursive: true })
+  writeFileSync(join(root, '.artifacts', 'dsh-superagent-superagent-20260901-000000-1.log'), '')
+  writeFileSync(join(root, '.artifacts', 'dsh-superagent-other-20260901-000000-1.log'), '')
+  const backupHome = join(root, 'home')
+  mkdirSync(backupHome, { recursive: true })
+  const cleaned = await runAs(backupHome, 'clean', '--dsh-home', home, '--yes')
+  expect(cleaned).toMatchObject({ code: 0, stdout: expect.stringContaining('"removed"') })
+  // patch 只剩无关条目，package.json 去掉本插件但保留其他依赖，lockfile 条目消失。
+  expect(readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')).not.toContain('dsh-superagent')
+  expect(readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')).toContain('- id: webserver')
+  const pkg = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
+  expect(pkg.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-web'])
+  expect(pkg.dependencies).toEqual({ '@deepseek-ai/dsh-web': '0.2.1' })
+  expect(readFileSync(join(profileDir, 'pnpm-lock.yaml'), 'utf8')).not.toContain('dsh-superagent')
+  expect(existsSync(join(profileDir, 'node_modules', 'dsh-superagent'))).toBe(false)
+  expect(existsSync(stateDir)).toBe(false)
+  expect(existsSync(control('superagent'))).toBe(false)
+  const artifacts = readdirSync(join(root, '.artifacts'))
+  expect(artifacts).toContain('dsh-superagent-other-20260901-000000-1.log')
+  expect(artifacts).not.toContain('dsh-superagent-superagent-20260901-000000-1.log')
+  // 备份包含 patch 原文与状态目录的外来文件。
+  const backups = readdirSync(join(backupHome, 'dsh-superagent-backup'))
+  expect(backups).toHaveLength(1)
+  expect(readFileSync(join(backupHome, 'dsh-superagent-backup', backups[0]!, 'profile', 'cordis.patch.yml'), 'utf8')).toContain('- id: dsh-superagent')
+  expect(existsSync(join(backupHome, 'dsh-superagent-backup', backups[0]!, 'state', 'notes.txt'))).toBe(true)
+})
+it('clean restores the patch and keeps the state when an external instance holds the state lock', async () => {
+  const { home, profileDir, stateDir } = fakeDshHome()
+  mkdirSync(stateDir + '.lock', { recursive: true })
+  writeFileSync(join(stateDir, 'startup.json'), JSON.stringify({ pid: sleeper(), phase: 'ready' }))
+  const before = readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')
+  mkdirSync(join(root, 'home'), { recursive: true })
+  const result = await runAs(join(root, 'home'), 'clean', '--dsh-home', home, '--lock-wait', '1', '--yes')
+  expect(result).toMatchObject({ code: 1, stderr: expect.stringContaining('state lock was not released') })
+  expect(readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')).toBe(before)
+  expect(existsSync(join(profileDir, 'node_modules', 'dsh-superagent'))).toBe(true)
+  expect(existsSync(stateDir)).toBe(true)
+}, 20_000)
+it('clean removes a stale state lock left by a dead instance', async () => {
+  const { home, stateDir } = fakeDshHome()
+  rmSync(join(stateDir, 'notes.txt'))
+  mkdirSync(stateDir + '.lock', { recursive: true })
+  writeFileSync(join(stateDir, 'startup.json'), JSON.stringify({ pid: 999_999, phase: 'ready' }))
+  const lock = stateDir + '.lock'
+  utimesSync(lock, 1_700_000_000, 1_700_000_000)
+  expect(await runAs(join(root, 'home'), 'clean', '--dsh-home', home, '--yes')).toMatchObject({ code: 0 })
+  expect(existsSync(lock)).toBe(false)
+})
+it('clean reports nothing to do when no profile references the plugin', async () => {
+  const home = join(root, 'dsh-home')
+  mkdirSync(join(home, 'profiles', 'fresh'), { recursive: true })
+  writeFileSync(join(home, 'profiles', 'fresh', 'cordis.patch.yml'), '- id: webserver\n')
+  expect(await run('clean', '--dsh-home', home, '--yes'))
+    .toMatchObject({ code: 0, stdout: expect.stringContaining('nothing to clean') })
+})
+it('clean auto-detects the only profile that has the plugin and leaves other profiles alone', async () => {
+  const { home, profileDir, stateDir } = fakeDshHome()
+  const other = join(home, 'profiles', 'other')
+  mkdirSync(other, { recursive: true })
+  writeFileSync(join(other, 'cordis.patch.yml'), '- id: webserver\n')
+  writeFileSync(join(other, 'package.json'), '{"dsh": {"profile": {"bundles": ["dsh-superagent"]}}}\n')
+  const result = await runAs(join(root, 'home'), 'clean', '--dsh-home', home, '--yes')
+  expect(result).toMatchObject({ code: 0, stdout: expect.stringContaining('Found dsh-superagent in DSH profile: superagent') })
+  expect(existsSync(stateDir)).toBe(false)
+  expect(readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')).not.toContain('dsh-superagent')
+  // 另一个 profile 虽然手写了 bundles 引用，但没有被清理：自动检测只认 patch 条目，避免误伤。
+  expect(readFileSync(join(other, 'package.json'), 'utf8')).toContain('dsh-superagent')
+})

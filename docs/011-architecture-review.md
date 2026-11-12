@@ -1,24 +1,25 @@
-# 017 架构与方案评审（独立评审产出）
+# 011 架构与方案评审（独立评审产出）
 
 > 评审对象：`dsh-superagent`（DeepSeek Harness 插件）当前工作区代码
-> 权威方案：[013 项目权威设计与实施基线](013-authoritative-project-design.md)
-> 配套：014（裁剪清单）、015（生产就绪差距）、016（任务格式规范）；011、012 已废弃
-> 评审方式：只读。静态阅读 + 依赖图脚本核验 + 与 013/014/015/016 逐条比对；未运行 `pnpm test`/`build`，未修改任何源码
+> 权威方案：[009 项目权威设计与实施基线](009-authoritative-project-design.md)
+> 配套：010（任务格式规范，原 016）。原 011/012 已并入 009 后删除；原 014（裁剪清单）的 C 级收尾项并入本文 §9.2、量化数据以其为准被推翻后删除；原 015（差距清单）的关闭记录由本文 §9.1 承接后删除；原文均见 git 历史。
+> 编号说明：本文原编号 017；2026-11-12 文档清理时按「013→009、016→010、017→011」重排，正文引用已同步。
+> 评审方式：只读。静态阅读 + 依赖图脚本核验 + 与 009/014/015/010（原编号）逐条比对；未运行 `pnpm test`/`build`，未修改任何源码
 > 评审日期：2026-11-11
 
 ## 0. 结论摘要
 
-当前实现处于「领域与存储、任务来源与仓库同步、队列与调度」已落地，「凭据、项目内联、重置、知识库多文档」未落地的中间态。整体方向与 013 一致，`core` 的端口划分基本干净；但队列与回写这条主链路上存在 4 个会造成**数据不一致或功能失效**的缺陷，其中「重试不会真正重跑」与「回写污染仓库工作副本」属于上线阻塞级。
+当前实现处于「领域与存储、任务来源与仓库同步、队列与调度」已落地，「凭据、项目内联、重置、知识库多文档」未落地的中间态。整体方向与 009 一致，`core` 的端口划分基本干净；但队列与回写这条主链路上存在 4 个会造成**数据不一致或功能失效**的缺陷，其中「重试不会真正重跑」与「回写污染仓库工作副本」属于上线阻塞级。
 
 | 级别 | 数量 | 主题 |
 | --- | --- | --- |
 | P0 | 4 | 重试失效、回写污染工作副本、回写无持久化重试/幂等、执行目录未物化项目仓库 |
-| P1 | 10 | 实体无运行时校验与迁移矛盾、队列唯一性与保留、工作项级 reconcile、停用/删除闭环、轮询并发、`runOnStart` 失效、016 未落地、飞书模型差距、分层泄漏、凭据越权面 |
+| P1 | 10 | 实体无运行时校验与迁移矛盾、队列唯一性与保留、工作项级 reconcile、停用/删除闭环、轮询并发、`runOnStart` 失效、010 未落地、飞书模型差距、分层泄漏、凭据越权面 |
 | P2 | 4 | 硬编码与配置、可观测性、测试策略、发布与文档一致性 |
-| 过度设计 | 4 | 凭据两套全量复制、016 的元数据与自研 xlsx、`spaceId` 全库唯一、队列终态永久保留 |
+| 过度设计 | 4 | 凭据两套全量复制、010 的元数据与自研 xlsx、`spaceId` 全库唯一、队列终态永久保留 |
 | 遗漏能力 | 4 | 队列操作面、告警、日常备份、速率限制 |
 
-**一句话判断**：队列的状态机设计是对的，但「工单」与「队列」之间的幂等、回写与工作区三条边界没有闭合；013 需要在这些边界上补齐契约，否则后续面板与飞书多文档会在错误的地基上继续叠加。
+**一句话判断**：队列的状态机设计是对的，但「工单」与「队列」之间的幂等、回写与工作区三条边界没有闭合；009 需要在这些边界上补齐契约，否则后续面板与飞书多文档会在错误的地基上继续叠加。
 
 ## 1. 复核基线与方法说明
 
@@ -75,17 +76,17 @@
   - [dsh.ts:117](../src/executor/dsh.ts#L117) 目录由 `executionRoot + folder + ticketId` 组成
   - [dsh.ts:277-290](../src/executor/dsh.ts#L277-L290) 仅 `mkdir` 与执行 prepare
   - [policy.ts:95-100](../src/policy.ts#L95-L100) `maxWorkers`/`directory`/`prepare` 是全局设置
-  - [013 §4.1](../docs/013-authoritative-project-design.md#L120-L126) 只写「执行目录按项目组织」，未要求 checkout
-- **影响**：任务在**不含项目代码**的目录里执行，所谓「改代码 + 提 PR」无法成立；多个项目共享同一 prepare 脚本会互相污染（同一份缓存、同一套凭据注入）；013 的「一项目一仓库」承诺在运行时不成立。
+  - [009 §4.1](../docs/009-authoritative-project-design.md#L120-L126) 只写「执行目录按项目组织」，未要求 checkout
+- **影响**：任务在**不含项目代码**的目录里执行，所谓「改代码 + 提 PR」无法成立；多个项目共享同一 prepare 脚本会互相污染（同一份缓存、同一套凭据注入）；009 的「一项目一仓库」承诺在运行时不成立。
 - **建议**：把「工作区」定义为项目仓库的 per-ticket worktree：`git worktree add <work>/<project>/<ticket> origin/<branch>`，队列条目记录 `repo/branch/baseCommit`；prepare 改为**项目级**（在 worktree 内装依赖），全局 prepare 仅作为兜底。派工前校验 worktree 的 remote 与 project.repository 一致，不一致直接拒绝并给出明确错误码。
 - **工作量**：5–8 人日（worktree 生命周期、清理、Windows 路径、并发 git 锁）。
 
 ## 3. P1：影响可靠性，需在首个生产周期内解决
 
-### P1-1 实体读取无校验，且迁移链与 013 的「不做迁移」冲突
+### P1-1 实体读取无校验，且迁移链与 009 的「不做迁移」冲突
 
-- **问题**：`ticket`/`thread`/`queue`/`trigger`/`decision` 一律 `JSON.parse(...) as T`，只有 `settings` 经过 Zod；`QueueEntrySchema` 定义了却从未用于读取。同时 `Store` 仍保留 schema 10→11→12→13 的迁移链，与 013 §9.2「新库直接落最终结构、不做迁移」相悖，且「重置」入口并不存在。
-- **证据**：[store.ts:133](../src/app/store.ts#L133)、[store.ts:242](../src/app/store.ts#L242)、[store.ts:258](../src/app/store.ts#L258)、[store.ts:174](../src/app/store.ts#L174)；[model.ts:9](../src/queue/model.ts#L9) 未使用；[store.ts:96-98](../src/app/store.ts#L96-L98) 迁移链；[013 §9.2](../docs/013-authoritative-project-design.md#L422-L428)。
+- **问题**：`ticket`/`thread`/`queue`/`trigger`/`decision` 一律 `JSON.parse(...) as T`，只有 `settings` 经过 Zod；`QueueEntrySchema` 定义了却从未用于读取。同时 `Store` 仍保留 schema 10→11→12→13 的迁移链，与 009 §9.2「新库直接落最终结构、不做迁移」相悖，且「重置」入口并不存在。
+- **证据**：[store.ts:133](../src/app/store.ts#L133)、[store.ts:242](../src/app/store.ts#L242)、[store.ts:258](../src/app/store.ts#L258)、[store.ts:174](../src/app/store.ts#L174)；[model.ts:9](../src/queue/model.ts#L9) 未使用；[store.ts:96-98](../src/app/store.ts#L96-L98) 迁移链；[009 §9.2](../docs/009-authoritative-project-design.md#L422-L428)。
 - **影响**：任何一次字段改名/类型收紧都会在运行期变成 `undefined` 或静默错判（例如 `dueAt` 变字符串后比较结果错误）；旧库升级路径与目标 schema 双轨，测试与文档都要维护两套事实。
 - **建议**：读取时用对应 schema `parse`，失败的行进入 `quarantine`（带原始 JSON 与错误），并让健康度面板可见；短期先给 queue/ticket 加校验（成本最低、风险最高），再决定是否删除迁移链并落地 `reset`。
 - **工作量**：2 人日（校验）+ 2 人日（reset 与删迁移）。
@@ -93,7 +94,7 @@
 ### P1-2 队列唯一性只在应用层，终态无保留上限
 
 - **问题**：`queue` 表只有 `id` 主键与 `seq` 索引；`(project, task, item)` 去重完全依赖 `reconcile` 在事务内计算。`appearance` 用「历史条目数」做后缀，`cancelled/failed` 条目永久保留，因此条目数单调增长，`seq` 与 `appearance` 都随之膨胀。
-- **证据**：[store.ts:88-93](../src/app/store.ts#L88-L93)；[scheduler.ts:218-229](../src/app/scheduler.ts#L218-L229)；[scheduler.ts:327-329](../src/app/scheduler.ts#L327-L329)；[013 §2.2](../docs/013-authoritative-project-design.md#L44) 明确「终态保留」。
+- **证据**：[store.ts:88-93](../src/app/store.ts#L88-L93)；[scheduler.ts:218-229](../src/app/scheduler.ts#L218-L229)；[scheduler.ts:327-329](../src/app/scheduler.ts#L327-L329)；[009 §2.2](../docs/009-authoritative-project-design.md#L44) 明确「终态保留」。
 - **影响**：并发触发（手动 scan + 定时 tick）或崩溃恢复时可能产生同任务双条目；队伍越用越大，快照与面板渲染随之变慢；「第 N 次出现」的语义难以向用户解释。
 - **建议**：把 entry 的关键字段列化（`project/task/item/state/attempt/seq/due_at/ended_at`）并加部分唯一索引 `UNIQUE(project, task, item) WHERE state IN ('queued','starting','running')`；终态设置保留窗口（如 30 天）与归档表；`appearance` 只在「消失后重现」时递增，并在同一次事务内持久化「已见过的最大出现代次」。
 - **工作量**：2 人日。
@@ -111,7 +112,7 @@
 - **问题**：`poll`/`dispatch` 会因 `enabled` 拒绝，但停用后排队条目永久停留且无任何操作入口；`DELETE projects/:id` 不停止运行中的工单，也不清理队列条目，删除后条目变成没有归属的孤儿（`dispatch` 永远返回 false）。`scheduler.errors` 与 `nextPollAt` 不进入任何接口。
 - **证据**：[scheduler.ts:83](../src/app/scheduler.ts#L83)、[scheduler.ts:250](../src/app/scheduler.ts#L250)；[settings.ts](../src/app/settings.ts) `removeProject`；[http.ts:253](../src/app/http.ts#L253)、[http.ts:263](../src/app/http.ts#L263) 仅有查询与删除项目；[scheduler.ts:42](../src/app/scheduler.ts#L42) 错误只在内存。
 - **影响**：用户以为「停用=暂停」，实际队列越积越多且无法清空；删项目后残留条目可能让后续排查完全失去线索；「为什么没跑」只能翻日志。
-- **建议**：按 013 §4.3 定案落地：停用保留 `queued` + 详情页显示「排队 N / 运行 M」+ 独立动作「停止当前任务」「清空排队」；删除项目流程改为「停止运行工单 → 取消/归档队列条目 → 删除记录」同一事务；`GET queue` 与 `GET projects/:id/tasks` 增加 `lastError/nextPollAt/lastWriteback`；补 `POST queue/:id/retry|cancel`。
+- **建议**：按 009 §4.3 定案落地：停用保留 `queued` + 详情页显示「排队 N / 运行 M」+ 独立动作「停止当前任务」「清空排队」；删除项目流程改为「停止运行工单 → 取消/归档队列条目 → 删除记录」同一事务；`GET queue` 与 `GET projects/:id/tasks` 增加 `lastError/nextPollAt/lastWriteback`；补 `POST queue/:id/retry|cancel`。
 - **工作量**：2–3 人日。
 
 ### P1-5 轮询在 tick 内串行 await，超时与互斥不完整
@@ -131,18 +132,18 @@
 - **建议**：改为 `startup ? !project.schedule.runOnStart : (due !== undefined && due > now)`，并补一条「runOnStart=false 启动不轮询、到点后轮询」的用例。
 - **工作量**：0.5 人日。
 
-### P1-7 016 标准格式未落地，且与现有默认策略冲突
+### P1-7 010 标准格式未落地，且与现有默认策略冲突
 
-- **问题**：016 要求 `tasks` 工作表、`_meta.schema_version`、固定状态枚举、非法行整批拒绝、模板下载；实现则是自动探测表头 + 4 个默认待处理状态（`待处理/todo/pending/open`）+ 状态自由文本，且只读第一个工作表。任务稳定键也缺 `repositoryPath`。
-- **证据**：[tasks.ts](../src/task-sources/tasks.ts) 的导入与列匹配；[excel.ts](../src/task-sources/excel.ts) 的首表读取；[table.ts](../src/task-sources/table.ts) 的 CSV/TSV/XLSX 解析；[projects/kind.ts:30-33](../src/projects/kind.ts#L30-L33)；[013 §6.4](../docs/013-authoritative-project-design.md#L260-L263)。
-- **影响**：016 不能作为可执行契约；同一个仓库在不同人的表结构下行为不同；状态拼写差异（「Done」vs「已完成」）导致任务不被领取或永远不被回写。
-- **建议**：先实现 016 的**最小闭环**（`tasks` 表 + 3 个必填列 + 固定枚举 + 行级错误码 + 模板），把自定义映射降级为高级开关；在项目上增加 `statusMap`（标准枚举 ↔ 本地文本）；任务键按 016 补齐 `repositoryPath`。若决定不实现 `_meta`，必须同步修改 016，而不是让文档悬空。
+- **问题**：010 要求 `tasks` 工作表、`_meta.schema_version`、固定状态枚举、非法行整批拒绝、模板下载；实现则是自动探测表头 + 4 个默认待处理状态（`待处理/todo/pending/open`）+ 状态自由文本，且只读第一个工作表。任务稳定键也缺 `repositoryPath`。
+- **证据**：[tasks.ts](../src/task-sources/tasks.ts) 的导入与列匹配；[excel.ts](../src/task-sources/excel.ts) 的首表读取；[table.ts](../src/task-sources/table.ts) 的 CSV/TSV/XLSX 解析；[projects/kind.ts:30-33](../src/projects/kind.ts#L30-L33)；[009 §6.4](../docs/009-authoritative-project-design.md#L260-L263)。
+- **影响**：010 不能作为可执行契约；同一个仓库在不同人的表结构下行为不同；状态拼写差异（「Done」vs「已完成」）导致任务不被领取或永远不被回写。
+- **建议**：先实现 010 的**最小闭环**（`tasks` 表 + 3 个必填列 + 固定枚举 + 行级错误码 + 模板），把自定义映射降级为高级开关；在项目上增加 `statusMap`（标准枚举 ↔ 本地文本）；任务键按 010 补齐 `repositoryPath`。若决定不实现 `_meta`，必须同步修改 010，而不是让文档悬空。
 - **工作量**：4–6 人日。
 
 ### P1-8 飞书知识库仍是「单节点 docx」，且唯一性表述自相矛盾
 
-- **问题**：现有驱动只接受一个 `url`，解析到单个 `docx` 节点；013 §6.3 的「spaceId + roots[]、文件夹递归、shortcut 解引用、bitable、失效文档隔离、跨文档去重」均未实现。同时 013 §9.1 要求 `spaceId` 全库唯一，而 §10.11 推荐「空间唯一归属 + 根节点集合」，两处结论不一致。
-- **证据**：[feishu-wiki.ts](../src/task-sources/feishu-wiki.ts) 的 `url` 字段与单节点解析；[feishu-doc.ts:46-70](../src/task-sources/feishu-doc.ts#L46-L70) 要求 `obj_type === 'docx'`；[013 §6.3](../docs/013-authoritative-project-design.md#L227-L242)；[013 §9.1 L419](../docs/013-authoritative-project-design.md#L419)；[013 §10.11 L485](../docs/013-authoritative-project-design.md#L485)。
+- **问题**：现有驱动只接受一个 `url`，解析到单个 `docx` 节点；009 §6.3 的「spaceId + roots[]、文件夹递归、shortcut 解引用、bitable、失效文档隔离、跨文档去重」均未实现。同时 009 §9.1 要求 `spaceId` 全库唯一，而 §10.11 推荐「空间唯一归属 + 根节点集合」，两处结论不一致。
+- **证据**：[feishu-wiki.ts](../src/task-sources/feishu-wiki.ts) 的 `url` 字段与单节点解析；[feishu-doc.ts:46-70](../src/task-sources/feishu-doc.ts#L46-L70) 要求 `obj_type === 'docx'`；[009 §6.3](../docs/009-authoritative-project-design.md#L227-L242)；[009 §9.1 L419](../docs/009-authoritative-project-design.md#L419)；[009 §10.11 L485](../docs/009-authoritative-project-design.md#L485)。
 - **影响**：目标能力缺口最大的部分；若先按单 URL 做 UI，后续多文档改造会连带改绑定模型、校验、错误码与回写。
 - **建议**：先定案并统一为一套模型（建议根集合唯一 + 重叠检测，`spaceId` 只做归属提示），再实现遍历器；`list` 返回 `{tasks, skipped, warnings, invalidDocs}`，单文档失败只跳过该文档并计数，不整批失败；任务键含 `nodeToken`。
 - **工作量**：8–12 人日。
@@ -158,7 +159,7 @@
 ### P1-10 凭据注入方式在「两套独立凭据」落地前就存在越权面
 
 - **问题**：HTTPS 走 `recordTicketSource(stateDir, directory, codeSource)`，把凭据助手**按目录**注册，该目录下任何进程（含 worker 会话里的任意 shell、prepare 脚本）执行 `git` 都能拿到仓库凭据；SSH 则把私钥路径通过 `-i` 注入。两者都与「凭据只对本次调度生效」的最小权限原则不符。当前也没有 `src/secrets/`，Windows 上 `chmod 0600` 无效。
-- **证据**：[sync.ts:90](../src/code-repos/sync.ts#L90)；[commands.ts:97](../src/infra/commands.ts#L97) 按记录 `scope`；[store.ts:68](../src/app/store.ts#L68) `chmodSync(0o600)`；[013 §5.2](../docs/013-authoritative-project-design.md#L172-L180)。
+- **证据**：[sync.ts:90](../src/code-repos/sync.ts#L90)；[commands.ts:97](../src/infra/commands.ts#L97) 按记录 `scope`；[store.ts:68](../src/app/store.ts#L68) `chmodSync(0o600)`；[009 §5.2](../docs/009-authoritative-project-design.md#L172-L180)。
 - **影响**：一个项目的工作区被攻破即等于该仓库凭据泄漏；未来落地面板粘贴私钥后风险进一步放大（`settingsView` 目前原样下发 `config`，见 [views/settings.ts:55](../src/app/views/settings.ts#L55)）。
 - **建议**：凭据只在**调度器执行的 git 命令**上生效：HTTPS 用 `-c http.extraHeader=Authorization: Basic ...`（仅该进程、不落 `.git/config`）或临时 `GIT_ASKPASS`+环境变量；SSH 优先走 `ssh-agent`（`SSH_AUTH_SOCK`），必须落盘时写到仅当前用户可读的临时目录并用 `icacls` 收紧 ACL（Windows 的 `chmod` 不可依赖）；worker 会话默认**不**注入 git 凭据，需要提 PR 时显式开启。加密存储建议 Windows 用 DPAPI（当前用户作用域）+ 文件 ACL，避免明文密钥库。
 - **工作量**：3–4 人日（不含 `src/secrets/` 全量实现）。
@@ -169,7 +170,7 @@
 
 - **问题**：命令超时统一 90 秒（clone/fetch/`lark` 共用）；tick 固定 15 秒；默认 CLI 写死 `gh`/`glab`；`prepare` 是全局而非项目级；`pendingStatuses` 默认四种同义词。
 - **证据**：[commands.ts:10](../src/infra/commands.ts#L10)；[scheduler.ts:36](../src/app/scheduler.ts#L36)；[deployment.ts](../src/deployment.ts)；[policy.ts:95-100](../src/policy.ts#L95-L100)；[projects/kind.ts:30](../src/projects/kind.ts#L30)。
-- **影响**：大仓库首次同步必然超时；不同项目无法差异化配置；同义词默认值与 016 的固定枚举互相打架。
+- **影响**：大仓库首次同步必然超时；不同项目无法差异化配置；同义词默认值与 010 的固定枚举互相打架。
 - **建议**：把超时按命令类别拆（`gitFetch/gitClone/lark/cli`）并允许项目覆盖；tick 间隔与抖动进配置；CLI 名称从类型描述里读；`prepare` 移到 `Project.execution`。
 - **工作量**：1–2 人日。
 
@@ -184,41 +185,41 @@
 ### P2-3 测试策略
 
 - **问题**：队列测试使用 fake engine，掩盖 P0-1；回写路径（CSV/TSV/XLSX 三种）零用例；无「停用 + 排队」「重启 + running」「并发 scan/tick」用例；Windows 下 11 例符号链接失败作为「已知基线」被容忍；`runtime.spec.ts` 是 1600+ 行的巨石，定位成本高。
-- **证据**：[queue.spec.ts](../tests/queue.spec.ts)（fake engine）；`tests/` 下无 writeback 用例；[015 §2 P2-6](../docs/015-production-readiness-gaps.md#L44)。
+- **证据**：[queue.spec.ts](../tests/queue.spec.ts)（fake engine）；`tests/` 下无 writeback 用例；原 015 差距清单 §2 P2-6（该清单已删除，原文见 git 历史）。
 - **影响**：最高风险的写路径没有回归网；「已知失败」会持续吞掉真实回归。
 - **建议**：给队列/调度补「真实 Engine + 临时 stateDir」集成用例；把写回拆成纯函数（bytes → bytes）+ 文件系统用例；为 Windows 跳过项加显式 `describe.skipIf` 与 issue 编号，禁止裸失败。
 - **工作量**：3–4 人日。
 
 ### P2-4 发布、回滚与文档一致性
 
-- **问题**：版本仍是 `0.1.0`，无 changelog/发布脚本；013 要求「重置」但未实现；014 的「13 条循环」与实测 2 组 SCC 不符，且引用了不存在的 `tests/scheduler.spec.ts`、`tests/projects.spec.ts`；007 测试表里 `tests/queue.spec.ts` 出现两次（[007 L444](../docs/007-architecture.md#L444)、[007 L466](../docs/007-architecture.md#L466)），且 `src/task-sources/writeback.ts` 被描述为「`.xlsx` 未支持」，与 [writeback.ts:26](../src/task-sources/writeback.ts#L26) 实际调用 `writeXlsxStatus` 矛盾；013 §12 的阶段编号与实际开发顺序（队列先于重置）已错位。
-- **证据**：如上及 [014](../docs/014-code-pruning-inventory.md)；[013 §12](../docs/013-authoritative-project-design.md#L501-L513)。
-- **影响**：新人按 014 预估裁剪工作量会失准；按 013 的阶段表无法判断当前进度；`docs.spec.ts` 只校验「存在与覆盖」，查不出重复行与语义漂移。
-- **建议**：文档里所有量化断言改为「由脚本生成」；在 `docs.spec.ts` 增加「测试表无重复行」「013/014 引用的路径存在」；版本策略定为 `0.2.0`（含 schema 重置）并在 013 增加「版本 ↔ schema ↔ 迁移」对照表。
+- **问题**：版本仍是 `0.1.0`，无 changelog/发布脚本；009 要求「重置」但未实现；014 的「13 条循环」与实测 2 组 SCC 不符，且引用了不存在的 `tests/scheduler.spec.ts`、`tests/projects.spec.ts`；007 测试表里 `tests/queue.spec.ts` 出现两次（[007 L444](../docs/007-architecture.md#L444)、[007 L466](../docs/007-architecture.md#L466)），且 `src/task-sources/writeback.ts` 被描述为「`.xlsx` 未支持」，与 [writeback.ts:26](../src/task-sources/writeback.ts#L26) 实际调用 `writeXlsxStatus` 矛盾；009 §12 的阶段编号与实际开发顺序（队列先于重置）已错位。
+- **证据**：如上及原 014 裁剪清单（已删除，原文见 git 历史）；[009 §12](../docs/009-authoritative-project-design.md#L501-L513)。
+- **影响**：新人按 014 预估裁剪工作量会失准；按 009 的阶段表无法判断当前进度；`docs.spec.ts` 只校验「存在与覆盖」，查不出重复行与语义漂移。
+- **建议**：文档里所有量化断言改为「由脚本生成」；在 `docs.spec.ts` 增加「测试表无重复行」「009/014 引用的路径存在」；版本策略定为 `0.2.0`（含 schema 重置）并在 009 增加「版本 ↔ schema ↔ 迁移」对照表。
 - **工作量**：1–2 人日。
 
 ## 5. 过度设计（建议简化）
 
 | 编号 | 设计 | 问题 | 建议 |
 | --- | --- | --- | --- |
-| O-1 | 两套凭据「不共用业务代码、列表/表单组件或错误码」（[013 §5.1 L170](../docs/013-authoritative-project-design.md#L170)） | Git 与飞书凭据的生命周期（CRUD/掩码/轮换/引用保护/复验）几乎同构，全量复制会产生 2 套表、2 套路由、2 套表单、2 套错误码前缀与 2 套文案，长期维护成本翻倍 | 保留**存储与表独立**（安全隔离有意义），但抽取一个 `CredentialStore` 内核 + 一个通用表单/列表原语，按 `kind` 提供字段描述；错误码可共享前缀族（`credentialInvalid/Forbidden/Expired`）并在文案层区分 |
-| O-2 | 016 的 `_meta/schema_version/depends_on` + 自研 xlsx 读写 | 单人/单团队场景下 `_meta` 收益有限；`depends_on` 明确「只记录不阻塞」属于半成品；自研 ZIP/XML 需自行处理共享字符串、样式、日期、内联字符串，维护成本高且静默损坏风险大 | 先落地 3 个必填列 + 固定枚举 + 行级错误；`_meta` 可选；删除 `depends_on` 直到调度支持依赖；xlsx 明确标注「实验性只读」，或引入成熟库并接受包体增长 |
-| O-3 | `knowledgeBase.spaceId` 全库唯一（[013 §9.1 L419](../docs/013-authoritative-project-design.md#L419)） | 企业常见「一个知识空间被多个团队共用」，强制全库唯一会直接挡住正常用法，且与 §10.11 的根集合方案冲突 | 统一为「按根节点集合唯一 + 重叠检测」，`spaceId` 仅做归属一致性与提示；同一空间不同子树允许分属不同项目 |
-| O-4 | 队列终态永久保留（[013 §2.2 L44](../docs/013-authoritative-project-design.md#L44)） | 条目数单调增长，`appearance` 与快照无限膨胀，且「永久保留」与 SQLite 单库的运维现实不符 | 保留窗口 + 归档表；「唯一事实来源」限定为**活动条目**，终态转为可查询历史 |
+| O-1 | 两套凭据「不共用业务代码、列表/表单组件或错误码」（[009 §5.1 L170](../docs/009-authoritative-project-design.md#L170)） | Git 与飞书凭据的生命周期（CRUD/掩码/轮换/引用保护/复验）几乎同构，全量复制会产生 2 套表、2 套路由、2 套表单、2 套错误码前缀与 2 套文案，长期维护成本翻倍 | 保留**存储与表独立**（安全隔离有意义），但抽取一个 `CredentialStore` 内核 + 一个通用表单/列表原语，按 `kind` 提供字段描述；错误码可共享前缀族（`credentialInvalid/Forbidden/Expired`）并在文案层区分 |
+| O-2 | 010 的 `_meta/schema_version/depends_on` + 自研 xlsx 读写 | 单人/单团队场景下 `_meta` 收益有限；`depends_on` 明确「只记录不阻塞」属于半成品；自研 ZIP/XML 需自行处理共享字符串、样式、日期、内联字符串，维护成本高且静默损坏风险大 | 先落地 3 个必填列 + 固定枚举 + 行级错误；`_meta` 可选；删除 `depends_on` 直到调度支持依赖；xlsx 明确标注「实验性只读」，或引入成熟库并接受包体增长 |
+| O-3 | `knowledgeBase.spaceId` 全库唯一（[009 §9.1 L419](../docs/009-authoritative-project-design.md#L419)） | 企业常见「一个知识空间被多个团队共用」，强制全库唯一会直接挡住正常用法，且与 §10.11 的根集合方案冲突 | 统一为「按根节点集合唯一 + 重叠检测」，`spaceId` 仅做归属一致性与提示；同一空间不同子树允许分属不同项目 |
+| O-4 | 队列终态永久保留（[009 §2.2 L44](../docs/009-authoritative-project-design.md#L44)） | 条目数单调增长，`appearance` 与快照无限膨胀，且「永久保留」与 SQLite 单库的运维现实不符 | 保留窗口 + 归档表；「唯一事实来源」限定为**活动条目**，终态转为可查询历史 |
 
 ## 6. 遗漏的必需能力
 
-1. **队列操作面**：013 §7.1 有 `GET queue`，但没有「重试/取消/清空/调序」动作。任务卡在 `queued` 或 `failed` 时用户无路可走，只能改数据库。
+1. **队列操作面**：009 §7.1 有 `GET queue`，但没有「重试/取消/清空/调序」动作。任务卡在 `queued` 或 `failed` 时用户无路可走，只能改数据库。
 2. **告警与通知**：项目连续 N 次轮询失败、写回积压、凭据过期、队列长时间无进展，都没有出口（现有通知只覆盖工单结束）。
-3. **日常备份/恢复**：013 只在「重置」时备份；SQLite WAL + `secrets/` 的定期备份、恢复到指定时间点没有定义。
+3. **日常备份/恢复**：009 只在「重置」时备份；SQLite WAL + `secrets/` 的定期备份、恢复到指定时间点没有定义。
 4. **速率限制与配额**：GitHub/GitLab `fetch` 与飞书 OpenAPI 都是限流接口，当前没有退避/令牌桶，多项目时会互相拖垮。
-5. **明确非目标**：多仓库、任务优先级、任务依赖、并发 PR、跨项目共享知识库等，建议在 013 增加「非目标」小节，避免评审时反复讨论。
+5. **明确非目标**：多仓库、任务优先级、任务依赖、并发 PR、跨项目共享知识库等，建议在 009 增加「非目标」小节，避免评审时反复讨论。
 
-## 7. 对 013 方案的具体修订建议
+## 7. 对 009 方案的具体修订建议
 
 > 按章节顺序，逐条给出「改哪里、改成什么」。
 
-| 013 章节 | 修订建议 |
+| 009 章节 | 修订建议 |
 | --- | --- |
 | §2.2 实体表（L43-L49） | `QueueEntry` 增加 `itemKey/contentHash/attempt/ticketId/writeback` 字段；把「终态保留」改为「活动条目为唯一事实来源，终态保留 30 天后归档」；明确 `QueueEntry` 是任务状态的投影，工单是执行记录，两者不做双向同步 |
 | §2.3 关系（L51-L70） | 项目 → 仓库 → 凭据的引用关系保持不变；补充「项目仓库 ↔ 工作副本目录」「工单 ↔ per-ticket worktree」两条运行时关系，避免 §4.1 的执行目录与实际实现脱节 |
@@ -232,7 +233,7 @@
 | §5.4 项目选择规则（L191-L195） | 增加「项目记录 `lastVerifiedRevision`，凭据 revision 不一致即待复验」的落库字段与判定位置 |
 | §6.1 驱动接口（L199-L216） | `list` 返回值改为 `{tasks, skipped, warnings, invalid}`（单文档/单行失败可隔离）；`writeback` 增加 `idempotencyKey` 与 `expectedStatus` 参数 |
 | §6.3 知识库模型（L227-L242） | 保留根集合模型；补「文档级失效隔离」「增量读取（`obj_edit_time`/revision）」「跨文档 `task_id` 默认按文档隔离、键含 `nodeToken`」三条规则 |
-| §6.4/§6.5（L258-L269） | 明确 016 标准格式是**前置条件**而非建议；任务键补齐 `repositoryPath`；状态枚举与 `taskPolicy` 的关系写成「标准枚举 + 项目级映射表」；`depends_on` 删除或标注「保留字段，暂不参与调度」 |
+| §6.4/§6.5（L258-L269） | 明确 010 标准格式是**前置条件**而非建议；任务键补齐 `repositoryPath`；状态枚举与 `taskPolicy` 的关系写成「标准枚举 + 项目级映射表」；`depends_on` 删除或标注「保留字段，暂不参与调度」 |
 | §7.1 接口（L273-L295） | 增加 `PUT projects/:id`（若保留 settings 块则标注等价关系）、`POST projects/:id/run`、`POST queue/:id/retry|cancel`、`POST queue/clear`；`GET projects/:id/tasks` 合并写回状态 |
 | §7.3 校验契约（L305-L309） | 「保存时重跑同一校验」需要落到服务端 `create/update` 内部（当前只在面板点「验证」时执行），并明确失败不落库 |
 | §8.4 危险操作（L332-L343） | 「删除项目」补「先停止运行工单、取消队列条目」，与实现对齐；「更换仓库/分支」补「重建工作副本与 worktree」的明确步骤 |
@@ -246,15 +247,15 @@
 1. **先修正确性**：P0-1（重试）、P1-6（runOnStart）、P1-3（item 级 reconcile）——改动小、收益直接。
 2. **再修一致性**：P0-2（工作副本隔离）、P0-3（写回进入 `Effects`）。
 3. **再修边界**：P0-4（worktree）、P1-9（分层）——这两项会改变项目与执行器的契约，宜在面板大规模开发前完成。
-4. **最后补能力**：P1-7/P1-8（016、飞书）、P1-2/P1-4（队列约束与操作面）、P1-10（凭据）。
-5. 全程配套 P2-3 的测试补齐；文档侧按第 7 节逐章回写 013，避免方案与实现继续分叉。
+4. **最后补能力**：P1-7/P1-8（010、飞书）、P1-2/P1-4（队列约束与操作面）、P1-10（凭据）。
+5. 全程配套 P2-3 的测试补齐；文档侧按第 7 节逐章回写 009，避免方案与实现继续分叉。
 
 ## 9. 复核状态与剩余任务清单（2026-11-12）
 
 评审产出后经过数轮实施，全部 P0 与大部分 P1 已关闭，并以桌面版 DeepSeek Harness 的真实端到端
 实测为验收（仓库内 `verification/2026-11-11-wizard/README.md`，
 `WIZARD_LIVE_OK` / `DELETE_LIVE_OK`；离线重置脚本 `reset-state.ts` 处理旧版设置的不可迁移启动失败）。
-013 的结论性修订见其第 13 节「实施状态」。**本节是当前的权威剩余清单。**
+009 的结论性修订见其第 13 节「实施状态」。**本节是当前的权威剩余清单。**
 
 ### 9.1 已关闭（附证据）
 
@@ -270,7 +271,7 @@
 | P1-4 停用/删除闭环 | 队列操作面（retry/cancel/clear）+ `lastError/nextPollAt`；删除项目停止运行中工单、清理队列记录与写回副作用（实测无孤儿） |
 | P1-5 轮询互斥 | scan/tick 共用执行链；执行中推迟轮询与写回（b71137e）——串行 await 与超时项见 §9.2 |
 | P1-6 runOnStart | 判定改为 `startup ? !runOnStart : due > now` |
-| P1-7 016 标准格式 | `tasks` 表 + 固定枚举 + 行级错误码 + 模板；自定义映射为高级开关 |
+| P1-7 010 标准格式 | `tasks` 表 + 固定枚举 + 行级错误码 + 模板；自定义映射为高级开关 |
 | P1-8 飞书多文档 | `roots[]`/bitable/`spaceId` 全库唯一；飞书消息驱动；群 ID 从机器人已加入群中选择 |
 | P1-10 凭据注入（部分） | `gitAuthArgs` 按命令注入（SSH 临时密钥文件 / HTTPS extraHeader）；`src/secrets/` 加密存储 |
 | P2-1 超时（部分） | `commandTimeoutMs` 可配置 |
@@ -293,7 +294,16 @@
 8. **速率限制**（§6-4）：GitHub/GitLab fetch 与飞书 OpenAPI 的退避/令牌桶。
 9. **测试策略**（P2-3 剩余）：队列/调度补「真实 Engine + 临时 stateDir」集成用例；Windows 跳过项
    显式 `describe.skipIf` 与 issue 编号；`runtime.spec.ts` 拆分。
-10. **文档与发布**（P2-4 剩余）：005/009 标注过期；014 的 SCC 数据改为脚本口径；发布脚本与
-    「版本 ↔ schema ↔ 迁移」对照表（0.2.0 已起步）。
+10. **文档与发布**（P2-4 剩余）：发布脚本与「版本 ↔ schema ↔ 迁移」对照表（0.2.0 已起步）。
+    （005 重写、原 009 拆并、原 014/015 删除与本文编号重排已在 2026-11-12 文档清理中完成。）
 11. **日常备份**（§6-3）：SQLite WAL + `secrets/` 的定期备份与恢复到时间点定义（重置备份已实现）。
 12. **飞书群列表实测**：群 ID 下拉已完成面板级验证，需在装有真实飞书凭据的实例上点选确认。
+13. **原 014 的 C 级收敛项**（裁剪清单删除后并入此处）：
+    - C1 飞书读取原语下沉：`feishuToken`、`tableRows`、`checklistTasks` 等读取逻辑在
+      `feishu-doc.ts` 与 `feishu-wiki.ts` 间重叠，应下沉到 `feishu-doc.ts`，`feishu-wiki.ts`
+      只保留驱动与 `verify`；
+    - C2 `RepoPort` 收敛：`code-repos/sync.ts`、`work.ts`、`read.ts` 边界靠命名约定，
+      应定义统一的 probe / ensure / read 端口并删除跨文件重复的路径与远端解析；
+    - C8 `views/settings.ts` 拆分：聚合下发多类记录，应拆成 projects / credentials 视图。
+    （C3/C4 与第 3 项分层重构同源；C5/B6/A6 所指文件已删除或完成。`docs.spec.ts`
+    「测试表无重复行」检查已随本次文档清理落地。）

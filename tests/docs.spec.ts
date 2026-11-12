@@ -62,10 +62,13 @@ describe('文档', () => {
     const modules = listed('模块')
     expect(files('src').filter(path => !modules.includes(path))).toEqual([])
     expect(modules.filter(path => !existsSync(join(ROOT, path)))).toEqual([])
+    // 同一文件出现两次会让读者以为有两个职责；裸文件名继承目录时尤其容易发生。
+    expect(modules.filter((path, index) => modules.indexOf(path) !== index)).toEqual([])
   })
   it('在 007 架构的测试表中列出每个测试，且只列出存在的文件', () => {
     const tests = listed('测试')
     expect(files('tests').filter(path => /\.spec\.tsx?$/.test(path) && !tests.includes(path))).toEqual([])
     expect(tests.filter(path => !existsSync(join(ROOT, path)))).toEqual([])
+    expect(tests.filter((path, index) => tests.indexOf(path) !== index)).toEqual([])
   })
 })

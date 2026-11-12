@@ -14,7 +14,7 @@
 - `hookq reply --conversation <id> --to <message id> --key <key> --text <text>` 在一条消息下回复，每个 key 只回复一次。对话已删除时，它在标准错误上以 `{"error": {"code": 410, "message": "…"}}` 失败。
 - `hookq thread --conversation <id> --root <message id> --json`，带 `--after <cursor>` 读取后续页，打印线程的一页，最旧在前：`{"items": […], "next": "<cursor>"}`，最后一页没有 `next`。
 
-把该 kind 与适配器放在 `src/sources/webhook.ts` 中，参照 `src/sources/gitlab.ts`。如果来源变大，像飞书来源那样把转换、渠道和轮询代码拆到独立模块。适配器在 `src/sources/adapters.ts` 的内置清单中登记，不需要单独的插件入口。
+把该 kind 与适配器放在 `src/sources/webhook.ts` 中，参照 `src/sources/feishu.ts`（`github.ts` 与 `gitlab.ts` 只是代码仓库类型描述，不是消息来源）。如果来源变大，像飞书来源那样把转换、渠道和轮询代码拆到独立模块。适配器在 `src/sources/adapters.ts` 的内置清单中登记，不需要单独的插件入口。
 
 ### 1. 把事件映射到领域
 
@@ -78,6 +78,20 @@ export const webhookKind: SourceKind<WebhookConfig> = {
 - `fields` 无需自定义面板代码即可生成来源设置表单。`rows` 字段编辑以其第一列为键的条目；`advanced` 隐藏较少用的设置。如果来源能把 id 解析为显示名称，请实现 `refreshLabels`。把这些名称保存在 `KV.sources.labels(记录 ID)` 下。带 `choose` 和 `refresh` 的列随后可以提供它们。
 - 可选的 `facts(deployment)` 显示安装派生的值，例如某个 CLI 背后的账号。安装按每种类型的 `SETUP_FIELDS` 检查记录，本示例不提供事实。
 - `health` 声明来源的健康条目，初始为 `starting`。注册会按记录认领每个名称（第一项就是记录 ID，其余为 `<记录 ID>:<名称>`），并拒绝与 `runtime`、`reply`、`worker` 或副作用 kind 等条目冲突。使用该 kind 的名称，并把 `sync:<id>` 留给策略同步。`error` 会让状态脚本以 2 退出，并让每小时检查通知操作者，因此只在可能需要人处理时才报告它。
+
+**记录 ID 即来源身份。** 它出现在所有持久化位置，因此创建后不可更改：
+
+| 位置 | 规则 |
+| --- | --- |
+| `trigger.source`、`channel.source` | 记录 ID |
+| `policy.sources` 键 | 记录 ID |
+| 线程键 | `<记录ID>:<类型内后缀>`，例如 `feishu-1:oc_xxx:om_yyy` |
+| 触发器去重 ID | `key('<记录ID>-<本地种类>', …)`，天然按记录隔离 |
+| KV 键 | `<族名>:<记录ID>:<其余部分>`，按记录独立游标 |
+| 健康项 | 首个声明名使用 `<记录ID>`，其余 `<记录ID>:<名称>` |
+| 环境变量 | `DSH_SUPERAGENT_SOURCE` 为记录 ID；记录自己的变量沿用适配器声明的名称，工单只注入其来源记录的变量 |
+
+所有身份拼接集中在 `src/sources/identity.ts`（`threadKey`、`triggerKey`、`kvKey`、`healthNames`），禁止在适配器里散落字符串拼接。
 
 ### 3. 把消息转换为触发器
 
@@ -333,9 +347,10 @@ export async function pollQueue(ctx: SourceContext, signal: AbortSignal): Promis
 在 `src/sources/adapters.ts` 的内置清单中加入适配器：
 
 ```ts
+import { feishuAdapter } from './feishu.ts'
 import { webhookAdapter } from './webhook.ts'
 
-export const ADAPTERS: readonly SourceAdapter[] = [githubAdapter, gitlabAdapter, erased(feishuAdapter), erased(webhookAdapter)]
+export const ADAPTERS: readonly SourceAdapter[] = [feishuAdapter, webhookAdapter]
 ```
 
 主插件在启动后为每条已存储的来源记录运行其适配器。没有 `tsdown` 入口、没有 `package.json` 子路径导出、没有 `cordis.patch.yml` 条目，也没有 profile 开关。构建并重启后，在面板的 **来源 → 新增来源** 中选择该类型创建记录；记录会出现在来源设置中，以及 **评估 → 各来源** 下。

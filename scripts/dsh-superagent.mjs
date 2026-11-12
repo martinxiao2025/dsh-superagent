@@ -10,7 +10,8 @@
  * 它们通过 PATH 解析。
  */
 import { spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { request } from 'node:http'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -308,8 +309,189 @@ async function reset(options) {
 /** 日志文件名的本地时间戳，格式为 `YYYYMMDD-HHMMSS`。 */
 function localStamp() {
   const now = new Date()
-  const pad = value => String(value).padStart(2, '0')
+  const pad = value => String(Math.trunc(Math.abs(value))).padStart(2, '0')
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+}
+
+// ── 卸载清理 ────────────────────────────────────────────────────────────────
+// 插件在 DSH 一侧的足迹：profile 的 cordis.patch.yml 条目、package.json 的
+// bundles/dependencies、node_modules 里的 dsh-superagent（link 安装是目录连接，
+// tgz 安装是真实目录）、状态目录与其同级锁目录、以及本仓库 .artifacts 里的
+// 日志和控制文件。桌面版实例持有状态锁：编辑 patch 会触发重组卸载，锁随之释放。
+
+/** profile patch 里属于本插件的所有条目 id（worker/router 预设通常随包自带，但求稳）。 */
+const PLUGIN_IDS = ['dsh-superagent', 'dsh-superagent-worker-preset', 'dsh-superagent-router-preset']
+
+/** 列出 `dshHome` 下引用了本插件的 profile 名。 */
+function profilesWithPlugin(dshHome) {
+  const root = join(dshHome, 'profiles')
+  let names = []
+  try { names = readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name) } catch { return [] }
+  return names.filter(name => {
+    try { return readFileSync(join(root, name, 'cordis.patch.yml'), 'utf8').split(/\r?\n/).some(line => PLUGIN_IDS.some(id => line === `- id: ${id}`)) }
+    catch { return false }
+  })
+}
+
+/**
+ * 从 patch 文本中移除插件的顶层条目块。每个块从 `- id: …` 行持续到下一个
+ * 顶层 `- ` 行或文件尾；返回剩余文本与被移除的块（供解析 `stateDir` 与还原）。
+ */
+function withoutPluginBlocks(text) {
+  const lines = text.split(/\r?\n/)
+  const kept = []
+  const blocks = []
+  let index = 0
+  while (index < lines.length) {
+    const hit = /^- id: (dsh-superagent(?:-worker-preset|-router-preset)?)\s*$/.exec(lines[index])
+    if (hit) {
+      const block = [lines[index]]
+      while (++index < lines.length && !/^- /.test(lines[index])) block.push(lines[index])
+      blocks.push({ id: hit[1], lines: block })
+    } else kept.push(lines[index++])
+  }
+  return { text: kept.join('\n'), blocks }
+}
+
+/** 从插件的 patch 块中读取 `stateDir:` 配置值（去除可能的首尾引号）。 */
+function stateDirOf(blocks) {
+  for (const line of blocks.find(block => block.id === 'dsh-superagent')?.lines ?? []) {
+    const match = /^\s+stateDir:\s*(.+?)\s*$/.exec(line)
+    if (match) return match[1].replace(/^["']|["']$/g, '')
+  }
+  return undefined
+}
+
+/** 从 profile package.json 文本中移除本插件的 bundles 与 dependencies 引用；无变化返回 undefined。 */
+function withoutPackageEntries(text) {
+  const value = JSON.parse(text)
+  let changed = false
+  const bundles = value?.dsh?.profile?.bundles
+  if (Array.isArray(bundles)) {
+    const next = bundles.filter(name => name !== 'dsh-superagent')
+    if (next.length !== bundles.length) { value.dsh.profile.bundles = next; changed = true }
+  }
+  if (value?.dependencies && Object.prototype.hasOwnProperty.call(value.dependencies, 'dsh-superagent')) {
+    delete value.dependencies['dsh-superagent']
+    if (!Object.keys(value.dependencies).length) delete value.dependencies
+    changed = true
+  }
+  return changed ? JSON.stringify(value, null, 2) + '\n' : undefined
+}
+
+/** 从 pnpm-lock.yaml 文本中移除本插件的 importer 依赖条目；形状不匹配时返回 undefined（保留原文件）。 */
+function withoutLockfileEntry(text) {
+  const lines = text.split(/\r?\n/)
+  const kept = []
+  let removed = false
+  for (let index = 0; index < lines.length; index++) {
+    if (/^\s+dsh-superagent:\s*$/.test(lines[index] ?? '') && /^\s+specifier:\s*link:/.test(lines[index + 1] ?? '')
+      && /^\s+version:\s*link:/.test(lines[index + 2] ?? '')) { index += 2; removed = true; continue }
+    kept.push(lines[index])
+  }
+  return removed ? kept.join('\n') : undefined
+}
+
+/**
+ * 返回 `stateDir` 的锁是否被活着的实例持有。proper-lockfile 的锁是同级 `.lock`
+ * 目录，进程退出即删除；`startup.json` 的 pid 已死且锁目录超过 30 秒未刷新时，
+ * 视为崩溃残留的过期锁。
+ */
+function lockHeld(stateDir) {
+  const lock = stateDir + '.lock'
+  if (!existsSync(lock)) return false
+  try {
+    const startup = JSON.parse(readFileSync(join(stateDir, 'startup.json'), 'utf8'))
+    if (Number.isInteger(startup?.pid) && !alive(startup.pid) && Date.now() - statSync(lock).mtimeMs > 30_000) return false
+  } catch { /* 锁存在但没有可解读的 startup.json 时按持有处理 */ }
+  return true
+}
+
+/**
+ * 卸载清理：从 DSH profile 移除插件引用并删除其状态与本仓库工件。
+ * 备份到 `~/dsh-superagent-backup/clean-<stamp>/`（`--no-backup` 跳过）。
+ * 桌面版宿主监视 profile 配置（实测 0.2.2-rc.1 有 30–90 秒延迟）：外部实例持有状态锁时，
+ * 先改 patch 触发重组卸载并等待锁释放（默认 240 秒）；超时则还原 patch 并中止，不动任何状态。
+ */
+async function clean(options) {
+  if (!options.yes) throw new Error('clean removes dsh-superagent from the DSH profile and deletes its state after a backup; pass --yes to confirm.')
+  const dshHome = options.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+  const profileDir = join(dshHome, 'profiles', options.profile)
+  const patchFile = join(profileDir, 'cordis.patch.yml')
+  const packageFile = join(profileDir, 'package.json')
+  const lockFile = join(profileDir, 'pnpm-lock.yaml')
+  const moduleDir = join(profileDir, 'node_modules', 'dsh-superagent')
+  const patchText = existsSync(patchFile) ? readFileSync(patchFile, 'utf8') : ''
+  const { text: nextPatch, blocks } = withoutPluginBlocks(patchText)
+  const stateDir = options.stateDir || stateDirOf(blocks) || join(dshHome, 'state', 'superagent')
+  const stateLock = stateDir + '.lock'
+  const removed = []
+  const manual = [
+    'hourly-check prompt in your daily DSH profile (see docs/006-deployment.md)',
+    'CLI wrappers and their config: ~/.local/bin/gh-agent, ~/.config/gh-agent, ~/.local/bin/lark-bot, ~/.lark-cli-dsh-superagent',
+    'old backups under ~/dsh-superagent-backup/ and the pnpm store (pnpm store prune)',
+  ]
+  if (!blocks.length && !existsSync(moduleDir) && !existsSync(stateDir)) {
+    console.log(`No dsh-superagent found in DSH profile ${options.profile}; nothing to clean.`)
+    return 0
+  }
+  // 本脚本托管的服务先优雅停止；没有 ps（例如只有桌面版）时跳过该检查。
+  try { if (processes(options.profile).length) await stop(options, false) }
+  catch (error) { if (!/ps must be on PATH/.test(String(error instanceof Error ? error.message : error))) throw error }
+  const backupRoot = join(homedir(), 'dsh-superagent-backup', 'clean-' + localStamp())
+  const backUpFile = (file, name) => { mkdirSync(join(backupRoot, 'profile'), { recursive: true }); cpSync(file, join(backupRoot, 'profile', name)) }
+  if (options.backup) {
+    mkdirSync(backupRoot, { recursive: true })
+    if (existsSync(stateDir)) cpSync(stateDir, join(backupRoot, 'state'), { recursive: true })
+    if (existsSync(patchFile)) backUpFile(patchFile, 'cordis.patch.yml')
+    if (existsSync(packageFile)) backUpFile(packageFile, 'package.json')
+    if (existsSync(lockFile)) backUpFile(lockFile, 'pnpm-lock.yaml')
+  }
+  // 外部实例（桌面版）持有状态锁：先做 patch 手术触发重组卸载，锁释放前不删任何状态。
+  const externallyHeld = lockHeld(stateDir)
+  if (blocks.length) {
+    writeFileSync(patchFile, nextPatch)
+    removed.push(`${patchFile} (${blocks.map(block => block.id).join(', ')} removed)`)
+  }
+  if (externallyHeld) {
+    console.log(`The state lock is held by a running dsh-superagent (stateDir ${stateDir}); the desktop host notices profile edits with a delay — waiting up to ${options.lockWait} s for the unload…`)
+    const deadline = Date.now() + options.lockWait * 1000
+    while (lockHeld(stateDir)) {
+      if (Date.now() >= deadline) {
+        if (blocks.length) writeFileSync(patchFile, patchText)  // 还原 patch，不留半卸载状态
+        throw new Error(`The state lock was not released within ${options.lockWait} s. Close DeepSeek Harness, or run 'dsh plugin --profile ${options.profile} remove dsh-superagent' first, then run clean again; the profile patch was restored.`)
+      }
+      await sleep(500)
+    }
+  }
+  const nextPackage = existsSync(packageFile) ? withoutPackageEntries(readFileSync(packageFile, 'utf8')) : undefined
+  if (nextPackage) { writeFileSync(packageFile, nextPackage); removed.push(`${packageFile} (bundles/dependencies entry removed)`) }
+  if (existsSync(moduleDir)) {
+    // link 安装是目录连接（lstat 视为符号链接）：只删链接本身；tgz 安装是真实目录才递归删。
+    if (lstatSync(moduleDir).isSymbolicLink()) rmSync(moduleDir, { force: true })
+    else rmSync(moduleDir, { recursive: true, force: true })
+    removed.push(`${moduleDir} (link removed)`)
+  }
+  if (existsSync(lockFile)) {
+    const nextLock = withoutLockfileEntry(readFileSync(lockFile, 'utf8'))
+    if (nextLock) { writeFileSync(lockFile, nextLock); removed.push(`${lockFile} (importer entry removed)`) }
+    else manual.unshift(`run pnpm install in ${profileDir} to prune the dsh-superagent entry from pnpm-lock.yaml`)
+  }
+  const stateEntries = existsSync(stateDir) ? readdirSync(stateDir) : []
+  if (stateEntries.length) {
+    rmSync(stateDir, { recursive: true, force: true })
+    removed.push(`${stateDir} (${stateEntries.length} entries: ${stateEntries.join(', ')})`)
+  }
+  if (existsSync(stateLock)) { rmSync(stateLock, { recursive: true, force: true }); removed.push(`${stateLock} (stale lock)`) }
+  const controlDir = join(CONTROL, 'profiles', options.profile)
+  if (existsSync(controlDir)) { rmSync(controlDir, { recursive: true, force: true }); removed.push(`${controlDir}`) }
+  const logPattern = new RegExp('^' + `dsh-superagent-${options.profile}-`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\d{8}-\\d{6}-\\d+\\.log$')
+  const logs = existsSync(ARTIFACTS) ? readdirSync(ARTIFACTS).filter(file => logPattern.test(file)) : []
+  for (const file of logs) rmSync(join(ARTIFACTS, file), { force: true })
+  if (logs.length) removed.push(`${logs.length} service log(s) under ${ARTIFACTS}`)
+  console.log(JSON.stringify({ profile: options.profile, dshHome, stateDir, backup: options.backup ? backupRoot : null, removed, manual }, null, 2))
+  console.log('Note: DSH sessions that still reference the dsh-superagent-worker/router presets will fail to restore with agent-preset/not-found.')
+  return 0
 }
 
 /**
@@ -341,25 +523,33 @@ function parse(argv) {
     profile: process.env.DSH_SUPERAGENT_PROFILE || 'superagent',
     url: process.env.DSH_SUPERAGENT_URL || 'http://127.0.0.1:3082',
     timeout: 60, stopTimeout: 300, respectStop: false, yes: false,
+    dshHome: '', stateDir: '', backup: true, lockWait: 240, profileExplicit: false,
   }
-  const fail = message => { console.error(message); console.error('usage: dsh-superagent {start,stop,restart,status,reset} [--profile NAME] [--url URL] [--yes]'); process.exit(2) }
-  const actions = ['start', 'stop', 'restart', 'status', 'reset']
+  const usage = 'usage: dsh-superagent {start,stop,restart,status,reset,clean} [--profile NAME] [--url URL] [--yes]\n'
+    + '       dsh-superagent clean [--dsh-home DIR] [--state-dir DIR] [--no-backup] [--lock-wait SECONDS] --yes'
+  const fail = message => { console.error(message); console.error(usage); process.exit(2) }
+  const actions = ['start', 'stop', 'restart', 'status', 'reset', 'clean']
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index]
     const value = name => argument.startsWith(name + '=') ? argument.slice(name.length + 1) : argv[++index]
     if (argument === '--respect-stop') options.respectStop = true
     else if (argument === '--yes' || argument === '-y') options.yes = true
-    else if (argument === '--profile' || argument.startsWith('--profile=')) options.profile = value('--profile')
+    else if (argument === '--no-backup') options.backup = false
+    else if (argument === '--profile' || argument.startsWith('--profile=')) { options.profile = value('--profile'); options.profileExplicit = true }
     else if (argument === '--url' || argument.startsWith('--url=')) options.url = value('--url')
+    else if (argument === '--dsh-home' || argument.startsWith('--dsh-home=')) options.dshHome = value('--dsh-home')
+    else if (argument === '--state-dir' || argument.startsWith('--state-dir=')) options.stateDir = value('--state-dir')
+    else if (argument === '--lock-wait' || argument.startsWith('--lock-wait=')) options.lockWait = Number(value('--lock-wait'))
     else if (argument === '--timeout' || argument.startsWith('--timeout=')) options.timeout = Number(value('--timeout'))
     else if (argument === '--stop-timeout' || argument.startsWith('--stop-timeout=')) options.stopTimeout = Number(value('--stop-timeout'))
-    else if (argument === '--help' || argument === '-h') { console.log('usage: dsh-superagent {start,stop,restart,status,reset} [--profile NAME] [--url URL] [--yes]'); process.exit(0) }
+    else if (argument === '--help' || argument === '-h') { console.log(usage); process.exit(0) }
     else if (argument.startsWith('-')) fail(`unrecognized arguments: ${argument}`)
     else if (!options.action && actions.includes(argument)) options.action = argument
     else fail(`unrecognized arguments: ${argument}`)
   }
   if (!options.action) fail('the following arguments are required: action')
   if (!(options.timeout > 0) || !(options.stopTimeout > 0)) fail('--timeout and --stop-timeout must be positive')
+  if (!(options.lockWait > 0)) fail('--lock-wait must be positive')
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(options.profile)) fail('--profile must be a DSH profile name')
   return options
 }
@@ -367,6 +557,13 @@ function parse(argv) {
 async function main() {
   const options = parse(process.argv.slice(2))
   process.umask(0o077)
+  // clean 可能自动检测 profile；控制锁与工件目录必须按最终 profile 命名。
+  if (options.action === 'clean' && !options.profileExplicit) {
+    const dshHome = options.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')
+    const detected = profilesWithPlugin(dshHome)
+    if (detected.length === 1) { options.profile = detected[0]; console.log(`Found dsh-superagent in DSH profile: ${options.profile}`) }
+    else if (detected.length > 1) throw new Error(`dsh-superagent is installed in several profiles (${detected.join(', ')}); pass --profile to choose one.`)
+  }
   const lock = acquire(options.profile)
   try {
     if (options.respectStop && (options.action === 'start' || options.action === 'restart') && stopped(options.profile)) {
@@ -375,6 +572,7 @@ async function main() {
     }
     if (options.action === 'status') return await status(options)
     if (options.action === 'reset') return await reset(options)
+    if (options.action === 'clean') return await clean(options)
     if (options.action === 'stop' || options.action === 'restart') {
       // 只有停止会让自动恢复保持关闭；停止超时的重启会使其保持开启。
       await stop(options, options.action === 'stop')

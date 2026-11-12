@@ -311,7 +311,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：按 `spaceId` 唯一归属与根节点集合读取，目录递归、多文档与多维表格都转成任务；首批只读 |
 | `src/task-sources/feishu-api.ts` | 飞书知识库读取接口：节点、目录、docx 正文、多维表格与记录；应用身份走 HTTP，CLI 身份走 `lark api` |
 | `src/task-sources/feishu-wiki-read.ts` | 知识库遍历：根节点顺序 → 目录顺序 → 表出现顺序，稳定键、跳过类型、单文档隔离与严格编号冲突 |
-| `src/task-sources/excel-format.ts` | 016 标准任务格式：`tasks` 表头契约、状态与优先级枚举、行级校验、版本门禁与完成/失败状态映射 |
+| `src/task-sources/excel-format.ts` | 010 标准任务格式：`tasks` 表头契约、状态与优先级枚举、行级校验、版本门禁与完成/失败状态映射 |
 | `src/task-sources/excel-template.ts` | 标准工作簿模板生成：`tasks` 表头 + `_meta`（版本与示例），面板下载入口 |
 | `src/secrets/vault.ts` | 凭据加密存储与掩码：AES-256-GCM、按区域（Git / 飞书）分目录、指纹与 `••••` 末四位提示 |
 | `src/secrets/check.ts` | 凭据预检结果 `CredentialCheck` 与构造函数，供两个凭据页共用 |
@@ -320,7 +320,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/feishu-credentials/kind.ts`、`service.ts`、`probe.ts` | 飞书凭据：独立记录、独立路由与身份校验；应用密钥只进加密存储，任务来源只存引用 |
 | `src/task-sources/table.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
 | `src/task-sources/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解与稳定键 |
-| `src/task-sources/writeback.ts` | 任务结果回写：仅更新 CSV/TSV 匹配行；`.xlsx` 与飞书明确报未支持 |
+| `src/task-sources/writeback.ts` | 任务结果回写：更新 CSV/TSV 匹配行与 `.xlsx` 状态列（保留样式与 BOM/CRLF）；飞书文档明确报未支持 |
 | `src/task-sources/feishu-doc.ts` | 飞书知识库任务源：节点解析、文档纯文本读取、Markdown 表格与复选框还原 |
 | `src/admission.ts` | 准入表的取值、每个单元格的选项和默认值，与面板共享 |
 | `src/limits.ts` | 人设置的值的限制，由设置架构检查，并由面板字段提供 |
@@ -473,7 +473,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |
 | `tests/feishu-wiki.spec.ts` | 飞书知识库遍历：根节点顺序与目录递归、多文档与多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突 |
-| `tests/excel-format.spec.ts` | 016 标准格式：表头与枚举校验、版本门禁、完成/失败状态映射与模板往返读取 |
+| `tests/excel-format.spec.ts` | 010 标准格式：表头与枚举校验、版本门禁、完成/失败状态映射与模板往返读取 |
 | `tests/writeback.spec.ts` | 任务回写：CSV/TSV 的 BOM、CRLF 与末行换行保留，TSV 分隔与按标题定位，xlsx 状态写入后仍可读取，未知任务/缺列/未知扩展名的错误分支 |
 | `tests/vault.spec.ts` | 凭据加密存储：往返、掩码与指纹、缺失密钥、不可解密与临时材料 |
 | `tests/git-credentials.spec.ts`、`tests/feishu-credentials.spec.ts` | Git 与飞书凭据：独立增删改查、材料替换、引用保护与探测失败分类 |

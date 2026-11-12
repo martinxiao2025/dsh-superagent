@@ -1,0 +1,97 @@
+{
+  "outcome": "completed",
+  "profile": "desktop",
+  "dshHome": "C:\\Users\\xiaodian\\.dsh",
+  "steps": [
+    {
+      "at": "2026-11-12T03:17:32.089Z",
+      "step": "precheck",
+      "detail": {
+        "port": 64503,
+        "profile": "desktop",
+        "dshHome": "C:\\Users\\xiaodian\\.dsh",
+        "stateDir": "C:\\Users\\xiaodian\\.dsh\\state\\superagent",
+        "before": {
+          "patch": "# Your patch layer for this dsh profile, applied after every bundle layer:\n# a top-level YAML array of loader patch entries (id-targeted config\n# overrides, disables, and insert lists; `!!js` expressions allowed).\n- id: ui-settings-general\n  name: \"@deepseek-ai/dsh-client-ui-settings-general\"\n  config:\n    welcomeNoticeVersion: 2026-08-13.1\n- id: ui-theme\n  name: \"@deepseek-ai/dsh-client-ui-theme\"\n  config:\n    preference: light\n- id: permission\n  name: \"@deepseek-ai/dsh-permission-presets\"\n  config:\n    presets:\n      read-only:\n        sandbox: read-only\n        approval: ask\n      workspace-write:\n        sandbox: workspace-write\n        approval: ask\n      danger-full-access:\n        sandbox: danger-full-access\n        approval: never\n    defaultPreset: danger-full-access\n- id: ui-chat\n  name: \"@deepseek-ai/dsh-client-ui-chat\"\n  config:\n    transcriptView: standard\n    performanceUsage: detailed\n- id: ui-settings\n  name: \"@deepseek-ai/dsh-client-ui-settings\"\n  config:\n    enabled: true\n- id: ui-settings-account\n  name: \"@deepseek-ai/dsh-client-ui-settings-account\"\n  config:\n    version: 1\n    step: done\n    usage: detailed\n    developerTools: true\n    purpose: null\n    process: standard\n    completion: api-key\n- id: agent-default-model\n  name: \"@deepseek-ai/dsh-agent-default-model\"\n  config:\n    provider: zai-coding-cn\n    model: glm-5.3-flash\n- id: llm-pi-ai\n  name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers:\n      zai-coding-cn:\n        apiKeyEnv: ZAI_CODING_CN_API_KEY\n        models:\n          - id: glm-5.3\n            name: GLM-5.3\n          - id: glm-5.3-flash\n            name: GLM-5.3-Flash\n          - id: glm-4.6v\n            name: GLM-4.6V\n            contextWindow: 128000\n            maxTokens: 32768\n            input:\n              - text\n              - image\n- id: dsh-superagent\n  config:\n    stateDir: C:\\Users\\xiaodian\\.dsh\\state\\superagent\n\r\n",
+          "packageJson": "{\n  \"name\": \"dsh-profile-desktop\",\n  \"private\": true,\n  \"dsh\": {\n    \"profile\": {\n      \"bundles\": [\n        \"@deepseek-ai/dsh-base\",\n        \"@deepseek-ai/dsh-web-app\",\n        \"@deepseek-ai/dsh-experimental-agent-team-profile\",\n        \"@deepseek-ai/dsh-experimental-auto-review\",\n        \"@deepseek-ai/dsh-experimental-inspector-profile\",\n        \"dsh-superagent\"\n      ]\n    }\n  },\n  \"dependencies\": {\n    \"dsh-superagent\": \"link:E:/TG_WorkSpace/dsh-superagent\"\n  }\n}\n",
+          "moduleLink": true,
+          "stateEntries": [
+            "orchestrator.sqlite",
+            "orchestrator.sqlite-shm",
+            "orchestrator.sqlite-wal",
+            "startup.json",
+            "startup.prev.json",
+            "worker-bin",
+            "worker-dispatch.mjs",
+            "worker-gitconfig",
+            "worker-sources.json"
+          ],
+          "lock": true
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T03:17:33.633Z",
+      "step": "app",
+      "detail": {
+        "exe": "D:\\SoftWare\\DeepSeek Harness\\DeepSeek Harness.exe"
+      }
+    },
+    {
+      "at": "2026-11-12T03:17:37.015Z",
+      "step": "app stopped"
+    },
+    {
+      "at": "2026-11-12T03:18:03.221Z",
+      "step": "clean",
+      "detail": {
+        "code": 0,
+        "stdout": "The state lock is held by a running dsh-superagent (stateDir C:\\Users\\xiaodian\\.dsh\\state\\superagent); the desktop host notices profile edits with a delay — waiting up to 240 s for the unload…\n{\n  \"profile\": \"desktop\",\n  \"dshHome\": \"C:\\\\Users\\\\xiaodian\\\\.dsh\",\n  \"stateDir\": \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\state\\\\superagent\",\n  \"backup\": \"C:\\\\Users\\\\xiaodian\\\\dsh-superagent-backup\\\\clean-20261112-111737\",\n  \"removed\": [\n    \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\profiles\\\\desktop\\\\cordis.patch.yml (dsh-superagent removed)\",\n    \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\profiles\\\\desktop\\\\package.json (bundles/dependencies entry removed)\",\n    \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\profiles\\\\desktop\\\\node_modules\\\\dsh-superagent (link removed)\",\n    \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\profiles\\\\desktop\\\\pnpm-lock.yaml (importer entry removed)\",\n    \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\state\\\\superagent (9 entries: orchestrator.sqlite, orchestrator.sqlite-shm, orchestrator.sqlite-wal, startup.json, startup.prev.json, worker-bin, worker-dispatch.mjs, worker-gitconfig, worker-sources.json)\",\n    \"C:\\\\Users\\\\xiaodian\\\\.dsh\\\\state\\\\superagent.lock (stale lock)\",\n    \"E:\\\\TG_WorkSpace\\\\dsh-superagent\\\\.artifacts\\\\control\\\\profiles\\\\desktop\"\n  ],\n  \"manual\": [\n    \"hourly-check prompt in your daily DSH profile (see docs/006-deployment.md)\",\n    \"CLI wrappers and their config: ~/.local/bin/gh-agent, ~/.config/gh-agent, ~/.local/bin/lark-bot, ~/.lark-cli-dsh-superagent\",\n    \"old backups under ~/dsh-superagent-backup/ and the pnpm store (pnpm store prune)\"\n  ]\n}\nNote: DSH sessions that still reference the dsh-superagent-worker/router presets will fail to restore with agent-preset/not-found.\n",
+        "stderr": ""
+      }
+    },
+    {
+      "at": "2026-11-12T03:18:03.222Z",
+      "step": "cleaned",
+      "detail": {
+        "backup": "C:\\Users\\xiaodian\\dsh-superagent-backup\\clean-20261112-111737",
+        "afterPatch": "# Your patch layer for this dsh profile, applied after every bundle layer:\n# a top-level YAML array of loader patch entries (id-targeted config\n# overrides, disables, and insert lists; `!!js` expressions allowed).\n- id: ui-settings-general\n  name: \"@deepseek-ai/dsh-client-ui-settings-general\"\n  config:\n    welcomeNoticeVersion: 2026-08-13.1\n- id: ui-theme\n  name: \"@deepseek-ai/dsh-client-ui-theme\"\n  config:\n    preference: light\n- id: permission\n  name: \"@deepseek-ai/dsh-permission-presets\"\n  config:\n    presets:\n      read-only:\n        sandbox: read-only\n        approval: ask\n      workspace-write:\n        sandbox: workspace-write\n        approval: ask\n      danger-full-access:\n        sandbox: danger-full-access\n        approval: never\n    defaultPreset: danger-full-access\n- id: ui-chat\n  name: \"@deepseek-ai/dsh-client-ui-chat\"\n  config:\n    transcriptView: standard\n    performanceUsage: detailed\n- id: ui-settings\n  name: \"@deepseek-ai/dsh-client-ui-settings\"\n  config:\n    enabled: true\n- id: ui-settings-account\n  name: \"@deepseek-ai/dsh-client-ui-settings-account\"\n  config:\n    version: 1\n    step: done\n    usage: detailed\n    developerTools: true\n    purpose: null\n    process: standard\n    completion: api-key\n- id: agent-default-model\n  name: \"@deepseek-ai/dsh-agent-default-model\"\n  config:\n    provider: zai-coding-cn\n    model: glm-5.3-flash\n- id: llm-pi-ai\n  name: \"@deepseek-ai/dsh-llm-pi-ai\"\n  config:\n    providers:\n      zai-coding-cn:\n        apiKeyEnv: ZAI_CODING_CN_API_KEY\n        models:\n          - id: glm-5.3\n            name: GLM-5.3\n          - id: glm-5.3-flash\n            name: GLM-5.3-Flash\n          - id: glm-4.6v\n            name: GLM-4.6V\n            contextWindow: 128000\n            maxTokens: 32768\n            input:\n              - text\n              - image",
+        "afterPackage": "{\n  \"name\": \"dsh-profile-desktop\",\n  \"private\": true,\n  \"dsh\": {\n    \"profile\": {\n      \"bundles\": [\n        \"@deepseek-ai/dsh-base\",\n        \"@deepseek-ai/dsh-web-app\",\n        \"@deepseek-ai/dsh-experimental-agent-team-profile\",\n        \"@deepseek-ai/dsh-experimental-auto-review\",\n        \"@deepseek-ai/dsh-experimental-inspector-profile\"\n      ]\n    }\n  }\n}\n"
+      }
+    },
+    {
+      "at": "2026-11-12T03:18:03.227Z",
+      "step": "restored",
+      "detail": {
+        "restored": [
+          "node_modules/dsh-superagent (junction recreated)",
+          "package.json",
+          "pnpm-lock.yaml",
+          "cordis.patch.yml"
+        ]
+      }
+    },
+    {
+      "at": "2026-11-12T03:18:04.060Z",
+      "step": "reinstalled",
+      "detail": {
+        "cli": "D:\\SoftWare\\DeepSeek Harness\\resources\\runtime\\cli\\bin\\dsh.cmd",
+        "status": 0,
+        "stdout": "✓ Lockfile passes supply-chain policies (verified 1m ago)\nAlready up to date\n\n[WARN] The package dsh-superagent, which you have just pnpm linked, has the following peerDependencies specified in its package.json:\n\n  - @deepseek-ai/cordis@4.0.5-alpha.1,   - @deepseek-ai/dsh-agent@^0.2.1-alpha.2,   - @deepseek-ai/dsh-api-session-controller@^0.2.1-alpha.2,   - @deepseek-ai/dsh-client-locale@^0.2.1-alpha.2,   - @deepseek-ai/dsh-client-ui-renderer@^0.2.1-alpha.2,   - @deepseek-ai/dsh-client-ui-settings@^0.2.1-alpha.2,   - @deepseek-ai/dsh-client-ui-layout@^0.2.1-alpha.2,   - @deepseek-ai/dsh-client-ui-sidebar@^0.2.1-alpha.2,   - @deepseek-ai/dsh-client-ui-workspace@^0.2.1-alpha.2,   - @deepseek-ai/dsh-host-webserver@^0.2.1-alpha.2,   - @deepseek-ai/dsh-llm@^0.2.1-alpha.2,   - @deepseek-ai/dsh-pe",
+        "stderr": ""
+      }
+    },
+    {
+      "at": "2026-11-12T03:18:05.231Z",
+      "step": "app restarted"
+    },
+    {
+      "at": "2026-11-12T03:18:09.264Z",
+      "step": "reloaded",
+      "detail": {
+        "port": 52002,
+        "masterId": "orchestrator-8e214b7a1b57e85ba96a43aa62f8dd47"
+      }
+    }
+  ]
+}

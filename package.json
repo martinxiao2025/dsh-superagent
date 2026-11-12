@@ -46,7 +46,8 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "dev": "node scripts/dev-web.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
