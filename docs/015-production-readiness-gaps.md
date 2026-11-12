@@ -18,6 +18,23 @@
 - P1-4：`queue_unique_active` 唯一索引落在 SQLite（[store.ts](../src/app/store.ts#L46-L85)）。
 - P1-5：队列快照与项目详情提供 `lastError` / `nextPollAt`，面板显示「下次轮询」与最近错误。
 
+### 0.2 复核状态（2026-11-12）
+
+以下条目在 011/012 两轮实施后关闭或部分关闭；权威剩余清单见 `017-architecture-review.md` 第 9 节。
+
+- P0-2：统一 `redact()` 落在 [infra/text.ts](../src/infra/text.ts)，命令层错误出口（`commandError`）统一调用；覆盖 URL 内嵌凭据、Authorization、Bearer、`token=` 与私钥块。
+- P0-3：`src/secrets/` 已建（加密存储、掩码回显、指纹、轮换），Git/飞书凭据走独立表与探测。
+- P0-4：queue 按完整 schema、ticket/thread/decision 按关键字段形状校验，损坏记录明确报错（[store.ts](../src/app/store.ts)）；迁移链已删除（41319e0）。
+- P1-1：写回进入持久化 `Effects`（退避重试、幂等键、健康度），项目删除时取消未投递的写回。
+- P1-2：写回幂等键 `key('writeback', entry.id, status, attempt)`；保留 BOM/CRLF 的写入避免无关 diff。
+- P1-6：执行目录物化为 per-ticket `git worktree`（[workspace.ts](../src/code-repos/workspace.ts)），轮询副本跟随项目分支。
+- P1-7：崩溃恢复覆盖队列条目重建；终态按保留窗口 prune，工作区按保留期 GC。
+- P2-1：Git/飞书凭据探测真实运行（[probe.ts](../src/git-credentials/probe.ts)），错误可区分；仓库/知识库 verify 真实读取并返回条数。
+- P2-2：知识库按 `spaceId` 全库唯一归属（e81f79e）。
+- P2-3：加密存储落地；Windows ACL/DPAPI 细节仍待收尾（见 017 §9）。
+- P2-5：`lastError`/`nextPollAt` 进快照与详情；结构化日志与指标仍缺（见 017 §9）。
+- P2-7：013 增补实施状态附录、CHANGELOG 与 0.2.0 版本；005/009 的页签描述仍待标注过期。
+
 ## 1. P0：上线前必须解决
 
 | # | 问题 | 证据 | 影响 | 建议动作 | 验收 |

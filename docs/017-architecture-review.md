@@ -248,3 +248,52 @@
 3. **再修边界**：P0-4（worktree）、P1-9（分层）——这两项会改变项目与执行器的契约，宜在面板大规模开发前完成。
 4. **最后补能力**：P1-7/P1-8（016、飞书）、P1-2/P1-4（队列约束与操作面）、P1-10（凭据）。
 5. 全程配套 P2-3 的测试补齐；文档侧按第 7 节逐章回写 013，避免方案与实现继续分叉。
+
+## 9. 复核状态与剩余任务清单（2026-11-12）
+
+评审产出后经过数轮实施，全部 P0 与大部分 P1 已关闭，并以桌面版 DeepSeek Harness 的真实端到端
+实测为验收（仓库内 `verification/2026-11-11-wizard/README.md`，
+`WIZARD_LIVE_OK` / `DELETE_LIVE_OK`；离线重置脚本 `reset-state.ts` 处理旧版设置的不可迁移启动失败）。
+013 的结论性修订见其第 13 节「实施状态」。**本节是当前的权威剩余清单。**
+
+### 9.1 已关闭（附证据）
+
+| 评审条目 | 关闭方式 |
+| --- | --- |
+| P0-1 重试失效 | `triggerId` 纳入 attempt（[scheduler.ts:381](../src/app/scheduler.ts#L381)），重试生成新工单 |
+| P0-2 回写污染工作副本 | 回写保留 BOM/CRLF（`detectStyle`）；执行区改独立 per-ticket worktree；远端变化时重建镜像 |
+| P0-3 回写发起即忘 | 回写进入持久化 `Effects`（幂等键、退避、健康度），忙碌时延迟 |
+| P0-4 执行目录未物化 | `materializeWorkspace` 按 `execution.branch` 建 worktree，HEAD 与远端分支一致（实测 `refMatches`） |
+| P1-1 读取无校验 | queue 走完整 schema；ticket/thread/decision 走关键字段形状（未知字段放行）；迁移链删除 |
+| P1-2 队列唯一性 | SQLite 部分唯一索引 + 终态保留窗口 + 工作区 GC |
+| P1-3 工作项级 reconcile | 条目身份为 `itemKey` + `contentHash`，消失取消、内容变化换代 |
+| P1-4 停用/删除闭环 | 队列操作面（retry/cancel/clear）+ `lastError/nextPollAt`；删除项目停止运行中工单、清理队列记录与写回副作用（实测无孤儿） |
+| P1-5 轮询互斥 | scan/tick 共用执行链；执行中推迟轮询与写回（b71137e）——串行 await 与超时项见 §9.2 |
+| P1-6 runOnStart | 判定改为 `startup ? !runOnStart : due > now` |
+| P1-7 016 标准格式 | `tasks` 表 + 固定枚举 + 行级错误码 + 模板；自定义映射为高级开关 |
+| P1-8 飞书多文档 | `roots[]`/bitable/`spaceId` 全库唯一；飞书消息驱动；群 ID 从机器人已加入群中选择 |
+| P1-10 凭据注入（部分） | `gitAuthArgs` 按命令注入（SSH 临时密钥文件 / HTTPS extraHeader）；`src/secrets/` 加密存储 |
+| P2-1 超时（部分） | `commandTimeoutMs` 可配置 |
+| P2-2 可观测性（部分） | `lastError`/`nextPollAt` 进快照与项目详情 |
+| P2-3 测试（部分） | writeback 三格式用例补齐；删除闭环与远端推导用例落库 |
+
+### 9.2 剩余任务（按建议顺序）
+
+1. **轮询并发模型**（P1-5 剩余）：项目轮询改造成 `Effects` 任务（单项目串行、全局有限并发），
+   tick 只负责到期投递；git 类命令单独超时；到期时间加 ±10% 抖动。
+2. **凭据注入收尾**（P1-10 剩余）：确认 worker 会话默认不继承 git 凭据、目录级 helper 彻底移除；
+   Windows 私钥用 DPAPI/ACL 收紧（`chmod 0600` 在 Windows 无效）。
+3. **分层与依赖环**（P1-9）：宿主类型下沉 `core/ports`，断开 `deployment ↔ infra` 与 `executor → app`；
+   `scheduler` 改为必传 `repoSync`/`registry`；CI 加 dependency-cruiser 规则。
+4. **告警与通知**（§6-2）：连续轮询失败、写回积压、凭据过期的出口；现有通知只覆盖工单结束。
+5. **可观测性**（P2-2 剩余）：结构化事件（project/task/ticket/command/durationMs）、请求 ID、
+   最小指标（排队数、运行数、失败率、写回积压）。
+6. **配置粒度**（P2-1 剩余）：超时按命令类别拆分并允许项目覆盖；tick 间隔与抖动进配置；`prepare` 移到项目级。
+7. **飞书回写**：飞书文档与群消息来源的终态回写目标未定义（Excel/CSV/TSV 已闭环）。
+8. **速率限制**（§6-4）：GitHub/GitLab fetch 与飞书 OpenAPI 的退避/令牌桶。
+9. **测试策略**（P2-3 剩余）：队列/调度补「真实 Engine + 临时 stateDir」集成用例；Windows 跳过项
+   显式 `describe.skipIf` 与 issue 编号；`runtime.spec.ts` 拆分。
+10. **文档与发布**（P2-4 剩余）：005/009 标注过期；014 的 SCC 数据改为脚本口径；发布脚本与
+    「版本 ↔ schema ↔ 迁移」对照表（0.2.0 已起步）。
+11. **日常备份**（§6-3）：SQLite WAL + `secrets/` 的定期备份与恢复到时间点定义（重置备份已实现）。
+12. **飞书群列表实测**：群 ID 下拉已完成面板级验证，需在装有真实飞书凭据的实例上点选确认。
