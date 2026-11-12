@@ -359,6 +359,7 @@ export class Runtime extends Service implements SourceHost {
       checkCodeRepo: (kind, config, field, meta) => setup.checkCodeRepo(kind, config, field, meta),
       listCodeRepoBranches: (kind, config, gitCredential) => setup.listCodeRepoBranches(kind, config, gitCredential ?? ''),
       checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, meta),
+      feishuImChats: async credential => (await this.feishuImReader?.(credential))?.chats() ?? [],
       requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
       reset: () => runtime.reset() }
   }

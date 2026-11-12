@@ -94,6 +94,8 @@ export interface HttpHost {
     repo?: { kind: 'github' | 'gitlab'; config: Record<string, unknown> }
     gitCredential?: string
   }): Promise<SourceCheck[]>
+  /** 按飞书凭据列出机器人已加入的群；任务来源的群 ID 选择用它，凭据不可用时返回空列表。 */
+  feishuImChats(credential: string): Promise<{ id: string; name: string }[]>
   requestPass(): void
   models(): Promise<ModelCatalog>
   /** 备份并清空状态目录后重启；仅由要求显式确认的管理入口调用。 */
@@ -335,6 +337,11 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'POST feishu-credentials/verify': async ({ body }) => {
       const request = VerifyFeishuCredentialRequest.parse(await body())
       return { checks: await runtime.feishuCredentials.verify({ id: request.id, input: request.value, spaceId: request.spaceId }) }
+    },
+    // 飞书群消息任务来源的群 ID 选择：按凭据真实列出机器人已加入的群。
+    'POST feishu-im/chats': async ({ body }) => {
+      const request = z.object({ credential: z.string().trim().max(60) }).parse(await body())
+      return { chats: await runtime.feishuImChats(request.credential) }
     },
     'DELETE feishu-credentials/:id': ({ params }) => runtime.feishuCredentials.remove(params.id),
     // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。

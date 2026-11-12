@@ -149,12 +149,19 @@ function SourceEditor({ kinds, value, credential, feishuCredentials, checks, che
   onCredential: (next: string) => void
   onVerify: (field: string) => void
 }) {
-  const { t } = usePanel()
+  const { t, call } = usePanel()
   const spec = kinds.find(item => item.kind === value.kind)
   const setConfig = (field: FieldSpec, next: unknown) => onChange({ ...value, config: { ...value.config, [field.key]: next } })
+  /** 飞书群消息来源的群选择：从凭据的机器人已加入群中选取，也保留手动输入 oc_ ID 的回退。 */
+  const [chats, setChats] = useState<{ id: string; name: string }[]>([])
+  const fetchChats = useAction(async () => {
+    const result = await call('POST feishu-im/chats', { body: { credential } })
+    setChats(result.chats)
+  })
   /** 切换类型时清空字段；不需要飞书凭据的类型同时解除凭据绑定，避免保存无用的引用。 */
   const chooseKind = (kind: string) => {
     onChange({ kind, config: {} })
+    setChats([])
     if (!kinds.find(item => item.kind === kind)?.needsFeishuCredential) onCredential('')
   }
   return <>
@@ -166,17 +173,36 @@ function SourceEditor({ kinds, value, credential, feishuCredentials, checks, che
     {spec?.needsFeishuCredential && <VerifyRow label={t('projectFeishuCredentialLabel')} busy={checking.feishuCredential === true}
       check={checks.feishuCredential} onVerify={() => onVerify('feishuCredential')}>
       <Field label={t('projectFeishuCredentialLabel')} hint={t('projectFeishuCredentialHint')} note={credentialError}>
-        <select className="dt-select" value={credential} onChange={event => onCredential(event.target.value)}>
+        <select className="dt-select" value={credential} onChange={event => { onCredential(event.target.value); setChats([]) }}>
           <option value="">{t('projectFeishuCredentialNone')}</option>
           {feishuCredentials.map(item => <option key={item.id} value={item.id}>{item.name} ({item.id})</option>)}
         </select>
       </Field>
     </VerifyRow>}
-    {(spec?.fields ?? []).map(field => <VerifyRow key={field.key} label={localized(t, field.label)}
-      busy={checking[field.key] === true} check={checks[field.key]} onVerify={() => onVerify(field.key)}>
-      <SourceField field={field} value={value.config[field.key]} saved={undefined} fact={undefined} labels={{}}
-        onChange={next => setConfig(field, next)} />
-    </VerifyRow>)}
+    {value.kind === 'feishu-im' && <VerifyRow label={t('projectImChat')} busy={fetchChats.busy} check={checks.chatId}
+      onVerify={() => onVerify('chatId')}>
+      <Field label={t('projectImChat')} hint={t('projectImChatHint')}>
+        <div className="dt-verify-row">
+          {chats.length
+            ? <select className="dt-select" aria-label={t('projectImChat')} value={String(value.config.chatId ?? '')}
+              onChange={event => onChange({ ...value, config: { ...value.config, chatId: event.target.value } })}>
+              <option value="">{t('projectImChatNone')}</option>
+              {chats.map(chat => <option key={chat.id} value={chat.id}>{chat.name || chat.id}</option>)}
+            </select>
+            : <Input aria-label={t('projectImChat')} value={String(value.config.chatId ?? '')}
+              placeholder={t('projectImChatEmpty')}
+              onChange={event => onChange({ ...value, config: { ...value.config, chatId: event.target.value } })} />}
+          <Button variant="outline" size="sm" disabled={fetchChats.busy} aria-busy={fetchChats.busy}
+            onClick={() => { void fetchChats.run() }}>{fetchChats.busy ? t('verifyBusy') : t('projectImChatFetch')}</Button>
+        </div>
+      </Field>
+    </VerifyRow>}
+    {(spec?.fields ?? []).filter(field => !(value.kind === 'feishu-im' && field.key === 'chatId')).map(field =>
+      <VerifyRow key={field.key} label={localized(t, field.label)}
+        busy={checking[field.key] === true} check={checks[field.key]} onVerify={() => onVerify(field.key)}>
+        <SourceField field={field} value={value.config[field.key]} saved={undefined} fact={undefined} labels={{}}
+          onChange={next => setConfig(field, next)} />
+      </VerifyRow>)}
   </>
 }
 

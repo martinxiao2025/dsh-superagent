@@ -17,6 +17,8 @@ export interface ImMessage {
 /** 读取群消息的能力；`limit` 为期望的最大条数，实现负责分页。 */
 export interface FeishuImApi {
   messages(chatId: string, options: { limit: number; signal?: AbortSignal }): Promise<ImMessage[]>
+  /** 机器人已加入的群列表；任务来源的群 ID 选择用它，最多返回 200 个。 */
+  chats(): Promise<{ id: string; name: string }[]>
 }
 
 /** 凭据读取群消息的能力；未安装或材料不可用时返回 undefined，由驱动给出可读的预检结果。 */
@@ -101,6 +103,22 @@ export function larkImApi(lark: LarkCall): FeishuImApi {
         return { items: items.map(messageOf), hasMore: record.has_more === true, pageToken: String(record.page_token ?? '') }
       }, limit)
     },
+    /** 机器人已加入的群；分页读满 200 个为止。 */
+    async chats() {
+      const chats: { id: string; name: string }[] = []
+      let pageToken = ''
+      for (let page = 0; page < 4; page += 1) {
+        const data = await lark(['api', 'GET', '/open-apis/im/v1/chats', '--params',
+          JSON.stringify({ page_size: PAGE, page_token: pageToken })])
+        const record = (data ?? {}) as Record<string, unknown>
+        const items = Array.isArray(record.items) ? record.items as Record<string, unknown>[] : []
+        chats.push(...items.map(item => ({ id: String(item.chat_id ?? ''), name: String(item.name ?? '') }))
+          .filter(chat => chat.id))
+        if (record.has_more !== true || !record.page_token) break
+        pageToken = String(record.page_token)
+      }
+      return chats.slice(0, 200)
+    },
   }
 }
 
@@ -142,6 +160,29 @@ export function httpImApi(appId: string, appSecret: string, signal?: AbortSignal
         const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : []
         return { items: items.map(messageOf), hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
       }, limit)
+    },
+    /** 机器人已加入的群；分页读满 200 个为止。 */
+    async chats() {
+      const chats: { id: string; name: string }[] = []
+      let pageToken = ''
+      for (let page = 0; page < 4; page += 1) {
+        const url = new URL(`${BASE}/im/v1/chats`)
+        url.searchParams.set('page_size', String(PAGE))
+        if (pageToken) url.searchParams.set('page_token', pageToken)
+        const response = await fetch(url, { signal, headers: { authorization: `Bearer ${await tenant()}` } })
+        const payload = await response.json() as { code?: number; msg?: string; data?: Record<string, unknown> }
+        if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
+          throw new FeishuApiError(`${payload.msg ?? `飞书返回 HTTP ${response.status}`}${payload.code ? ` (${payload.code})` : ''}`,
+            response.status, payload.code)
+        }
+        const data = payload.data ?? {}
+        const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : []
+        chats.push(...items.map(item => ({ id: String(item.chat_id ?? ''), name: String(item.name ?? '') }))
+          .filter(chat => chat.id))
+        if (data.has_more !== true || !data.page_token) break
+        pageToken = String(data.page_token ?? '')
+      }
+      return chats.slice(0, 200)
     },
   }
 }

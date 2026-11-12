@@ -72,6 +72,8 @@ export interface Api {
   'POST feishu-credentials': { body: { id?: string; value: FeishuCredentialInput }; response: { id: string; revision: number } }
   'PUT feishu-credentials/:id': { body: { value: FeishuCredentialInput; revision: number }; response: { revision: number } }
   'POST feishu-credentials/:id/rotate': { body: Partial<FeishuCredentialInput>; response: { revision: number } }
+  /** 飞书群消息任务来源的群 ID 选择：按凭据真实列出机器人已加入的群。 */
+  'POST feishu-im/chats': { body: { credential: string }; response: { chats: { id: string; name: string }[] } }
   'POST feishu-credentials/verify': {
     body: { id?: string; value?: Partial<FeishuCredentialInput>; spaceId?: string }
     response: { checks: CredentialCheck[] }

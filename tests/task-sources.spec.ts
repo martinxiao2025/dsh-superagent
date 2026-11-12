@@ -141,7 +141,7 @@ describe('feishu wiki task source', () => {
 describe('feishu im task source', () => {
   it('turns recent chat messages into tasks, stripping mentions and skipping empty text', async () => {
     const calls: { chatId: string; limit: number }[] = []
-    const api: FeishuImApi = { async messages(chatId, options) {
+    const api: FeishuImApi = { chats: async () => [], async messages(chatId, options) {
       calls.push({ chatId, limit: options.limit })
       return [
         { messageId: 'om_1', text: '@_user_1 修复登录\n第二行说明', senderId: 'ou_1', senderType: 'user', createdAt: '1' },
@@ -166,14 +166,14 @@ describe('feishu im task source', () => {
       'feishuCredential', deps())
     expect(missing[0]).toMatchObject({ field: 'feishuCredential', ok: false, code: 'feishuCredentialMissing' })
     const noChat = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot' }), 'chatId',
-      { ...deps(), feishuIm: async () => ({ messages: async () => [] }) })
+      { ...deps(), feishuIm: async () => ({ messages: async () => [], chats: async () => [] }) })
     expect(noChat[0]).toMatchObject({ field: 'chatId', ok: false, code: 'feishuChatUnset' })
     const forbidden = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot', chatId: 'oc_1' }),
-      'chatId', { ...deps(), feishuIm: async () => ({ messages: async () => { throw new Error('permission denied') } }) })
+      'chatId', { ...deps(), feishuIm: async () => ({ messages: async () => { throw new Error('permission denied') }, chats: async () => [] }) })
     expect(forbidden[0]).toMatchObject({ field: 'chatId', ok: false, code: 'feishuChatForbidden' })
     const ok = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({ feishuCredential: 'bot', chatId: 'oc_1' }),
       'chatId', { ...deps(), feishuIm: async () => ({ messages: async () => [
-        { messageId: 'om_1', text: 'hi', senderId: '', senderType: '', createdAt: '' }] }) })
+        { messageId: 'om_1', text: 'hi', senderId: '', senderType: '', createdAt: '' }], chats: async () => [] }) })
     expect(ok[0]).toMatchObject({ field: 'chatId', ok: true, code: 'feishuChatOk', values: { chatId: 'oc_1', messages: '1' } })
   })
 

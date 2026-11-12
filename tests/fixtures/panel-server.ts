@@ -420,6 +420,9 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
       values: { kind: String(body.kind ?? ''), name: String(body.name ?? '') } }] }
   } },
   'GET task-format/template': { answer: () => ({ filename: 'tasks-template.xlsx', content: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==' }) },
+  // 飞书群选择：测试里返回可预期的群列表；真实读取由宿主的 IM API 实现。
+  'POST feishu-im/chats': { body: true, answer: ({ body }) => ({
+    chats: body.credential ? [{ id: 'oc_test123', name: '团队群' }] : [] }) },
   // 与宿主一致：创建时校验完整项目值；向导提交全部参数，省略的字段取 schema 默认值。
   'POST projects': { body: true, answer: ({ body }) => {
     const { id, ...value } = body
