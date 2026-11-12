@@ -2,7 +2,7 @@
   "name": "dsh-superagent",
   "author": "DeepSeek Harness Team <team@dsh.dev>",
   "license": "MIT",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A proactive agent for GitHub, GitLab and Feishu sources, as a DSH (DeepSeek Harness) bundle: each Source is a user-owned record, evaluated under a Policy; authorized requests become Tickets, each executed in its own DSH Session.",
   "type": "module",

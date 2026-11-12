@@ -474,6 +474,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |
 | `tests/feishu-wiki.spec.ts` | 飞书知识库遍历：根节点顺序与目录递归、多文档与多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突 |
 | `tests/excel-format.spec.ts` | 016 标准格式：表头与枚举校验、版本门禁、完成/失败状态映射与模板往返读取 |
+| `tests/writeback.spec.ts` | 任务回写：CSV/TSV 的 BOM、CRLF 与末行换行保留，TSV 分隔与按标题定位，xlsx 状态写入后仍可读取，未知任务/缺列/未知扩展名的错误分支 |
 | `tests/vault.spec.ts` | 凭据加密存储：往返、掩码与指纹、缺失密钥、不可解密与临时材料 |
 | `tests/git-credentials.spec.ts`、`tests/feishu-credentials.spec.ts` | Git 与飞书凭据：独立增删改查、材料替换、引用保护与探测失败分类 |
 | `tests/code-repos.spec.ts` | 代码仓库同步：HTTPS/SSH 远端推导、自定义远端与内嵌凭据拒绝、SSH 私钥命令、远端探测、空仓库结果与凭据脱敏，以及工单工作区从仓库检出为独立 worktree |

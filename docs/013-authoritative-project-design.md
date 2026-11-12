@@ -522,3 +522,44 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 | P7 裁剪收尾与端到端 | 按 014 执行删除与合并；更新 005/007/009/010；从零跑通一次完整流程 | 空库建 Git 凭据 → 建项目 → 测试 → 启用 → 领取并完成一条任务；typecheck + 测试 + build 通过；007 表与实际文件一致 |
 
 每个阶段结束执行 `pnpm typecheck`、相关 `vitest` 用例与 `pnpm build`。重置相关的验收必须在一份带真实数据的临时 `stateDir` 上完成，不依赖任何旧结构。
+
+## 13. 实施状态（2026-11-12）
+
+以桌面版 DeepSeek Harness 的真实端到端实测为验收依据（`verification/2026-11-11-wizard/`，
+`WIZARD_LIVE_OK` / `DELETE_LIVE_OK`）；本节记录与正文结论的偏差与新定案，正文未提及处以本节为准。
+
+### 13.1 已定案（原待拍板项）
+
+| 项 | 定案 |
+| --- | --- |
+| 10.1 Git 凭据类型 | 只做 SSH 材料 + HTTPS 令牌；`agent` 模式未做，未绑定时沿用本机 SSH key（gh/glab 路径保留在凭据页） |
+| 10.2/10.4 凭据跨项目复用 | 允许；项目只存凭据 ID，材料进加密存储，轮换以 revision 标记 |
+| 10.5/10.11 知识库粒度 | 按 `spaceId` 全库唯一；根节点集合只定读取范围 |
+| 10.6 任务来源二选一 | 严格二选一，随项目内联 |
+| 10.7 被引用凭据删除 | 默认不可删并返回引用列表 |
+| 10.8 停用语义 | 保留 `queued`、不派工、详情页显示计数；「清空排队」是显式动作 |
+| 10.12 跨文档 `task_id` | 默认按文档隔离；严格模式可选 |
+| 10.13 Excel 标准格式 | 标准格式为唯一默认路径（`tasks` 表 + 固定枚举 + 行级错误码 + 模板），自定义映射为高级开关 |
+
+### 13.2 实测定案的新契约
+
+- **新建/删除项目都会触发初始化重跑**（`persistRecord`/`removeRecord` 与 `save` 同一规则计算
+  `setupChanged`）；删除流程 = 删记录 → `scheduler.forget`（停止运行中工单、取消写回副作用、
+  清理该项目全部队列记录）→ 重跑。运行中工单以 `by=human` 的 `stopped` 结束，队列结算走取消分支。
+- **工作副本是纯镜像**：远端 URL 变化时重建而不是 `merge --ff-only`（执行发生在独立 per-ticket
+  worktree，见附录 A 的替代实现）；轮询工作副本跟随项目 `execution.branch`，清单轮询、回写与
+  执行 worktree 落在同一分支。
+- **项目表单只填仓库全地址**（`config.remote`），站点与仓库路径由 `repositoryOfRemote` 推导；
+  Git 凭据的 provider/kind 决定仓库类型与认证方式。`instanceUrl/cli/sshKey` 不再出现在项目表单。
+- **新增接口**：`POST code-repos/branches`（凭据 + 候选配置 → 分支列表与默认分支）、
+  `POST feishu-im/chats`（凭据 → 机器人已加入的群）；面板仓库步与群消息来源的群 ID 选择据此工作。
+- **读取校验**：queue 按完整 schema，ticket/thread/decision 按关键字段形状（未知字段放行），
+  损坏行明确报错，不做静默强转。
+- **统一脱敏**：CLI 错误输出在进入日志/工单/面板前经过 `redact()`（URL 内嵌凭据、Authorization、
+  Bearer、`token=`、私钥块）。
+
+### 13.3 已知残留
+
+- 飞书文档回写未支持（Excel/TSV/CSV 已闭环）；群消息来源无回写目标。
+- 工作副本与 worktree 的目录清理依赖 workspace GC 的保留窗口；`repos/` 下的孤儿目录不自动清理。
+- 014 的循环依赖计数与实测不符（2 组 SCC），以脚本口径为准；005/009 的页签描述仍有漂移。
