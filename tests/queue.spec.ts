@@ -275,6 +275,22 @@ it('停用的项目不再领取排队项，删除项目后队列记录被清理'
   expect(h.entries.size).toBe(0)
 })
 
+it('删除项目时停止运行中的工单并清理队列记录，结算不再把条目重新入队', async () => {
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const running = [...h.entries.values()].find(item => item.state === 'running')
+  expect(running?.ticketId).toBeTruthy()
+  // forget 先停止工单（真实引擎以 by=human 结束），再清理全部队列记录；
+  // 即使工单结束事件晚到，observe 也找不到活动条目，不会触发重试。
+  h.scheduler.forget('a')
+  expect(h.tickets.get(running!.ticketId!)!.ended?.outcome).toBe('stopped')
+  expect(h.entries.size).toBe(0)
+  h.scheduler.observe(running!.ticketId!)
+  expect(h.entries.size).toBe(0)
+})
+
 it('runOnStart 决定启动时是否立即轮询', async () => {
   const h = setup({
     a: { ...project('a'), schedule: { intervalMinutes: 5, runOnStart: false } },
