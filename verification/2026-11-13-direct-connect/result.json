@@ -1,0 +1,113 @@
+{
+  "startedAt": "2026-11-13T09:33:04.074Z",
+  "stateDir": "C:\\Users\\xiaodian\\.dsh\\state\\superagent",
+  "phases": [
+    {
+      "phase": "直连与健康探针",
+      "at": "2026-11-13T09:33:04.106Z",
+      "detail": {
+        "port": 54172,
+        "phase": "ready",
+        "ok": true
+      }
+    },
+    {
+      "phase": "状态就绪",
+      "at": "2026-11-13T09:33:04.113Z",
+      "detail": {
+        "masterId": "orchestrator-8e214b7a1b57e85ba96a43aa62f8dd47"
+      }
+    },
+    {
+      "phase": "只读端点",
+      "at": "2026-11-13T09:33:04.163Z",
+      "detail": {
+        "sources": true,
+        "credentials": true,
+        "queue": true
+      }
+    },
+    {
+      "phase": "waitReady 立即返回",
+      "at": "2026-11-13T09:33:04.172Z",
+      "detail": {
+        "port": 54172,
+        "at": "2026-11-13T09:06:26.016Z"
+      }
+    },
+    {
+      "phase": "同源门禁",
+      "at": "2026-11-13T09:33:04.214Z",
+      "detail": {
+        "deniedNoHeader": true,
+        "deniedBadHost": true,
+        "noHeaderStatus": 403,
+        "badHostStatus": 403
+      }
+    }
+  ],
+  "startup": {
+    "port": 54172,
+    "phase": "ready",
+    "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+    "pid": 39616,
+    "at": "2026-11-13T09:06:26.016Z"
+  },
+  "health": {
+    "ok": true,
+    "stage": "ready",
+    "configured": true,
+    "paused": false,
+    "problem": null,
+    "listen": {
+      "host": "127.0.0.1",
+      "port": 54172
+    },
+    "phase": "ready",
+    "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+    "machine": {
+      "stateDir": "C:\\Users\\xiaodian\\.dsh\\state\\superagent"
+    },
+    "sources": []
+  },
+  "state": {
+    "masterId": "orchestrator-8e214b7a1b57e85ba96a43aa62f8dd47",
+    "setup": {
+      "machine": {
+        "stateDir": "C:\\Users\\xiaodian\\.dsh\\state\\superagent",
+        "promptMaxChars": 100000,
+        "admissionContextMaxPages": 10,
+        "admissionContextTimeoutMs": 15000
+      },
+      "problem": null,
+      "feishuProblem": null,
+      "accounts": {
+        "repository": "",
+        "agent": "",
+        "feishu": null,
+        "gitlab": null
+      }
+    }
+  },
+  "readOnly": {
+    "sources": true,
+    "credentials": true,
+    "queue": true
+  },
+  "waitReady": {
+    "port": 54172,
+    "phase": "ready",
+    "detail": "dsh-superagent ready; the Superagent sidebar entry opens the management panel",
+    "pid": 39616,
+    "at": "2026-11-13T09:06:26.016Z"
+  },
+  "deletedNonexistent": "Error: DELETE projects/__direct_no_such_projects1794562384173 -> 404 {\"error\":\"No Project with the record ID __direct_no_such_projects1794562384173 exists\",\"code\":\"projectNotInstalled\",\"values\":{\"project\":\"__direct_no_such_projects1794562384173\"}}",
+  "gate": {
+    "deniedNoHeader": true,
+    "deniedBadHost": true,
+    "noHeaderStatus": 403,
+    "badHostStatus": 403
+  },
+  "finishedAt": "2026-11-13T09:33:04.214Z",
+  "ok": true
+}

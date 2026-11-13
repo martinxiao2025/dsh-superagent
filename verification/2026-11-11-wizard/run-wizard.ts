@@ -20,12 +20,12 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { DirectConnect } from '../direct-connect.ts'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 const evidence = join(here, 'result.json')
 const stateDir = process.env.DSH_STATE_DIR ?? join(homedir(), '.dsh', 'state', 'superagent')
-const startupFile = join(stateDir, 'startup.json')
 const scratch = join(tmpdir(), `dsh-wizard-${Date.now()}`)
 const projectId = 'wizard-project'
 const credentialId = 'wizard-credential'
@@ -42,38 +42,8 @@ async function git(args: string[], cwd?: string): Promise<string> {
   return stdout
 }
 
-function startup(): { port: number; phase: string; pid: number; at: string } {
-  const parsed = JSON.parse(readFileSync(startupFile, 'utf8')) as { listen?: { port?: number }; phase?: string; pid?: number; at?: string }
-  check(parsed.listen?.port, `startup.json 没有监听端口`)
-  return { port: parsed.listen!.port!, phase: parsed.phase ?? '', pid: parsed.pid ?? 0, at: parsed.at ?? '' }
-}
-
-let port = startup().port
-async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`http://127.0.0.1:${port}/orchestrator/api/${path}`, {
-    method,
-    headers: { 'x-orchestrator-request': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await response.text()
-  const value = text ? JSON.parse(text) as unknown : undefined
-  if (!response.ok) throw new Error(`${method} ${path} -> ${response.status} ${text}`)
-  return value as T
-}
-async function health(): Promise<{ ok: boolean; stage: string; problem: unknown } | undefined> {
-  try { return await api('GET', 'health') } catch { return undefined }
-}
-async function waitReady(label: string, timeoutMs = 90_000): Promise<{ port: number; pid: number; at: string }> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    let entry: { port: number; phase: string; pid: number; at: string }
-    try { entry = startup() } catch { await sleep(1_000); continue }
-    if (entry.port !== port) port = entry.port
-    if ((await health())?.ok) return { port: entry.port, pid: entry.pid, at: entry.at }
-    await sleep(1_000)
-  }
-  throw new Error(`${label}：${timeoutMs / 1000}s 内管理接口未恢复 ready`)
-}
+/** 直连桌面版管理接口：端口自动跟随重挂载。 */
+const dc = new DirectConnect({ stateDir })
 
 async function serveBare(bare: string): Promise<Server> {
   const server = createServer((req, res) => {
@@ -98,7 +68,7 @@ async function waitQueue(project: string, timeoutMs: number): Promise<{ snapshot
   const deadline = Date.now() + timeoutMs
   let snapshot: any
   while (Date.now() < deadline) {
-    snapshot = await api('GET', 'queue')
+    snapshot = await dc.api('GET', 'queue')
     const entry = (snapshot.items as any[]).find(item => item.project === project)
     if (entry) return { snapshot, entry }
     await sleep(2_000)
@@ -113,18 +83,18 @@ async function main(): Promise<void> {
     save(result)
     console.log(`[${phase}]`, JSON.stringify(detail).slice(0, 300))
   }
-  const initialReady = await waitReady('启动前等待插件就绪')
+  const initialReady = await dc.waitReady('启动前等待插件就绪')
   result.startup = initialReady
   log('插件就绪', initialReady)
 
   // 0. 清理上一次验证的项目与工作副本；仓库与任务来源已并入项目，一条 DELETE 即可。
   // 删除会改变部署材料并触发初始化重跑（换端口），先等 ready 再继续清理凭据。
-  try { await api('DELETE', `projects/${projectId}`) } catch { /* 不存在时忽略 */ }
-  await waitReady('清理旧项目后等待就绪')
+  try { await dc.api('DELETE', `projects/${projectId}`) } catch { /* 不存在时忽略 */ }
+  await dc.waitReady('清理旧项目后等待就绪')
   removeTree(join(stateDir, 'repos', `repo-${projectId}`))
   removeTree(join(stateDir, 'repos', 'repo-candidate'))
   removeTree(join(stateDir, 'work', '向导直连验证'))
-  try { await api('DELETE', `git-credentials/${credentialId}`) } catch { /* 不存在时忽略 */ }
+  try { await dc.api('DELETE', `git-credentials/${credentialId}`) } catch { /* 不存在时忽略 */ }
 
   // 1. 临时裸库：main 与 feature/desktop-live 两个分支，各带一份 BOM + CRLF 的任务清单。
   removeTree(scratch)
@@ -157,10 +127,10 @@ async function main(): Promise<void> {
   log('启动本地 dumb HTTP git 服务（main + feature/desktop-live）', { remote })
 
   // 2. 向导第 0 步：创建 Git 凭据并对其验证（凭据页的真实探测，材料进加密存储）。
-  const credential = await api('POST', 'git-credentials', { id: credentialId,
+  const credential = await dc.api('POST', 'git-credentials', { id: credentialId,
     value: { name: '向导验证凭据', kind: 'https', provider: 'generic', username: 'wizard-bot', token: 'wizard-token' } })
   log('创建 Git 凭据', credential)
-  const credentialChecks = await api<{ checks: { field: string; ok: boolean; code: string }[] }>('POST', 'git-credentials/verify',
+  const credentialChecks = await dc.api<{ checks: { field: string; ok: boolean; code: string }[] }>('POST', 'git-credentials/verify',
     { id: credentialId, repository: remote })
   result.credentialChecks = credentialChecks
   check(credentialChecks.checks.every(item => item.ok), `凭据验证未通过：${JSON.stringify(credentialChecks)}`)
@@ -168,12 +138,12 @@ async function main(): Promise<void> {
 
   // 3. 向导仓库步：项目表单只填仓库全地址（config.remote），站点与仓库路径由服务端从地址推导。
   const repoConfig = { remote, auth: 'https' }
-  const repoChecks = await api<{ checks: { field: string; ok: boolean; code: string }[] }>('POST', 'code-repos/verify',
+  const repoChecks = await dc.api<{ checks: { field: string; ok: boolean; code: string }[] }>('POST', 'code-repos/verify',
     { kind: 'github', config: repoConfig, field: 'remote', gitCredential: credentialId })
   result.repoChecks = repoChecks
   check(repoChecks.checks.every(item => item.ok), `仓库连通性验证未通过：${JSON.stringify(repoChecks)}`)
   log('仓库连通性验证通过（携带凭据）', repoChecks)
-  const branches = await api<{ remote: string; branches: string[]; defaultBranch: string }>('POST', 'code-repos/branches',
+  const branches = await dc.api<{ remote: string; branches: string[]; defaultBranch: string }>('POST', 'code-repos/branches',
     { kind: 'github', config: repoConfig, gitCredential: credentialId })
   result.branches = branches
   check(branches.branches.includes('main') && branches.branches.includes('feature/desktop-live'),
@@ -182,7 +152,7 @@ async function main(): Promise<void> {
   log('拉取远端分支', branches)
 
   // 4. 向导任务来源步：真实同步工作副本并读取清单。
-  const sourceChecks = await api<{ checks: { field: string; ok: boolean; code: string; values?: Record<string, string> }[] }>(
+  const sourceChecks = await dc.api<{ checks: { field: string; ok: boolean; code: string; values?: Record<string, string> }[] }>(
     'POST', 'task-sources/verify',
     { kind: 'excel', config: { file: 'tasks/backlog.csv' }, field: 'file',
       repo: { kind: 'github', config: repoConfig }, gitCredential: credentialId })
@@ -191,7 +161,7 @@ async function main(): Promise<void> {
   log('任务来源验证通过（真实读取清单）', sourceChecks)
 
   // 5. 向导提交：创建项目，执行分支选定为 feature/desktop-live（保存会触发重挂载）。
-  const created = await api('POST', 'projects', {
+  const created = await dc.api('POST', 'projects', {
     id: projectId, name: '向导直连验证', enabled: true,
     codeRepo: { kind: 'github', config: repoConfig },
     taskSource: { kind: 'excel', config: { file: 'tasks/backlog.csv' } },
@@ -202,7 +172,7 @@ async function main(): Promise<void> {
     taskPolicy: { pendingStatuses: ['todo'], doneStatus: 'done', failedStatus: 'blocked' },
   })
   log('创建项目（分支 feature/desktop-live）', created)
-  const ready = await waitReady('项目配置生效')
+  const ready = await dc.waitReady('项目配置生效')
   log('管理接口恢复 ready', ready)
 
   // 6. 等真实调度：同步应检出项目选定分支。
@@ -220,22 +190,22 @@ async function main(): Promise<void> {
   let entry = queued.entry
   let ticket: any
   while (Date.now() < deadline) {
-    const snapshot = await api<any>('GET', 'queue')
+    const snapshot = await dc.api<any>('GET', 'queue')
     entry = (snapshot.items as any[]).find(item => item.id === (queued.entry as any).id) ?? entry
     if (entry?.ticketId) {
-      const page = await api<any>('GET', `tickets/${entry.ticketId}`)
+      const page = await dc.api<any>('GET', `tickets/${entry.ticketId}`)
       ticket = page.ticket ?? page
       if (ticket?.ended) break
     }
     await sleep(3_000)
   }
   for (let waited = 0; waited < 60_000 && ['running', 'starting'].includes(entry?.state ?? ''); waited += 1_000) {
-    const snapshot = await api<any>('GET', 'queue')
+    const snapshot = await dc.api<any>('GET', 'queue')
     entry = (snapshot.items as any[]).find(item => item.id === (queued.entry as any).id) ?? entry
     if (!['running', 'starting'].includes(entry?.state ?? '')) break
     await sleep(1_000)
   }
-  result.queueFinal = await api('GET', 'queue')
+  result.queueFinal = await dc.api('GET', 'queue')
   result.ticket = ticket
   const ended = ticket?.ended?.outcome ?? ''
   log('真实执行结束', { queueState: entry?.state, outcome: ended, ticketId: entry?.ticketId })
@@ -268,10 +238,10 @@ async function main(): Promise<void> {
   log('完成', { ok: result.ok })
 
   // 10. 停止继续轮询：远端服务即将关闭，避免调度器持续报连接失败。
-  const settings = await api<any>('GET', 'settings')
+  const settings = await dc.api<any>('GET', 'settings')
   const project = (settings.projects as any[]).find(item => item.id === projectId)
   if (project) {
-    await api('PUT', `settings/project:${projectId}`, { value: { ...project.value, enabled: false }, revision: project.revision })
+    await dc.api('PUT', `settings/project:${projectId}`, { value: { ...project.value, enabled: false }, revision: project.revision })
     log('停用项目以停止轮询', { revision: project.revision })
   }
   server.close()

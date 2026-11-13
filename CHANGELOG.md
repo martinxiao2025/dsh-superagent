@@ -1,5 +1,41 @@
 # 更新日志
 
+## Unreleased
+
+### 单元测试 Windows 兼容与简化（2026-11-13）
+
+- 修复 `deployment.spec.ts` / `environment.spec.ts` 在 Windows 上因符号链接权限失败的用例：普通符号链接
+  在未开开发者模式的 Windows 上抛 `EPERM: operation not permitted`，改为免特权方案——目录链接改用 `junction`，
+  验证「外来条目被拒」的文件符号链接用例改用目录等价断言。
+- 由此 13 个失败用例全部转绿；`pnpm check` 在 Windows 上达到 77 个测试文件 / 1337 例全绿（tsc + vitest + build）。
+- 简化：符号链接相关用例不再依赖开发者模式或管理员权限，任何普通 Windows 用户环境都能跑。
+
+### 统一直连 SDK 与直连实测（2026-11-13）
+
+- 新增 [verification/direct-connect.ts](verification/direct-connect.ts)：把散落在各 verification 脚本里的
+  「端口发现 + `x-orchestrator-request` 客户端 + 等待就绪 + 证据落盘」收敛为一个被复用模块
+  （`DirectConnect`），端口每次请求前重新读取 `startup.json`，正确跟随插件重挂载导致的端口漂移。
+- 重构 `run-live` / `run-wizard` / `run-delete` / `run-cleanup` 复用该 SDK，删除约 150 行重复代码；
+  热加载探针（`run-hot-reload`）与 `scripts/dsh-superagent.mjs` 保留各自语义（前者按端口参数观测
+  重载、后者为无依赖的捆绑版服务脚本，不引入 ts 依赖）。
+- 新增 [tests/direct-connect.spec.ts](tests/direct-connect.spec.ts)（8 例）：端口解析、缺端口报错、
+  请求头/JSON 体、非 2xx 错误映射、健康失败兜底、`waitReady` 端口漂移跟随、断言/证据辅助。
+- 新增 [verification/2026-11-13-direct-connect](verification/2026-11-13-direct-connect/)：用统一 SDK 直连真实
+  桌面版实测端口发现、健康/状态、只读端点、`waitReady`、只读 DELETE 404 安全与同源门禁
+  （缺请求头与 Host 不符均被 403 拒）；实测打印 `DIRECT_CONNECT_LIVE_OK`，证据入 `result.json`。
+- 交付物：统一直连 SDK、SDK 单测、直连实测脚本与证据、重构后的验证脚本、本更新日志。
+
+### 开发调试清理（2026-11-13）
+
+- 删除冗余静态覆盖层 `examples/dev.cordis.patch.yml`：`pnpm dev` 已由
+  [scripts/dev-web.mjs](scripts/dev-web.mjs) 从包层 `cordis.patch.yml` 动态生成同一覆盖层
+  （`.artifacts/dev.cordis.patch.yml`），实测内容仅差一个结尾空行；该文件未被任何脚本/构建/
+  测试引用，且文档声称的「含 dsh-hmr 说明」实际并不存在，避免手动同步负担与陈旧文档。
+- `docs/006-deployment.md`「开发与调试」同步更新：等价原始命令改用脚本生成的
+  `.artifacts/dev.cordis.patch.yml`，删除对已移除静态示例及 HMR 注释块的引用。
+- 端到端实测开发回路：`pnpm build` + `pnpm dev --no-build` 生成覆盖层、启动 `dsh web`、
+  健康检查通过并打印面板 URL（`DEV_WEB_READY`）。
+
 ## 0.2.0（2026-11-12）
 
 以桌面版 DeepSeek Harness 真实端到端实测为验收（`verification/2026-11-11-wizard/`）。

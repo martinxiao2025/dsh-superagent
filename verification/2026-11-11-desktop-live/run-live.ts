@@ -10,6 +10,7 @@
  *   因此这里启动一个只读静态 HTTP 服务，用 git 的 dumb 协议托管一个本地裸库；
  *   记录使用 `auth: 'ssh'`（该模式不运行 gh，也不要求 GitHub 账号）。
  * - 提供服务的进程与 git 调用必须异步，否则同步子进程会阻塞事件循环导致服务不可达。
+ * - 端口发现、x-orchestrator-request 客户端、等待就绪与证据落盘复用 ../direct-connect.ts。
  *
  * 运行：`node --experimental-transform-types verification/2026-11-11-desktop-live/run-live.ts`
  * 前置：桌面版已加载 dsh-superagent 且 `stateDir/startup.json` 为 ready。
@@ -21,27 +22,21 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
+import { DirectConnect, check, save, sleep, stamp } from '../direct-connect.ts'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
 const evidence = join(here, 'result.json')
 /** 桌面版插件的状态目录；可用 `DSH_STATE_DIR` 覆盖。 */
 const stateDir = process.env.DSH_STATE_DIR ?? join(homedir(), '.dsh', 'state', 'superagent')
-const startupFile = join(stateDir, 'startup.json')
+/** 直连桌面版管理接口的客户端：端口自动从 startup.json 读取并跟随重挂载。 */
+const dc = new DirectConnect({ stateDir })
 /** 临时裸库与种子仓库放在系统临时目录，不进入仓库。 */
 const scratch = join(tmpdir(), 'dsh-desktop-live')
 const repoId = 'live-ledger'
 const sourceId = 'live-backlog'
 const projectId = 'live-project'
 
-/** 写入证据文件；每一步都落盘，失败时也保留已完成阶段。 */
-function save(value: unknown): void {
-  writeFileSync(evidence, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-}
-/** 断言；失败立即抛出，避免带着错误状态继续下一步。 */
-function check(condition: unknown, message: string): void {
-  if (!condition) throw new Error(`断言失败：${message}`)
-}
 /** 运行一次 git 并返回标准输出；失败时带上命令与 stderr。 */
 async function git(args: string[], cwd?: string): Promise<string> {
   try {
@@ -51,8 +46,6 @@ async function git(args: string[], cwd?: string): Promise<string> {
     throw new Error(`git ${args.join(' ')} 失败：${stderr.trim() || String(error)}`)
   }
 }
-const sleep = (ms: number): Promise<void> => new Promise(done => setTimeout(done, ms))
-const stamp = (): string => new Date().toISOString()
 
 /**
  * 递归删除目录。Windows 上 git 对象默认只读，直接删除会 EPERM；
@@ -69,50 +62,6 @@ function removeTree(dir: string): void {
   }
   try { unlock(dir) } catch { /* 个别文件不可写时仍尝试删除其余内容。 */ }
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
-}
-
-/** 读取桌面版插件写入的启动记录，取管理接口的监听端口。 */
-function startup(): { port: number; phase: string; pid: number; at: string } {
-  const text = readFileSync(startupFile, 'utf8')
-  const parsed = JSON.parse(text) as { listen?: { port?: number }; phase?: string; pid?: number; at?: string }
-  check(parsed.listen?.port, `startup.json 没有监听端口：${text}`)
-  return { port: parsed.listen!.port!, phase: parsed.phase ?? '', pid: parsed.pid ?? 0, at: parsed.at ?? '' }
-}
-
-/** 管理接口调用；host 必须是实际监听地址，并携带同源请求头。 */
-let port = startup().port
-async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`http://127.0.0.1:${port}/orchestrator/api/${path}`, {
-    method,
-    headers: { 'x-orchestrator-request': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await response.text()
-  const value = text ? JSON.parse(text) as unknown : undefined
-  if (!response.ok) throw new Error(`${method} ${path} -> ${response.status} ${text}`)
-  return value as T
-}
-/** 健康探针；失败返回 undefined，供等待重启期间轮询。 */
-async function health(): Promise<{ ok: boolean; stage: string; configured: boolean; problem: unknown } | undefined> {
-  try {
-    return await api('GET', 'health')
-  } catch {
-    return undefined
-  }
-}
-/** 等待管理接口恢复健康；重启会换端口，因此每轮重新读取 startup.json。 */
-async function waitReady(label: string, timeoutMs = 90_000): Promise<{ port: number; pid: number; at: string }> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    // 重启期间 startup.json 可能被替换，读取失败按未就绪处理并继续等待。
-    let entry: { port: number; phase: string; pid: number; at: string }
-    try { entry = startup() } catch { await sleep(1_000); continue }
-    if (entry.port !== port) port = entry.port
-    const probe = await health()
-    if (probe?.ok) return { port: entry.port, pid: entry.pid, at: entry.at }
-    await sleep(1_000)
-  }
-  throw new Error(`${label}：${timeoutMs / 1000}s 内管理接口未恢复 ready`)
 }
 
 /** 起一个只读静态服务，用 git dumb 协议托管临时裸库。 */
@@ -141,7 +90,7 @@ async function waitQueue(project: string, timeoutMs: number): Promise<{ snapshot
   const deadline = Date.now() + timeoutMs
   let snapshot: any
   while (Date.now() < deadline) {
-    snapshot = await api('GET', 'queue')
+    snapshot = await dc.api('GET', 'queue')
     const entry = (snapshot.items as any[]).find(item => item.project === project)
     if (entry) return { snapshot, entry }
     await sleep(2_000)
@@ -158,19 +107,19 @@ async function main(): Promise<void> {
     console.log(`[${phase}]`, JSON.stringify(detail).slice(0, 400))
   }
   // 插件重挂载可能换进程与端口，并短暂经历状态目录锁等待；先等它稳定到 ready。
-  const initialReady = await waitReady('启动前等待插件就绪', 90_000)
+  const initialReady = await dc.waitReady('启动前等待插件就绪', 90_000)
   result.startup = initialReady
   log('插件就绪', initialReady)
-  const before = await health()
+  const before = await dc.health()
   log('初始健康探针', before)
   check(before?.ok, `插件未就绪：${JSON.stringify(before)}`)
 
   // 0. 清理上一次验证留下的记录与工作副本，保证可重复运行且从空设置开始。
   for (const [kind, id] of [['projects', projectId], ['task-sources', sourceId], ['code-repos', repoId]] as const) {
-    try { await api('DELETE', `${kind}/${id}`) } catch { /* 不存在时忽略，首次运行即为此情形。 */ }
+    try { await dc.api('DELETE', `${kind}/${id}`) } catch { /* 不存在时忽略，首次运行即为此情形。 */ }
   }
   for (const dir of [join(stateDir, 'repos', repoId), join(stateDir, 'work', '桌面直连验证')]) removeTree(dir)
-  const afterReset = await health()
+  const afterReset = await dc.health()
   log('清理旧记录后可用的设置', { codeRepos: (afterReset as any)?.sources ?? [] })
 
   // 1. 临时裸库：BOM + CRLF 的任务清单，只有一个任务，避免拆出多个工作项。
@@ -200,23 +149,23 @@ async function main(): Promise<void> {
   log('启动本地 dumb HTTP git 服务', { remote })
 
   // 2. 代码仓库记录：先创建（config 为空），再用设置块写入 SSH 模式与自定义远端。
-  const createdRepo = await api('POST', 'code-repos', { kind: 'github', id: repoId, name: '桌面验证仓库', config: {} })
+  const createdRepo = await dc.api('POST', 'code-repos', { kind: 'github', id: repoId, name: '桌面验证仓库', config: {} })
   log('创建代码仓库记录', createdRepo)
-  const savedRepo = await api('PUT', `settings/codeRepo:${repoId}`, {
+  const savedRepo = await dc.api('PUT', `settings/codeRepo:${repoId}`, {
     value: { name: '桌面验证仓库', enabled: true, config: { instanceUrl: '', repository: 'local/live', cli: '', auth: 'ssh', remote, sshKey: '' } },
     revision: (createdRepo as { revision: number }).revision,
   })
   log('写入仓库配置（触发插件重挂载）', savedRepo)
-  const ready = await waitReady('仓库配置生效')
+  const ready = await dc.waitReady('仓库配置生效')
   result.restart = ready
   log('管理接口恢复 ready', ready)
 
   // 3. 任务来源与项目：两者都读取实时设置，不需要再次重启。
-  const createdSource = await api('POST', 'task-sources', {
+  const createdSource = await dc.api('POST', 'task-sources', {
     kind: 'excel', id: sourceId, name: '桌面验证清单', config: { repo: repoId, file: 'tasks/backlog.csv' },
   })
   log('创建 Excel 任务来源', createdSource)
-  const createdProject = await api('POST', 'projects', {
+  const createdProject = await dc.api('POST', 'projects', {
     id: projectId, name: '桌面直连验证', enabled: true, codeRepo: repoId, taskSource: sourceId,
     execution: { directory: '', branch: 'main' },
     schedule: { intervalMinutes: 30, runOnStart: true },
@@ -236,10 +185,10 @@ async function main(): Promise<void> {
   let entry = queued.entry
   let ticket: any
   while (Date.now() < deadline) {
-    const snapshot = await api<any>('GET', 'queue')
+    const snapshot = await dc.api<any>('GET', 'queue')
     entry = (snapshot.items as any[]).find(item => item.id === (queued.entry as any).id) ?? entry
     if (entry?.ticketId) {
-      const page = await api<any>('GET', `tickets/${entry.ticketId}`)
+      const page = await dc.api<any>('GET', `tickets/${entry.ticketId}`)
       // 工单详情路由直接返回工单对象；兼容可能存在的 `{ ticket }` 包装。
       ticket = page.ticket ?? page
       if (ticket?.ended) break
@@ -248,12 +197,12 @@ async function main(): Promise<void> {
   }
   // 工单结束事件到队列结算有几毫秒延迟；等条目离开运行态后再取最终快照。
   for (let waited = 0; waited < 60_000 && ['running', 'starting'].includes(entry?.state ?? ''); waited += 1_000) {
-    const snapshot = await api<any>('GET', 'queue')
+    const snapshot = await dc.api<any>('GET', 'queue')
     entry = (snapshot.items as any[]).find(item => item.id === (queued.entry as any).id) ?? entry
     if (!['running', 'starting'].includes(entry?.state ?? '')) break
     await sleep(1_000)
   }
-  result.queueFinal = await api('GET', 'queue')
+  result.queueFinal = await dc.api('GET', 'queue')
   result.ticket = ticket
   const ended = ticket?.ended?.outcome ?? ''
   log('真实执行结束', { queueState: entry?.state, outcome: ended, ticketId: entry?.ticketId })
@@ -282,10 +231,10 @@ async function main(): Promise<void> {
   log('完成', { ok: result.ok })
 
   // 8. 停止继续轮询：远端服务即将关闭，避免调度器每分钟报连接失败。
-  const settings = await api<any>('GET', 'settings')
+  const settings = await dc.api<any>('GET', 'settings')
   const project = (settings.projects as any[]).find(item => item.id === projectId)
   if (project) {
-    await api('PUT', `settings/project:${projectId}`, { value: { ...project.value, enabled: false }, revision: project.revision })
+    await dc.api('PUT', `settings/project:${projectId}`, { value: { ...project.value, enabled: false }, revision: project.revision })
     log('停用项目以停止轮询', { revision: project.revision })
   }
   server.close()

@@ -480,6 +480,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/tools.spec.ts` | 会话的工具：`orchestrator_read` 为每个角色读取什么，以及其他主会话工具的结构和检查 |
 | `tests/runtime-concurrency.spec.ts` | 重叠的工作：轮次期间的触发器、投递和启动期间发生变化的工单 |
 | `tests/http.spec.ts` | 同源和回环检查、运行时未就绪时的健康探针与 503、每种失败的状态码、请求体上限、路径参数和查询 |
+| `tests/direct-connect.spec.ts` | 统一直连客户端 `DirectConnect`：从 `startup.json` 发现端口（缺端口报错）、`x-orchestrator-request` 请求头与 JSON 体、非 2xx 错误映射、健康失败兜底、等待就绪时跟随端口漂移，以及断言与证据落盘辅助 |
 | `tests/startup.spec.ts` | 启动记录的字段、轮转与 UTF-8 无 BOM，异常摘要，以及状态目录锁的重试与释放 |
 | `tests/settings.spec.ts` | 与模型或账号检查竞争的设置保存、被保存越过的策略同步，以及暂停、同步和块的拒绝 |
 | `tests/views.spec.ts` | 管理视图从 Store 派生的内容，例如被丢弃消息所属的线程 |

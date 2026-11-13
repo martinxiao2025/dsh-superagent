@@ -44,7 +44,8 @@ beforeEach(async () => {
   larkCli = lark({ appId: 'cli_bot', brand: 'lark', identities: { bot: { status: 'ready' } } })
   // 同名的陈旧执行器垫片必须被跳过，无论 PATH 是否规范化或是否经过符号链接。
   programIn(join(dir, 'state', 'worker-bin'), 'gh')
-  symlinkSync(join(dir, 'state'), join(dir, 'state-link'))
+  // Windows 普通符号链接需特权/开发者模式；目录链接用 junction（无需特权，POSIX 忽略 type）。
+  symlinkSync(join(dir, 'state'), join(dir, 'state-link'), 'junction')
   await exec('git', ['init', '-q', join(dir, 'widgets')], { env: gitEnv() })
   await exec('git', ['-C', join(dir, 'widgets'), 'remote', 'add', 'origin', 'git@github.com:acme/widgets.git'], { env: gitEnv() })
 })

@@ -160,15 +160,15 @@ pnpm dev
 
 [scripts/dev-web.mjs](../scripts/dev-web.mjs) 会构建、从包层 `cordis.patch.yml` 生成自包含覆盖层（`.artifacts/dev.cordis.patch.yml`——预设逐字复制，升级包层后无需手工同步）、启动 `dsh web` 并等插件就绪后打印面板 URL。dsh CLI 的解析顺序是 `--dsh` 参数 > `DSH_CLI` 环境变量 > PATH（桌面版自带 CLI 位于 `<安装目录>\resources\runtime\cli\bin\dsh.cmd`）；`--no-build` 跳过构建，`--port` 换端口，Ctrl+C 结束实例。
 
-等价的原始命令（脚本即它的封装）：
+脚本启动的 `dsh web` 使用脚本生成的覆盖层 `.artifacts/dev.cordis.patch.yml`：
 
 ```sh
-dsh web --patch examples/dev.cordis.patch.yml --no-open
+dsh web --patch .artifacts/dev.cordis.patch.yml --no-open
 ```
 
 - 面板（概览/项目/触发/评估/执行/设置）就是可视化调试面；改完代码 `pnpm build` 后重启即可生效。
 - 开发实例的 `stateDir` 隔离在检出内的 `.dsh-dev-state`，不与桌面版实例争生产状态目录的锁，可长期与生产并行。
-- 检出内的 [examples/dev.cordis.patch.yml](../examples/dev.cordis.patch.yml) 是同一覆盖层的静态参考（含 dsh-hmr 说明）；换机器时脚本无需改动，静态示例需改其中的绝对路径。
+- 覆盖层由脚本从包层 `cordis.patch.yml` 动态生成（主插件按检出绝对路径加载 + worker/router 预设复制），升级预设后无需手工同步。
 - 排查插件为什么没加载/没生效：`dsh --profile web --dump-config --patch .artifacts/dev.cordis.patch.yml` 看合成后的层。
 - 实测陷阱（覆盖层设计已避开）：把插件以 `link:` 装进 web profile 会让运行时的需求校验崩溃（`undefined.startsWith`，peer 不随 link 解析）；tgz 安装在 Windows 上因跨盘符号链接权限失败（EPERM）；覆盖层只写主插件不写预设会在主会话组合时报 `Unknown agent preset`。
 
@@ -184,7 +184,7 @@ dsh plugin --profile <名称> add link:<本检出的绝对路径>
 
 ### 备选：HMR 热重载插件（版本线匹配时）
 
-官方 `@deepseek-ai/dsh-hmr` 监视 `root` 目录，插件文件变化即卸载旧实例（effect 回卷）并加载新版本；源码级热重载要求 tsx 运行时。**版本线必须与运行时匹配**：dsh-hmr 0.1.6-alpha.2 要求 0.1.6-alpha 线的 `dsh-app-boot`/`dsh-cmdline`，在 dsh 0.2.2-rc.1 上启动被拒绝，除非 `dsh plugin allow-version` 显式豁免（官方警告可能导致崩溃或数据丢失，日常使用的 profile 不建议豁免）。配置示例见 [examples/dev.cordis.patch.yml](../examples/dev.cordis.patch.yml) 中的注释块。
+官方 `@deepseek-ai/dsh-hmr` 监视 `root` 目录，插件文件变化即卸载旧实例（effect 回卷）并加载新版本；源码级热重载要求 tsx 运行时。**版本线必须与运行时匹配**：dsh-hmr 0.1.6-alpha.2 要求 0.1.6-alpha 线的 `dsh-app-boot`/`dsh-cmdline`，在 dsh 0.2.2-rc.1 上启动被拒绝，除非 `dsh plugin allow-version` 显式豁免（官方警告可能导致崩溃或数据丢失，日常使用的 profile 不建议豁免）。
 
 ### 备选：`dsh-debug-mode`（第三方，未采用）
 

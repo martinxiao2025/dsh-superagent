@@ -125,9 +125,10 @@ return 1`)
     writeFileSync(join(workerBin(dir), 'notes'), `notes\nmore\n${readFileSync(join(workerBin(dir), shimFile('gh')), 'utf8').split('\n')[1]}\n`)
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${join(workerBin(dir), 'notes')} was not written by dsh-superagent`)
     rmSync(join(workerBin(dir), 'notes'))
-    symlinkSync(join(workerBin(dir), shimFile('gh')), join(workerBin(dir), 'link'))
+    // 非普通文件条目（符号链接/目录）都视为外来：Windows 无需特权即可建目录，用目录替代文件符号链接验证同一拒绝路径。
+    mkdirSync(join(workerBin(dir), 'link'))
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow('link was not written by dsh-superagent')
-    rmSync(join(workerBin(dir), 'link'))
+    rmSync(join(workerBin(dir), 'link'), { recursive: true, force: true })
     writeFileSync(workerGitConfig(dir), '[user]\n\tname = someone\n')
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${workerGitConfig(dir)} was not written by dsh-superagent`)
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toBe('[user]\n\tname = someone\n')
@@ -188,7 +189,7 @@ console.log('operator-secret')`)
 
 it('removes every spelling of a directory from PATH and keeps the other entries', () => {
   mkdirSync(join(dir, 'state', 'worker-bin'), { recursive: true })
-  symlinkSync(join(dir, 'state'), join(dir, 'link'))
+  symlinkSync(join(dir, 'state'), join(dir, 'link'), 'junction')
   const bin = join(dir, 'state', 'worker-bin')
   const entries = [`${bin}${process.platform === 'win32' ? '' : '/'}`, join(dir, 'link', 'worker-bin'), '/usr/bin', 'node_modules/.bin']
   expect(withoutDirectory(entries.join(delimiter), bin)).toBe(['/usr/bin', 'node_modules/.bin'].join(delimiter))

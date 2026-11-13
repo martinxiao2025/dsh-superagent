@@ -15,6 +15,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rm
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { DirectConnect } from '../direct-connect.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const evidence = join(here, 'result.json')
@@ -23,32 +24,19 @@ const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
 const profile = process.env.DSH_PROFILE ?? 'desktop'
 const profileDir = join(dshHome, 'profiles', profile)
 const stateDir = process.env.DSH_STATE_DIR ?? join(dshHome, 'state', 'superagent')
-const startupFile = join(stateDir, 'startup.json')
 
 const sleep = async (ms: number) => new Promise<void>(done => setTimeout(done, ms))
 const stamp = (): string => new Date().toISOString()
 function save(value: unknown): void { writeFileSync(evidence, JSON.stringify(value, null, 2), 'utf8') }
 function check(condition: unknown, message: string): void { if (!condition) throw new Error(message) }
 
-function startup(): { port: number; phase: string } {
-  const parsed = JSON.parse(readFileSync(startupFile, 'utf8')) as { listen?: { port?: number }; phase?: string }
-  check(parsed.listen?.port, 'startup.json 没有监听端口')
-  return { port: parsed.listen!.port!, phase: parsed.phase ?? '' }
-}
+/** 直连桌面版管理接口：端口自动从 startup.json 读取并跟随重挂载。 */
+const dc = new DirectConnect({ stateDir })
 let port = 0
-async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`http://127.0.0.1:${port}/orchestrator/api/${path}`, {
-    method,
-    headers: { 'x-orchestrator-request': '1', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const text = await response.text()
-  if (!response.ok) throw new Error(`${method} ${path} -> ${response.status} ${text}`)
-  return (text ? JSON.parse(text) : undefined) as T
-}
+/** 管理接口任意应答即可 reachable（clean 卸载期间健康可能非 ok，但应已无监听）。 */
 async function reachable(): Promise<boolean> {
-  try { port = startup().port } catch { return false }
-  try { await api('GET', 'health'); return true } catch { return false }
+  try { port = dc.started().port } catch { return false }
+  try { await dc.api('GET', 'health'); return true } catch { return false }
 }
 /** 等插件回到 ready：桌面版宿主对 profile 变化的反应有 30–90 秒延迟，恢复也可能跨多个周期。 */
 async function waitReachable(label: string, timeoutMs: number): Promise<void> {
@@ -181,7 +169,7 @@ async function main(): Promise<void> {
   startApp(exe!)
   note('app restarted')
   await waitReachable('还原', 300_000)
-  const state = await api<{ masterId?: string }>('GET', 'state')
+  const state = await dc.api<{ masterId?: string }>('GET', 'state')
   note('reloaded', { port, masterId: state.masterId })
   const finalPatch = readFileSync(join(profileDir, 'cordis.patch.yml'), 'utf8')
   check(finalPatch === before.patch, '还原后的 patch 与原文不一致')
