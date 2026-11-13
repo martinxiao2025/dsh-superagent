@@ -23,7 +23,7 @@ import type { CredentialCheck } from '../../src/secrets/check.ts'
 import { SetupError, type SetupCode } from '../../src/setup.ts'
 import { feishuChannel } from '../../src/sources/feishu-trigger.ts'
 import { feishuKind } from '../../src/sources/feishu.ts'
-import type { Health } from '../../src/sources/host.ts'
+import type { Health } from '../../src/infra/health.ts'
 import type { SourceKind } from '../../src/sources/kind.ts'
 import { testDeployment, testFeishu, testGithub, testGitlab } from './deployment.ts'
 
@@ -352,18 +352,22 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'POST queue/:id/retry': { answer: () => ({ retried: true }) },
   'POST queue/:id/cancel': { answer: () => ({ cancelled: true }) },
   'POST queue/clear': { query: ['project'], answer: () => ({ cancelled: 0 }) },
-  'GET projects/:id/tasks': { answer: ({ params }) => {
+  'GET projects/:id/tasks': { query: ['limit'], answer: ({ params, query }) => {
     const project = server.settings.projects[params.id]
     if (!project) return refuse(404, 'Project not found')
-    const items = server.queueItems.filter(item => item.project === params.id)
+    const all = server.queueItems.filter(item => item.project === params.id)
+    const offset = Number(query.offset ?? 0), limit = Number(query.limit ?? 50)
+    // 镜像 projectTasksView 的分页语义：活动 + 终态全量计数，items 只给窗口，超窗带 more。
+    const items = all.slice(offset, offset + limit)
     const repoText = project.codeRepo.config.repository ?? project.codeRepo.config.project ?? project.codeRepo.config.remote
     return { project: { id: params.id, name: project.name, enabled: project.enabled,
       codeRepo: { kind: project.codeRepo.kind, name: typeof repoText === 'string' && repoText ? repoText : project.codeRepo.kind },
       taskSource: { kind: project.taskSource.kind, name: project.taskSource.kind },
       execution: project.execution, schedule: project.schedule, retry: project.retry, taskPolicy: project.taskPolicy },
       at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
-      queued: items.filter(item => item.state === 'queued').length,
-      running: items.filter(item => item.state === 'running' || item.state === 'starting').length, items,
+      queued: all.filter(item => item.state === 'queued').length,
+      running: all.filter(item => item.state === 'running' || item.state === 'starting').length, items,
+      total: all.length, ...(all.length > offset + limit ? { more: true } : {}),
       nextPollAt: '2026-09-23T01:00:00Z' }
   } },
   'POST sources': { body: true, answer: ({ body }) => {

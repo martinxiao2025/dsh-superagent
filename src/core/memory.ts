@@ -13,14 +13,31 @@ export class MemoryRepositories implements Repositories {
   private readonly threadRows = new Map<string, Thread>()
   private readonly ticketRows = new Map<string, Ticket>()
   private readonly decisionRows = new Map<string, Decision>()
+  private depth = 0
+  /** 在最外层提交后运行的回调，按保存点层级索引；回滚某一层级会丢弃其回调。 */
+  private readonly committed: (() => void)[][] = []
   atomic<T>(work: () => T): T {
     const maps: Map<string, unknown>[] = [this.triggerRows, this.dispositions, this.threadRows, this.ticketRows, this.decisionRows]
     const snapshot = maps.map(map => new Map(map))
-    try { return work() }
+    const level = this.depth++
+    this.committed[level] = []
+    let value: T
+    try { value = work() }
     catch (error) {
       maps.forEach((map, index) => { map.clear(); for (const [id, value] of snapshot[index]!) map.set(id, value) })
       throw error
     }
+    finally { this.depth-- }
+    // 与 SQLite 存储一致：嵌套事务把回调上交其父级，仅最外层提交后执行。
+    const actions = this.committed.splice(level)[0]!
+    if (level) this.committed[level - 1]!.push(...actions)
+    else for (const action of actions) action()
+    return value
+  }
+  /** 回调错误会向上抛出（内存实现没有健康上报通道），但状态已提交，不随之回滚。 */
+  afterCommit(action: () => void): void {
+    if (this.depth) this.committed[this.depth - 1]!.push(action)
+    else action()
   }
   readonly triggers = {
     get: (id: string) => clone(this.triggerRows.get(id)),

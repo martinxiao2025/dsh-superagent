@@ -55,8 +55,13 @@ export function feishuResource(resource: string) {
   return { record: match[1] ? decodeURIComponent(match[1]) : undefined, triggerId: match[2]!,
     section: match[3]!, cursor: match[4] ? decodeURIComponent(match[4]) : undefined }
 }
-async function sourceOf(commands: Commands, ref: FeishuRef) {
+/** 一次读取突发（例如话题翻页）共享的来源消息缓存：按触发器 ID 短 TTL 复用，避免每页重复 mget。 */
+export type SourceMemo = Map<string, { at: number; source: z.infer<typeof sourceSchema> }>
+const SOURCE_TTL_MS = 10_000
+async function sourceOf(commands: Commands, ref: FeishuRef, memo?: SourceMemo) {
   const id = messageId.parse(ref.messageId)
+  const hit = memo?.get(ref.triggerId)
+  if (hit && Date.now() - hit.at < SOURCE_TTL_MS && hit.source.message_id === id && hit.source.chat_id === ref.chatId) return hit.source
   // 使用原始 mget 端点读取父/根 ID，避免触发 CLI 的线程展开。
   const params = JSON.stringify({ message_ids: [id] })
   const listed = await commands.lark(['api', 'GET', '/open-apis/im/v1/messages/mget', '--params', params])
@@ -64,18 +69,19 @@ async function sourceOf(commands: Commands, ref: FeishuRef) {
   const source = sourceResult.items.find(message => message.message_id === id)
   if (!source || source.deleted) throw new Error('The source Feishu message is unavailable or deleted; retained trigger text is still readable')
   if (source.chat_id !== ref.chatId) throw new Error('Feishu source chat does not match the accepted trigger')
+  memo?.set(ref.triggerId, { at: Date.now(), source })
   return source
 }
 
 export interface FeishuPage<M> { status: string; thread_id?: string; messages: M[]; next_resource: string | null; skipped?: number }
 export interface FeishuOne<M> { status: string; message: M | null }
-/** 读取触发器来源消息的一条消息或有界话题分页，并显式提供分页续读。 */
+/** 读取触发器来源消息的一条消息或有界话题分页，并显式提供分页续读；`memo` 供调用方在翻页突发间复用来源消息。 */
 export async function readFeishu(commands: Commands, ref: FeishuRef, resource: string, pageSize: number,
-  order: 'asc' | 'desc' = 'asc'): Promise<FeishuPage<FeishuMessage> | FeishuOne<FeishuMessage>> {
+  order: 'asc' | 'desc' = 'asc', memo?: SourceMemo): Promise<FeishuPage<FeishuMessage> | FeishuOne<FeishuMessage>> {
   const request = feishuResource(resource)
   if (request.triggerId !== ref.triggerId) throw new Error('A Feishu source trigger is required')
   if (request.section === 'around') throw new Error('The chat around a message is read with feishuRead')
-  const source = await sourceOf(commands, ref)
+  const source = await sourceOf(commands, ref, memo)
   if (request.section === 'thread') {
     if (!source.thread_id) return { status: 'no_thread', messages: [], next_resource: null }
     const args = ['im', '+threads-messages-list', '--thread', source.thread_id, '--order', order, '--page-size', String(pageSize), '--no-reactions']

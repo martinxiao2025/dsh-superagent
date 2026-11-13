@@ -1,34 +1,20 @@
 /** 来源状态视图（健康状态、被过滤的触发器、被丢弃的回复）与来源设置卡片。 */
-import { useEffect, useState, type ReactElement } from 'react'
-import type { FieldSpec } from '../sources/kind.ts'
+import { useEffect, useState } from 'react'
+import type { FieldSpec } from '../fields.ts'
 import { usePoll, type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
-import type { SourceCheck } from '../setup.ts'
+import { VerifyRow, useFieldChecks } from './checks.tsx'
 import { Button, DisclosureRow, Dot, Icon, InfoTip, Input, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { sourceMark } from './marks.ts'
 import { useAction, usePanel, usePanelData } from './provider.tsx'
 import { setupPage, settingsRoute, type Route } from './route.ts'
 import { ConfigHistory, Field, Fields, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
-import { actorName, errorText, healthText, localized, readableMarkers, reasonLabel, sourceCheckText, valueLabel, when } from './text.ts'
+import { actorName, errorText, healthText, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
 import { CheckSetupButton, ConfirmButton, Hint, LabelValue, LoadState, Section, SetupMessage, StatusHead, When } from './widgets.tsx'
 
 /** 新增表单里每个类型优先展示的关键字段；消息来源目前只有飞书。 */
 const ADD_FIELDS: Readonly<Record<string, readonly string[]>> = {
   feishu: ['instanceUrl', 'cli'],
-}
-/** 一行字段加一个独立的验证按钮，结果就地显示在字段下方。 */
-export function VerifyRow({ label, busy, check, onVerify, children }: { label: string; busy: boolean; check?: SourceCheck
-  onVerify: () => void; children: ReactElement<{ id?: string }> }) {
-  const { t } = usePanel()
-  return <div className="dt-verify-item">
-    <div className="dt-verify-row">{children}
-      <Button variant="outline" size="sm" disabled={busy} aria-busy={busy} aria-label={`${t('verify')} · ${label}`}
-        onClick={onVerify}>{busy ? t('verifyBusy') : t('verify')}</Button>
-    </div>
-    {check && <p className={check.ok ? 'dt-hint dt-check' : 'dt-error dt-check'} role={check.ok ? 'status' : 'alert'}>
-      {sourceCheckText(t, check)}
-    </p>}
-  </div>
 }
 /** 「新增来源」区块：项目名称 + 类型 + 关键配置，逐字段真实预检后一次性创建。 */
 function AddSource() {
@@ -39,15 +25,15 @@ function AddSource() {
   const [id, setId] = useState('')
   const [name, setName] = useState('')
   const [config, setConfig] = useState<Record<string, unknown>>({})
-  const [checking, setChecking] = useState<Record<string, boolean>>({})
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
+  const fieldChecks = useFieldChecks('POST sources/verify', () =>
+    ({ kind: selected, name: name.trim(), ...id.trim() ? { id: id.trim() } : {}, config }))
   const create = useAction(async () => {
     const body: { kind: string; id?: string; name: string; config?: unknown } = { kind: selected, name: name.trim() }
     if (id.trim()) body.id = id.trim()
     if (Object.keys(config).length > 0) body.config = config
     const { id: created } = await call('POST sources', { body })
     notify(t('sourceAdded', { id: created }))
-    setName(''); setId(''); setConfig({}); setChecks({})
+    setName(''); setId(''); setConfig({}); fieldChecks.reset()
   }, { reload })
   if (kinds.length === 0) return null
   // 类型目录到达后默认选中第一项；`kind` 只记录用户的显式选择。只有一种类型时不显示选择器。
@@ -59,57 +45,45 @@ function AddSource() {
   const records = settings.sources.map(source => ({ id: source.id, kind: source.kind, title: source.title }))
   const edit = (field: FieldSpec, next: unknown) => setConfig(current => ({ ...current, [field.key]: next }))
   const chooseKind = (next: string) => {
-    setKind(next); setConfig({}); setChecks({})
-  }
-  const runVerify = async (field: string) => {
-    setChecking(current => ({ ...current, [field]: true }))
-    try {
-      const body = { kind: selected, name: name.trim(), ...id.trim() ? { id: id.trim() } : {}, config, field }
-      const result = await call('POST sources/verify', { body })
-      setChecks(current => {
-        const next = { ...current }
-        for (const check of result.checks) next[check.field] = check
-        return next
-      })
-    } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
+    setKind(next); setConfig({}); fieldChecks.reset()
   }
   return <div className="dt-source-add" role="group" aria-label={t('sourceAddTitle')}>
     <div className="dt-row-main">
       <div className="dt-row-title"><span className="dt-card-title">{t('sourceAddTitle')}</span><InfoTip text={t('sourceAddHint')} /></div>
     </div>
     <div className="dt-add-grid">
-      <VerifyRow label={t('sourceRecordName')} busy={checking.name === true} check={checks.name}
-        onVerify={() => { void runVerify('name') }}>
+      <VerifyRow label={t('sourceRecordName')} busy={fieldChecks.checking.name === true} check={fieldChecks.checks.name}
+        onVerify={() => { void fieldChecks.verify('name') }}>
         <Field label={t('sourceRecordName')} hint={t('sourceRecordNameHint')}>
-          <Input required value={name} placeholder={t('sourceRecordNamePlaceholder')} aria-invalid={checks.name?.ok === false}
+          <Input required value={name} placeholder={t('sourceRecordNamePlaceholder')} aria-invalid={fieldChecks.checks.name?.ok === false}
             onChange={event => setName(event.target.value)} />
         </Field>
       </VerifyRow>
-      {!single && <VerifyRow label={t('sourceAddKind')} busy={checking.kind === true} check={checks.kind}
-        onVerify={() => { void runVerify('kind') }}>
+      {!single && <VerifyRow label={t('sourceAddKind')} busy={fieldChecks.checking.kind === true} check={fieldChecks.checks.kind}
+        onVerify={() => { void fieldChecks.verify('kind') }}>
         <Field label={t('sourceAddKind')}>
           <select className="dt-select" value={selected} onChange={event => chooseKind(event.target.value)}>
             {kinds.map(item => <option key={item.kind} value={item.kind}>{localized(t, item.title)}</option>)}
           </select>
         </Field>
       </VerifyRow>}
-      <VerifyRow label={t('sourceAddId')} busy={checking.id === true} check={checks.id}
-        onVerify={() => { void runVerify('id') }}>
+      <VerifyRow label={t('sourceAddId')} busy={fieldChecks.checking.id === true} check={fieldChecks.checks.id}
+        onVerify={() => { void fieldChecks.verify('id') }}>
         <Field label={t('sourceAddId')} hint={t('sourceAddIdHint')}>
           <Input value={id} placeholder={selected ? `${selected}-2` : ''} onChange={event => setId(event.target.value)} />
         </Field>
       </VerifyRow>
     </div>
     <div className="dt-add-fields">
-      {visible.map(field => <VerifyRow key={field.key} label={localized(t, field.label)} busy={checking[field.key] === true}
-        check={checks[field.key]} onVerify={() => { void runVerify(field.key) }}>
+      {visible.map(field => <VerifyRow key={field.key} label={localized(t, field.label)} busy={fieldChecks.checking[field.key] === true}
+        check={fieldChecks.checks[field.key]} onVerify={() => { void fieldChecks.verify(field.key) }}>
         <SourceField field={field} value={config[field.key]} saved={undefined} fact={undefined} labels={{}}
           records={records} onChange={next => edit(field, next)} />
       </VerifyRow>)}
     </div>
     <div className="dt-row-buttons">
-      <Button variant="outline" disabled={checking.all === true} aria-busy={checking.all === true}
-        onClick={() => { void runVerify('all') }}>{checking.all ? t('verifyBusy') : t('verifyAll')}</Button>
+      <Button variant="outline" disabled={fieldChecks.checking.all === true} aria-busy={fieldChecks.checking.all === true}
+        onClick={() => { void fieldChecks.verify('all') }}>{fieldChecks.checking.all ? t('verifyBusy') : t('verifyAll')}</Button>
       <Button variant="primary" disabled={create.busy || !selected || !name.trim()}
         onClick={() => { void create.run() }}>{t('sourceAdd')}</Button>
     </div>

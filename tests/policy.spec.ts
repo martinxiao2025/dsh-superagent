@@ -203,14 +203,16 @@ describe('revalidate and version', () => {
     expect(setup(nobody).policy.revalidate(mandate)).toBe(false)
     const silent = { ...base, sources: { feishu: feishuSource({ chats: [], directMessages: true }) } }
     expect(setup(silent).policy.revalidate(mandate)).toBe(false)
-    // 在准入关口之前记录其如何接纳触发器的 Mandate，在其发送者仍在名单中且来源仍在监听期间有效。
-    const listed: MandateBasis = { via: 'listed', source: 'feishu', scope: { chatId: CHAT, direct: false }, sender: 'Alice' }
-    expect(setup(silent).policy.revalidate({ ...mandate, basis: listed })).toBe(false)
-    expect(policy.revalidate({ ...mandate, basis: listed })).toBe(true)
-    const inferred = { ...mandate, strength: 'inferred' as const, basis: { via: 'listed', observation: {}, rules: ['copy'] } satisfies MandateBasis }
-    expect(policy.revalidate(inferred)).toBe(true)
-    expect(setup({ ...base, eval: { ...base.eval, mode: 'observe' } }).policy.revalidate(inferred)).toBe(false)
-    expect(setup({ ...base, policy: { ...base.policy, rules: base.policy.rules.map(rule => ({ ...rule, enabled: rule.id !== 'copy' })) } }).policy.revalidate(inferred)).toBe(false)
+    // 机器人候选的授权在机器人仍在名单且候选仍可成为工作时有效：模式离开 auto 或规则停用即失效。
+    const bot = { ...mandate, strength: 'inferred' as const, actor: { source: 'feishu', id: 'cli_bot' },
+      basis: { via: 'bot', source: 'feishu', scope: { chatId: CHAT, direct: false, mentioned: false }, row: CHAT,
+        sender: 'Bot', observation: { mode: 'auto' as const }, rules: ['copy'] } satisfies MandateBasis }
+    const withBot = SettingsSchema.parse({ ...base, policy: { ...base.policy,
+      sources: { ...base.policy.sources, feishu: { ...base.policy.sources.feishu!, bots: [{ id: 'cli_bot', name: 'Bot' }] } } } })
+    expect(setup(withBot).policy.revalidate(bot)).toBe(true)
+    expect(setup({ ...withBot, eval: { ...withBot.eval, mode: 'observe' } }).policy.revalidate(bot)).toBe(false)
+    expect(setup({ ...withBot, policy: { ...withBot.policy,
+      rules: withBot.policy.rules.map(rule => ({ ...rule, enabled: rule.id !== 'copy' })) } }).policy.revalidate(bot)).toBe(false)
     expect(setup(nobody).policy.revalidate({ ...mandate, basis: { via: 'followup' } })).toBe(true)
   })
   it('changes the Policy version for rules, accept mode and the Sources\' parts, not for pause, concurrency, models or Source configuration', () => {
@@ -297,8 +299,8 @@ describe('policy effects', () => {
     { id: 'visual', name: 'Visual', enabled: true, instruction: 'Fix colors.' }],
     sources: { feishu: { allowed: [{ id: 'ou_alice' }] } } } })
   const ticket = (id: string, mandate: object) => ({ id, mandate } as unknown as Ticket)
-  const inferred = ticket('t1', { strength: 'inferred', actor: { source: 'feishu', id: 'ou_guest' }, basis: { via: 'listed', rules: ['copy'] } })
-  const explicit = ticket('t2', { strength: 'explicit', actor: { source: 'feishu', id: 'ou_alice' }, basis: { via: 'listed', source: 'feishu' } })
+  const inferred = ticket('t1', { strength: 'inferred', actor: { source: 'feishu', id: 'ou_guest' }, basis: { via: 'addressed', addressed: 'mention', rules: ['copy'] } })
+  const explicit = ticket('t2', { strength: 'explicit', actor: { source: 'feishu', id: 'ou_alice' }, basis: { via: 'addressed', addressed: 'mention', source: 'feishu' } })
   it('tells a ticket how a change bears on it, and leaves the others alone', () => {
     const rules = (copy: object, visual: object = {}) => ({ ...base, policy: { ...base.policy, rules: [{ ...base.policy.rules[0]!, ...copy }, { ...base.policy.rules[1]!, ...visual }] } })
     // 工单未在其下被接受的规则不会对它造成任何改变。
@@ -312,15 +314,17 @@ describe('policy effects', () => {
     expect(policyEffects([explicit], base, allowed([]), scope).get('t2')).toEqual({ requesterAllowed: false, requester: { source: 'feishu', id: 'ou_alice' } })
   })
   it('tells an inferred ticket that inferred work is no longer accepted when the accept mode leaves auto, and names a bot it is for', () => {
-    const auto = { ...base, eval: { ...base.eval, mode: 'auto' as const } }
-    const observe = { ...base, eval: { ...base.eval, mode: 'observe' as const } }
+    const botBase = SettingsSchema.parse({ ...base, policy: { ...base.policy,
+      sources: { ...base.policy.sources, feishu: { ...base.policy.sources.feishu!, bots: [{ id: 'ou_alice', name: 'Alice' }] } } } })
+    const auto = { ...botBase, eval: { ...base.eval, mode: 'auto' as const } }
+    const observe = { ...botBase, eval: { ...base.eval, mode: 'observe' as const } }
     const rule = ticket('t3', { strength: 'inferred', actor: { source: 'feishu', id: 'ou_alice' },
-      basis: { via: 'listed', source: 'feishu', rules: ['copy'], observation: {} } })
+      basis: { via: 'bot', source: 'feishu', rules: ['copy'], observation: { mode: 'auto' as const } } })
     const effects = policyEffects([rule, explicit], auto, observe, scope)
     // 这不是发送者被移除：写下它的人仍可启动工作。
     expect(effects.get('t3')).toEqual({ proactive: false })
     expect(effects.has('t2')).toBe(false)
-    const bot = ticket('t4', { strength: 'explicit', actor: { source: 'feishu', id: 'cli_ci_bot' }, basis: { via: 'listed', source: 'feishu' } })
+    const bot = ticket('t4', { strength: 'explicit', actor: { source: 'feishu', id: 'cli_ci_bot' }, basis: { via: 'addressed', addressed: 'mention', source: 'feishu' } })
     const listed = { ...base, policy: { ...base.policy, sources: { ...base.policy.sources, feishu: { ...base.policy.sources.feishu!, allowed: [{ id: 'cli_ci_bot' }] } } } }
     expect(policyEffects([bot], listed, base, scope).get('t4')).toEqual({ requesterAllowed: false, requester: { source: 'feishu', id: 'cli_ci_bot' } })
   })
@@ -351,7 +355,7 @@ describe('policy effects', () => {
     expect(policyEffects([proactive], table('inferred'), table('inferred', 'observe'), observed).get('t3')).toEqual({ proactive: false })
     const deleted = { ...base, policy: { ...base.policy, rules: base.policy.rules.filter(rule => rule.id !== 'visual') } }
     const visual = ticket('t4', { strength: 'explicit', actor: { source: 'feishu', id: 'ou_alice' },
-      basis: { via: 'listed', source: 'feishu', rules: ['visual'] } })
+      basis: { via: 'addressed', addressed: 'mention', source: 'feishu', rules: ['visual'] } })
     expect(policyEffects([visual], base, deleted, scope).get('t4')).toEqual({ rules: [{ id: 'visual', name: 'Visual', change: 'disabled' }] })
   })
 })

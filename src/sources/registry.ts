@@ -177,10 +177,17 @@ export class SourceRegistry implements SourceScope {
     if (!instance.enabled) return { listened: false, reason: 'source_disabled' }
     return kind.scope ? kind.scope({ meta: input.meta }, instance.config) : { listened: true, observed: false }
   }
+  /** 解析结果按记录 ID 缓存：记录内容（类型、名称、启用、配置）未变化时不再重复全量 schema 解析。 */
+  private readonly parsed = new Map<string, { key: string; instance: SourceInstance }>()
   /** 存储的配置校验失败时回退到 schema 默认值，并在运行时按停用处理；已保存的启用状态不变。 */
   private resolve(id: string, kind: SourceKind, stored: { name: string; enabled: boolean; config: Record<string, unknown> }): SourceInstance {
+    const key = `${kind.kind}\u0000${JSON.stringify(stored)}`
+    const hit = this.parsed.get(id)
+    if (hit && hit.key === key) return hit.instance
     const parsed = kind.schema.safeParse(stored.config ?? {})
-    return { id, kind: kind.kind, name: stored.name, enabled: parsed.success && stored.enabled,
+    const instance: SourceInstance = { id, kind: kind.kind, name: stored.name, enabled: parsed.success && stored.enabled,
       config: parsed.success ? parsed.data : kind.schema.parse({}) }
+    this.parsed.set(id, { key, instance })
+    return instance
   }
 }

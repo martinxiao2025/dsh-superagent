@@ -3,6 +3,7 @@ import type { EffectKind } from '../src/app/effects.ts'
 import { en, zh, type DshSuperagentKey } from '../src/client/locales.ts'
 import { reasonLabel, type T } from '../src/client/text.ts'
 import { REASONS, USER_ERRORS } from '../src/core/index.ts'
+import { SETUP_PROBLEMS } from '../src/setup.ts'
 
 const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort()
 
@@ -10,6 +11,18 @@ it('names the same placeholders in both languages', () => {
   const keys = Object.keys(zh) as DshSuperagentKey[]
   expect(keys.filter(key => placeholders(zh[key]).join() !== placeholders(en[key]).join())).toEqual([])
   expect(keys.filter(key => !zh[key] || !en[key])).toEqual([])
+})
+
+it('diffs the setup problem and user error key sets both ways, in both languages', () => {
+  // 双向 diff：宿主登记的每个码都有文案键；字典里也没有游离于宿主登记之外的 setup./userError. 键。
+  for (const [registry, prefix] of [[SETUP_PROBLEMS, 'setup.'], [USER_ERRORS, 'userError.']] as const) {
+    const codes = Object.keys(registry)
+    for (const language of [zh, en]) {
+      expect(codes.filter(code => !(`${prefix}${code}` in language))).toEqual([])
+      expect(Object.keys(language).filter(key => key.startsWith(prefix)
+        && !codes.includes(key.slice(prefix.length)))).toEqual([])
+    }
+  }
 })
 
 it('words a reason by its code with its values, each of a batch, and words a person or an assessor wrote as written', () => {

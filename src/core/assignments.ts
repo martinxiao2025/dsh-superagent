@@ -3,9 +3,11 @@ import { key } from './ids.ts'
 import { UserError } from './errors.ts'
 import { latestAssignment, liveTicket, runningAssignment } from './model.ts'
 import type { ReportState, Ticket } from './model.ts'
-import { EnginePart, type EngineOptions } from './part.ts'
+import { automatic } from './inputs.ts'
+import { EnginePart, type EngineOptions, type Requeues } from './part.ts'
+import type { Follows } from './follows.ts'
 import type { Replies } from './replies.ts'
-import { automatic, type Tickets } from './tickets.ts'
+import type { Tickets } from './tickets.ts'
 
 /** 任务分配所汇报的内容：工作单元的报告，或执行器自身的报告（空闲回合后为 `waiting`，出错后为 `failed`）。 */
 export interface WorkerReport {
@@ -26,7 +28,8 @@ const RECOVERY_NOTE = 'The host restarted during this ticket. Inspect the curren
  * 它依赖 Tickets 重启或结束工单，依赖 Replies 撤回被报告替换的提问；Engine 把执行器的生命周期回调及其工作单元的报告路由到这里。
  */
 export class Assignments extends EnginePart {
-  constructor(options: EngineOptions, private readonly tickets: Tickets, private readonly replies: Replies) { super(options) }
+  constructor(options: EngineOptions, private readonly tickets: Tickets, private readonly replies: Replies,
+    private readonly follows: Follows, private readonly requeues: Requeues) { super(options) }
 
   /** 将未结束的任务分配标记为运行中，在未结束的工单上排队投递等待中的未投递输入，并发出 `assignment.started`。 */
   started(ticketId: string, assignmentId: string): void {
@@ -36,7 +39,7 @@ export class Assignments extends EnginePart {
     assignment.state = 'running'; assignment.startedAt ??= this.now()
     ticket.updatedAt = this.now()
     this.repo.tickets.save(ticket)
-    if (liveTicket(ticket) && ticket.undelivered.length) this.options.executor.deliver(ticket, assignment)
+    if (liveTicket(ticket) && ticket.undelivered.length) this.defer(() => this.options.executor.deliver(ticket, assignment))
     this.emit('assignment.started', { ticketId, assignmentId })
   }
   /**
@@ -85,7 +88,7 @@ export class Assignments extends EnginePart {
     const busy = !!running.deliveredAt && !!report && running.deliveredAt >= report.at
     const settled = !!report && ['waiting', 'ready', 'blocked', 'failed'].includes(report.state) && !busy
     if (!settled) this.tickets.restart(ticket, running, 'hostRestarted', RECOVERY_NOTE)
-    else if (ticket.undelivered.length) this.options.executor.deliver(ticket, running)
+    else if (ticket.undelivered.length) this.defer(() => this.options.executor.deliver(ticket, running))
   }
   /**
    * 在未结束工单的当前任务分配上记录工作单元状态报告，更新 `attention`、`answers`、被暂扣的自动输入，
@@ -119,13 +122,13 @@ export class Assignments extends EnginePart {
     assignment.report = { state: report.state, summary: report.summary, at }
     ticket.updatedAt = at
     if (report.answers && !ticket.answers?.includes(report.answers)) ticket.answers = [...ticket.answers ?? [], report.answers]
-    if (report.answers) this.takeUp(ticketId, report.answers)
+    if (report.answers) this.requeues.takeUp(ticketId, report.answers)
     if (report.state === 'blocked' || report.state === 'failed') ticket.undelivered = ticket.undelivered.filter(id => !automatic(ticket.inputs.find(input => input.id === id)))
     this.repo.tickets.save(ticket)
     // 关注线程的工单随这些线程一起结束：ready 报告只有在其 followsDone 成立时才以其结果结束工单。
-    const ready = !ticket.follows?.length ? 'completed' : this.tickets.followsDone(ticket)?.outcome
+    const ready = !ticket.follows?.length ? 'completed' : this.follows.followsDone(ticket)?.outcome
     // 工单延迟关闭后出现的 dropped 报告，按该关闭的结果结束工单，最终通知会说明。
-    const outcome = report.state === 'dropped' ? this.tickets.followsDone(ticket)?.outcome ?? 'dropped' : report.state === 'ready' ? ready : undefined
+    const outcome = report.state === 'dropped' ? this.follows.followsDone(ticket)?.outcome ?? 'dropped' : report.state === 'ready' ? ready : undefined
     if (outcome) this.tickets.end(ticketId, 'executor', outcome, at)
     return this.require(ticketId)
   }

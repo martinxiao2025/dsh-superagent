@@ -120,7 +120,7 @@ const trigger: Trigger = { id: 'request-1', source: 'github', threads: [{ source
   at: '2026-09-09T00:00:00Z', text: 'Please inspect the failing check.\n' + 'Additional context. '.repeat(20), meta: {} }
 const SUMMARY = 'The focused check passed.\n' + 'Detailed evidence. '.repeat(20)
 const ticket: Ticket = { id: 'ticket-1', title: 'Inspect failing check', decisionId: 'd1', channels: [], inputs: [], undelivered: [],
-  mandate: { strength: 'explicit', policyVersion: 'v1', basis: { via: 'listed', sender: 'Alice' }, actor: trigger.actor, scope: 'small' },
+  mandate: { strength: 'explicit', policyVersion: 'v1', basis: { via: 'addressed', addressed: 'mention', sender: 'Alice' }, actor: trigger.actor, scope: 'small' },
   assignments: [{ id: 'a1', state: 'running', createdAt: '2026-09-09T00:00:00Z', startedAt: '2026-09-09T00:00:00Z', report: { state: 'ready', summary: SUMMARY, at: '' } }],
   createdAt: '2026-09-09T00:00:00Z', updatedAt: '2026-09-09T00:00:00Z',
   origin: { triggerId: 'request-1', triggerIds: ['request-1'] },
@@ -142,10 +142,6 @@ it('shows a trigger and a ticket as cards with a short preview and references to
     assignments: { items: [{ id: 'a1', state: 'running', at: '2026-09-09T00:00:00Z', report: { state: 'ready', at: '', preview: expect.stringMatching(/^The focused/),
       chars: SUMMARY.length, read: 'ticket/ticket-1/report/a1' } }] },
     assignment: 'ticket/ticket-1/assignment', result: 'ticket/ticket-1/result', transcript: 'ticket/ticket-1/transcript' })
-  // 它的 worker 不读取 Decision，因此看不到任何 Decision 的 id。
-  expect(ticketDetails({ ...ticket, inputs: [{ id: 'r', kind: 'reopen', decisionId: 'd2', at: '1' }] }, threads, [], true)).toMatchObject({
-    inputs: { items: [{ kind: 'reopen', read: `ticket/ticket-1/input/${key('r')}` }] } })
-  expect(JSON.stringify(ticketDetails({ ...ticket, inputs: [{ id: 'r', kind: 'reopen', decisionId: 'd2', at: '1' }] }, threads, [], true))).not.toMatch(/"d[12]"/)
   // 最新的十条 Input，最新的在前，每条按其行给出的名称读取；下一页从 Input 自身的列表读取。
   const inputs = Array.from({ length: 12 }, (_, n) => ({ id: `text:${n}`, kind: 'text' as const, text: `Note ${n}`, at: String(n) }))
   const page = ticketDetails({ ...ticket, inputs: [...inputs, { id: 'text:long', kind: 'text', text: 'Long note. '.repeat(10), at: '12' }], undelivered: ['text:11'] },

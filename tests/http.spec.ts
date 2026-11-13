@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { UserError } from '../src/core/index.ts'
 import { registerHttp } from '../src/app/http.ts'
@@ -8,6 +8,11 @@ import type { HttpHost } from '../src/app/http.ts'
 import type { StartupStatus } from '../src/app/startup.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { SetupError } from '../src/setup.ts'
+import { ApiError, caller } from '../src/client/api.ts'
+import { zh } from '../src/client/locales.ts'
+import { fill } from '../src/infra/text.ts'
+
+afterEach(() => { vi.unstubAllGlobals() })
 
 type Handler = (req: unknown, res: unknown) => Promise<void>
 type Headers = Record<string, string | undefined>
@@ -81,12 +86,13 @@ it('serves a Project\'s Tasks and queue state for the panel', async () => {
   const item = { id: 'q1', project: 'a', projectName: 'A', task: 't1', item: 0, title: '一', state: 'running' as const, attempt: 0,
     dueAt: 0, ticketId: 'ticket-1', enqueuedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }
   const call = serve({ configured: () => true, store: { settings: () => settings },
-    queue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item], projects: [] }) })
+    queue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item], projects: [] }),
+    projectQueue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item], projects: [] }) })
   expect(await call('GET', 'projects/a/tasks')).toEqual({ status: 200, body: {
     project: { id: 'a', name: 'A', enabled: true, codeRepo: { kind: 'github', name: 'acme/widgets' },
       taskSource: { kind: 'excel', name: 'excel' }, execution: settings.projects.a!.execution,
       schedule: settings.projects.a!.schedule, retry: settings.projects.a!.retry, taskPolicy: settings.projects.a!.taskPolicy },
-    at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, queued: 0, running: 1, items: [item] } })
+    at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, queued: 0, running: 1, items: [item], total: 1 } })
   expect(await call('GET', 'projects/missing/tasks')).toEqual({ status: 404, body: { error: 'Project not found' } })
 })
 
@@ -141,8 +147,8 @@ it('decodes path parameters and parses each route\'s query', async () => {
   })
   expect(await call('POST', `threads/${encodeURIComponent('feishu:oc_1:om/root')}/unsubscribe`)).toMatchObject({ status: 200, body: { context_delivery: 'injected' } })
   // 无效的 offset 默认为 0，超过路由上限的 limit 会被截断。
-  expect(await call('GET', 'decisions?kind=accept%2Creopen&limit=500&offset=x&window=24h')).toEqual({ status: 200, body: { items: [], next_offset: null } })
-  expect(seen).toEqual(['feishu:oc_1:om/root', { filter: { kinds: ['accept', 'reopen'], since: expect.any(String) }, offset: 0, limit: 200 }])
+  expect(await call('GET', 'decisions?kind=accept&limit=500&offset=x&window=24h')).toEqual({ status: 200, body: { items: [], next_offset: null } })
+  expect(seen).toEqual(['feishu:oc_1:om/root', { filter: { kinds: ['accept'], since: expect.any(String) }, offset: 0, limit: 200 }])
 })
 
 it('answers only a same-origin request from the panel on the loopback address', async () => {
@@ -177,6 +183,30 @@ it('keeps the management prefix mounted and explains a pending or failed startup
   const failed = servePending({ phase: 'failed', detail: '', stateDir: '/srv/state' })
   expect(await failed.call('POST', 'tickets/t9/retry')).toEqual({ status: 503,
     body: { error: 'dsh-superagent is not ready', code: 'startupPending', phase: 'failed', detail: '', stateDir: '/srv/state' } })
+})
+
+it('maps the mounted 503 startup payload onto the client ApiError, worded by the panel dictionary', async () => {
+  const pending: StartupStatus = { phase: 'locked', detail: '状态目录锁被占用，最多等待 35 秒', stateDir: 'C:\\state' }
+  const { call } = servePending(pending)
+  // 与浏览器一致的线格式：真实挂载处理器的响应体原样交给面板客户端。
+  const { status, body } = await call('GET', 'state')
+  expect(status).toBe(503)
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status })))
+  // 与 provider.tsx 相同的本地化措辞：启动诊断优先于服务端原文，并带出阶段与状态目录。
+  const messages = { offline: zh.offline, notRunning: `${zh.hostNotRunning}\n${zh.startupMissing}`,
+    serverError: (code: number) => fill(zh.serverError, { status: String(code) }),
+    requestFailed: (code: number) => fill(zh.requestFailed, { status: String(code) }), setup: () => '', user: () => '',
+    startup: (phase: string, detail: string, stateDir: string) =>
+      `${fill(zh.startupPending, { phase, detail })}\n${fill(zh.startupHint, { stateDir })}` }
+  const error = await caller(() => messages)('GET state').then(() => undefined, (thrown: unknown) => thrown) as ApiError
+  expect(error).toBeInstanceOf(ApiError)
+  expect(error.message).toBe('dsh-superagent 尚未就绪（启动阶段：locked）。状态目录锁被占用，最多等待 35 秒\n' +
+    '诊断：查看 C:\\state 下的 startup.json，或请求 /orchestrator/api/health。')
+  expect(error.details).toMatchObject({ phase: 'locked', detail: pending.detail, stateDir: 'C:\\state' })
+  expect(error.status).toBe(503)
+  expect(error.missing).toBe(false)
+  // 响应体非空：不标记宿主不可达，重启轮询因此能区分「未就绪」与「下线中」。
+  expect('unreachable' in error.details).toBe(false)
 })
 
 it('serves the runtime on an already mounted prefix once it is attached', async () => {

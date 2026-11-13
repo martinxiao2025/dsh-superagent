@@ -12,7 +12,7 @@ it('opens the Decisions under Policy from the flow line with their reasons, Deci
   await mount()
   await click(all('.dt-stat button')[1]!)
   expect(tab(zh['tab.eval']).getAttribute('aria-selected')).toBe('true')
-  expect(server.requests.some(request => request.path === 'decisions?limit=30&kind=accept,reopen&window=24h')).toBe(true)
+  expect(server.requests.some(request => request.path === 'decisions?limit=30&kind=accept&window=24h')).toBe(true)
   expect(text()).toContain(zh['reason.explicitRouted'])
   await click(zh.stop)
   expect(server.requests.some(request => request.path === 'decisions?limit=30&kind=stop&window=24h')).toBe(true)

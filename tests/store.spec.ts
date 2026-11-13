@@ -58,7 +58,7 @@ it('finds triggers by thread', () => {
   store.close()
 })
 const ticket = (id: string, state: 'open' | 'ended', assignments: Pick<Assignment, 'state'>[], undelivered: string[] = []): Ticket => ({
-  id, title: id, decisionId: '', mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: 'x', id: '' }, scope: '' },
+  id, title: id, decisionId: '', mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'addressed' as const, addressed: 'mention' as const }, actor: { source: 'x', id: '' }, scope: '' },
   channels: [], assignments: assignments.map((item, index) => ({ id: `${id}-${index}`, createdAt: '', ...item })), inputs: [],
   ...state === 'ended' ? { ended: { at: '', by: 'executor' as const, reason: 'closed', outcome: 'closed' as const } } : {},
   undelivered, createdAt: '', updatedAt: '', origin: { triggerId: '', triggerIds: [] } })
@@ -217,6 +217,21 @@ it('keeps the settings as versions: the current settings are the snapshot of the
   expect(store.settings()).toMatchObject({ paused: true, executor: { maxWorkers: 5 } })
   expect(store.settingsHistory().map(version => [version.revision, version.source])).toEqual([[2, 'internal'], [1, 'panel']])
   expect([store.get(KV.settings.revision), store.blockRevision('pause'), store.keys('settings').filter(name => name === 'settings')]).toEqual([2, 1, []])
+  store.close()
+})
+
+it('caches parsed settings per revision: saves are visible at once and a rolled back save leaves the old revision', () => {
+  const store = new Store(join(directory, 'orchestrator.sqlite'))
+  // 保存后修订指针推进，缓存随写路径推进，读到的是新值。
+  store.saveSettings({ ...store.settings(), paused: true }, { source: 'panel', block: 'pause', policyVersion: '', policyChanged: false, notified: [] })
+  expect(store.settings()).toMatchObject({ paused: true })
+  // 嵌套事务里保存设置后外层回滚：KV 指针回到旧修订，缓存键失配即失效，读到旧值而不是脏缓存。
+  expect(() => store.atomic(() => {
+    store.saveSettings({ ...store.settings(), paused: false })
+    expect(store.settings()).toMatchObject({ paused: false })
+    throw new Error('boom')
+  })).toThrow('boom')
+  expect(store.settings()).toMatchObject({ paused: true })
   store.close()
 })
 

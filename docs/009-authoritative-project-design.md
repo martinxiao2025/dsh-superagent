@@ -246,7 +246,7 @@ interface TaskSourceDriver<C> {
 
 - 只有 `docx` 与 `bitable` 产生任务；`sheet`、`file` 跳过并计数；`folder` 递归；`shortcut` 解析到目标节点，并用 visited 集合防环。
 - 读取链路：`wiki +node-get` 取 `space_id` / `obj_token` / `obj_type` / `has_child` → `wiki +node-list --parent-node-token` 递归（`--page-all` 分页）→ docx 读文档内容、bitable 读记录。
-- 现有实现只支持「单节点 + docx」（[feishu-doc.ts:46-70](../src/task-sources/feishu-doc.ts#L46-L70) 要求 `obj_type === 'docx'`），因此多文档是新增能力，不是参数调整。
+- 多文档实现前，旧实现只支持「单节点 + docx」（原 `feishu-doc.ts`，要求 `obj_type === 'docx'`；该文件已删除，节点类型判定现位于 [feishu-wiki-read.ts](../src/task-sources/feishu-wiki-read.ts#L129-L148)），因此多文档是新增能力，不是参数调整。
 - 身份限制：个人知识库 `my_library` 只对 user 身份可见；应用身份需被加入空间成员。校验必须区分「凭据无权」与「空间不存在」。
 
 多文档任务规划：

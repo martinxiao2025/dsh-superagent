@@ -1,5 +1,23 @@
-/** 组件健康登记表，在总览和来源状态面板中显示。 */
-import type { Health } from '../sources/host.ts'
+/** 组件健康状态与登记表，在总览和来源状态面板中显示；类型在此定义，来源宿主等模块按需导入。 */
+import { fill } from './text.ts'
+
+/** 固定的英文健康模板（`{name}` 占位符）；面板按界面语言本地化每个 `code`。 */
+export const HEALTH_TEXT = {
+  setupPending: 'Waiting for the deployment check',
+  sourceOff: 'Off',
+  feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
+  feishuBotMissing: 'Waiting for the Feishu bot',
+  pollFailures: '{count} consecutive failed polls; last: {error}',
+} as const
+export type HealthCode = keyof typeof HEALTH_TEXT
+/** 健康条目所属的子系统；面板据此区分运行时、写回、调度、同步与沟通故障。 */
+export const HEALTH_CATEGORIES = ['runtime', 'writeback', 'schedule', 'sync', 'workspace', 'communication'] as const
+export type HealthCategory = typeof HEALTH_CATEGORIES[number]
+export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail: string; at?: string; code?: HealthCode; values?: Record<string, string>;
+  category?: HealthCategory }
+export function health(state: Health['state'], code: HealthCode, values: Record<string, string> = {}): Health {
+  return { state, detail: fill(HEALTH_TEXT[code], values), code, ...Object.keys(values).length ? { values } : {} }
+}
 
 export interface HealthEntry {
   get(): Health | undefined

@@ -28,7 +28,7 @@ function harness(policyOverrides: Partial<Policy> = {}, { emit, prepareTicket }:
   let version = 'v1', paused = false
   const policy: Policy = {
     get version() { return version }, get paused() { return paused }, evalTimeoutMs: 60_000,
-    gate: (t, thread) => !t.human ? { admissible: false, reason: 'not human' } : t.actor.id === 'alice' ? { admissible: true, strength: 'explicit', basis: { via: 'listed' } } : thread.subscriptions.length ? { admissible: true, strength: 'inferred', basis: { via: 'followup' } } : { admissible: false, reason: 'not a member' },
+    gate: (t, thread) => !t.human ? { admissible: false, reason: 'not human' } : t.actor.id === 'alice' ? { admissible: true, strength: 'explicit', basis: { via: 'addressed' as const, addressed: 'mention' as const } } : thread.subscriptions.length ? { admissible: true, strength: 'inferred', basis: { via: 'followup' } } : { admissible: false, reason: 'not a member' },
     revalidate: () => version !== 'revoked',
     admitsInferred: rules => rules.length > 0,
     ...policyOverrides,
@@ -116,7 +116,7 @@ describe('eval', () => {
     const h = harness()
     const decision = accepted(h)
     const ticket = h.repo.tickets.get(decision.ticketId!)!
-    expect(ticket).toMatchObject({ title: 'Fix', mandate: { strength: 'explicit', policyVersion: 'v1', basis: { via: 'listed' }, actor: member, scope: 'small' }, channels: [trigger('1').channel],
+    expect(ticket).toMatchObject({ title: 'Fix', mandate: { strength: 'explicit', policyVersion: 'v1', basis: { via: 'addressed' as const, addressed: 'mention' as const }, actor: member, scope: 'small' }, channels: [trigger('1').channel],
       origin: { triggerId: '1', triggerIds: ['1'] } })
     expect(ticket).not.toHaveProperty('ended')
     expect(ticket.assignments).toEqual([expect.objectContaining({ state: 'running', startedAt: expect.any(String) })])
@@ -306,7 +306,7 @@ describe('resume and stop', () => {
     expect(ticket.mandate.policyVersion).toBe('v1')
     expect(ticket.inputs.map(input => input.kind)).toEqual(['trigger', 'resumed'])
     expect(h.executor.start).toHaveBeenCalledTimes(2)
-    // 该消息仍作为后续消息进入评估，但不需要也不可能产生续做决策。
+    // 该消息仍作为后续消息进入评估，但不会在工单之外产生新的决策种类。
     expect(h.repo.decisions.byThread('chat:t1').filter(decision => decision.kind !== 'ignore')).toHaveLength(decisions)
   })
   it('resumes an ended ticket an earlier version left with a person\'s message waiting, on the next pass', async () => {
@@ -686,7 +686,7 @@ describe('follow-up owners', () => {
     h.engine.receive(trigger('2')); h.settle()
     const thread = h.repo.threads.get('chat:t1')!
     h.repo.threads.save({ ...thread, evaluating: { id: 'e-legacy', threadKey: 'chat:t1', triggerIds: ['2'], strength: 'explicit',
-      actor: member, basis: { via: 'listed' }, policyVersion: 'v1', startedAt: '2026-09-23T00:00:00Z', deadline: '2026-09-24T00:00:00Z' } })
+      actor: member, basis: { via: 'addressed' as const, addressed: 'mention' as const }, policyVersion: 'v1', startedAt: '2026-09-23T00:00:00Z', deadline: '2026-09-24T00:00:00Z' } })
     expect(followupOwners(trigger('2'), h.repo)).toEqual([])
     expect(h.engine.decide('2', { kind: 'ignore', reason: 'chat', evalId: 'e-legacy' })).toMatchObject({ kind: 'ignore',
       triggerIds: ['2'] })
@@ -1217,16 +1217,16 @@ describe('Evals across Policy versions, revoked Mandates and mixed batches', () 
 describe('gaps', () => {
   it('takes a mixed batch\'s strength, actor and basis from its strongest admissible Trigger, the latest of equal strength', () => {
     // 访客的消息按推断强度被接纳，就像在工单关注的线程上一样。
-    const gate: Policy['gate'] = t => t.actor.id === 'alice' ? { admissible: true, strength: 'explicit', basis: { via: 'listed' } }
+    const gate: Policy['gate'] = t => t.actor.id === 'alice' ? { admissible: true, strength: 'explicit', basis: { via: 'addressed' as const, addressed: 'mention' as const } }
       : { admissible: true, strength: 'inferred', basis: { via: 'followup' } }
     for (const order of [['guest', 'alice'], ['alice', 'guest']]) {
       const h = harness({ gate })
       order.forEach((who, index) => { h.tick(1); h.engine.receive(trigger(String(10 + index), { actor: who === 'alice' ? member : guest })) })
       h.pump()
       const alice = String(10 + order.indexOf('alice'))
-      expect(h.repo.threads.get('chat:t1')!.evaluating).toMatchObject({ strength: 'explicit', actor: member, basis: { via: 'listed' }, primary: alice })
+      expect(h.repo.threads.get('chat:t1')!.evaluating).toMatchObject({ strength: 'explicit', actor: member, basis: { via: 'addressed' as const, addressed: 'mention' as const }, primary: alice })
     }
-    const named = harness({ gate: t => ({ admissible: true, strength: 'explicit', basis: { via: 'listed', sender: t.actor.id } }) })
+    const named = harness({ gate: t => ({ admissible: true, strength: 'explicit', basis: { via: 'addressed' as const, addressed: 'mention' as const, sender: t.actor.id } }) })
     named.engine.receive(trigger('1', { actor: { source: 'chat', id: 'bob' } }))
     named.tick(1); named.engine.receive(trigger('2', { actor: { source: 'chat', id: 'carol' } }))
     named.pump()
@@ -1314,7 +1314,7 @@ describe('final review', () => {
     // 旧版本可能在评估启动工单后仍让它持有触发器。
     const thread = h.repo.threads.get('chat:t1')!
     h.repo.threads.save({ ...thread, evaluating: { id: 'old-eval', threadKey: 'chat:t1', triggerIds: ['1'], primary: '1', strength: 'explicit', actor: member,
-      basis: { via: 'listed' }, policyVersion: 'v1', startedAt: '', deadline: '2999-01-01T00:00:00.000Z' } })
+      basis: { via: 'addressed' as const, addressed: 'mention' as const }, policyVersion: 'v1', startedAt: '', deadline: '2999-01-01T00:00:00.000Z' } })
     expect(h.engine.decide('1', { kind: 'accept', title: 'Again', scope: 'small', reason: 'replayed' })).toEqual(decision)
     expect(h.repo.decisions.byThread('chat:t1').at(-1)).toMatchObject({ kind: 'ignore', reason: [{ code: 'startedTicket', triggerId: '1',
       values: { ticket: decision.ticketId } }] })

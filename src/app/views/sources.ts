@@ -1,7 +1,7 @@
 /** 来源状态视图：每个来源实例的健康状态、24 小时触发器计数，以及最近被过滤或丢弃的消息。 */
 import { threadKey } from '../../core/index.ts'
 import type { Deployment } from '../../deployment.ts'
-import type { Health } from '../../sources/host.ts'
+import type { Health } from '../../infra/health.ts'
 import { healthNames } from '../../sources/identity.ts'
 import type { SourceInstance } from '../../sources/kind.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'

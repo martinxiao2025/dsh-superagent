@@ -11,8 +11,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
 it('imports no DSH client runtime package, only React and type declarations', () => {
   const dir = join(process.cwd(), 'src/client')
-  for (const name of readdirSync(dir)) {
-    const source = readFileSync(join(dir, name), 'utf8')
+  // 命名空间子目录（locales/）也是面板模块，随平铺文件一并扫描。
+  const sources = (directory: string): [string, string][] => readdirSync(directory, { withFileTypes: true }).flatMap(entry => entry.isDirectory()
+    ? sources(join(directory, entry.name)) : [[entry.name, readFileSync(join(directory, entry.name), 'utf8')] as [string, string]])
+  for (const [name, source] of sources(dir)) {
     for (const match of source.matchAll(/^import (type )?[^'"]*from '(@deepseek-ai\/[^']+)'/gm)) expect({ name, from: match[2], typeOnly: !!match[1] }).toMatchObject({ typeOnly: true })
     expect(source).not.toContain('dsh-client-ui-primitives\'')
   }

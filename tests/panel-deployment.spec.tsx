@@ -3,6 +3,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { PluginConfig } from '../src/client/deployment.tsx'
+import { PanelProvider, usePanel as usePanelContext, usePanelData } from '../src/client/provider.tsx'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { zh } from '../src/client/locales.ts'
 import { usePanel, mount, remount, settle, all, find, tab, click, type, text, field, at, translator } from './fixtures/panel.tsx'
@@ -161,4 +162,79 @@ it('ends a restart that never stopped answering after half a minute, and reads t
   expect(reads()).toBe(ended)
   await advance(2_000)
   expect(reads()).toBe(ended + 1)
+})
+
+/** 重启检测状态机的最小消费者：把 `PanelData.restarts` 渲染到 DOM，供断言读取；按钮触发 `restart()`。 */
+function RestartProbe() {
+  const { restarts } = usePanelData()
+  const { restart } = usePanelContext()
+  return <button type="button" data-restarts={restarts} onClick={() => restart()}>restart</button>
+}
+/** 直接挂载一个 Provider（不经过整页 App），聚焦状态机本身。 */
+async function mountProbe(): Promise<{ counter: () => number; trigger: () => Promise<void>; unmount: () => Promise<void> }> {
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  await act(async () => { root.render(<PanelProvider t={translator(zh)}><RestartProbe /></PanelProvider>) })
+  await settle()
+  return {
+    counter: () => Number(container.querySelector('button')!.dataset.restarts),
+    trigger: () => click(container.querySelector('button')!),
+    unmount: async () => { await act(async () => { root.unmount() }); container.remove() },
+  }
+}
+
+it('counts a restart only after it saw the host go down and answer again, and polls every second while waiting', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  onTestFinished(() => { vi.useRealTimers() })
+  const probe = await mountProbe()
+  try {
+    const reads = () => server.requests.filter(request => request.path === 'state').length
+    const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }); await settle() }
+    expect(probe.counter()).toBe(0)
+    await probe.trigger()
+    // 等待下线期间每秒读取一次状态。
+    const waiting = reads()
+    await advance(3_100)
+    expect(reads() - waiting).toBeGreaterThanOrEqual(3)
+    // 下线这一步本身不计入重启次数（伪服务器在下线期间不记录请求，此阶段的节拍由「恢复应答后立即计数」间接保证）。
+    server.down = true
+    await advance(1_000)
+    expect(probe.counter()).toBe(0)
+    // 恢复应答即计数一次，依赖视图据此重新读取数据。
+    server.down = false
+    await advance(1_000)
+    expect(probe.counter()).toBe(1)
+    // 第二次完整的下线-恢复循环再次递增。
+    await probe.trigger()
+    server.down = true
+    await advance(1_000)
+    server.down = false
+    await advance(1_000)
+    expect(probe.counter()).toBe(2)
+  } finally { await probe.unmount() }
+})
+
+it('does not count a restart that never stopped answering, and returns to the slow cadence after half a minute', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  onTestFinished(() => { vi.useRealTimers() })
+  const probe = await mountProbe()
+  try {
+    const reads = () => server.requests.filter(request => request.path === 'state').length
+    const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }); await settle() }
+    await probe.trigger()
+    expect(probe.counter()).toBe(0)
+    // 一直有应答：每秒一次地等到 30 秒超时，计数保持为 0。
+    const waiting = reads()
+    await advance(10_000)
+    expect(reads() - waiting).toBeGreaterThanOrEqual(8)
+    expect(probe.counter()).toBe(0)
+    await advance(21_000)
+    const ended = reads()
+    await advance(3_000)
+    expect(reads()).toBe(ended)
+    await advance(2_000)
+    expect(reads()).toBe(ended + 1)
+    expect(probe.counter()).toBe(0)
+  } finally { await probe.unmount() }
 })

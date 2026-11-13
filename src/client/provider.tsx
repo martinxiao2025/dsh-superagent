@@ -6,6 +6,13 @@ import type { Route } from './route.ts'
 import STYLES from './client.css?raw'
 import { errorText, setupText, valueLabel, type T } from './text.ts'
 
+// 面板样式在模块首次加载时注入一次；此前每次挂载 Provider 都会重复插入一份 <style>。
+if (typeof document !== 'undefined') {
+  const styles = document.createElement('style')
+  styles.textContent = STYLES
+  document.head.append(styles)
+}
+
 export interface PanelContext {
   t: T
   call: Call
@@ -103,7 +110,6 @@ export function PanelProvider({ t, interval = 5000, openSession = noSession, nav
   const data = useMemo(() => ({ state, error, reload, setup: state?.setup, running: state?.load.running ?? 0, restarts }), [state, error,
     reload, restarts])
   return <Panel.Provider value={context}><PanelState.Provider value={data}>
-    <style>{STYLES}</style>
     {children}
     {toast && <Toast key={toast.id} text={toast.text} onDone={() => setToast(undefined)} />}
   </PanelState.Provider></Panel.Provider>

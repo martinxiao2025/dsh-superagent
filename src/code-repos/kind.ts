@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import type { ResolvedSource } from '../deployment.ts'
 import { LIMITS } from '../limits.ts'
-import type { FieldSpec, Localized } from '../sources/kind.ts'
+import type { FieldSpec, Localized } from '../fields.ts'
 
 /** 代码仓库记录可选的类型；GitHub 与 GitLab 只负责克隆、同步与凭据，不产生任务。 */
 export const CodeRepoKindSchema = z.enum(['github', 'gitlab'])

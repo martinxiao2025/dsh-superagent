@@ -58,9 +58,9 @@ interface Older { triggers: TriggerRow[]; cursor: string | null }
 const overlaps = (some: TriggerRow[], others: TriggerRow[]) => some.some(item => others.some(other => other.id === item.id))
 const byTime = (triggers: TriggerRow[]) => [...new Map(triggers.map(item => [item.id, item])).values()]
   .sort((a, b) => a.at.localeCompare(b.at))
-const gapBetween = (newest: ThreadPageView, older: Older | undefined): boolean =>
+export const gapBetween = (newest: ThreadPageView, older: Older | undefined): boolean =>
   !!older && newest.earlier !== null && !overlaps(newest.timeline, older.triggers)
-function mergeTimeline(newest: ThreadPageView, older: Older | undefined): ThreadPageView {
+export function mergeTimeline(newest: ThreadPageView, older: Older | undefined): ThreadPageView {
   if (!older || newest.earlier === null || gapBetween(newest, older)) return newest
   return { ...newest, timeline: byTime([...older.triggers, ...newest.timeline]), earlier: older.cursor }
 }

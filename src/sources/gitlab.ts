@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { GitlabSourceSchema, type ResolvedSource } from '../deployment.ts'
 import type { CodeRepoType } from '../code-repos/kind.ts'
-import type { Localized } from '../sources/kind.ts'
+import type { Localized } from '../fields.ts'
 
 const GitlabConfigSchema = GitlabSourceSchema.strict()
 export type GitlabConfig = z.infer<typeof GitlabConfigSchema>

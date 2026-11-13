@@ -12,11 +12,19 @@ export interface ChannelRef { source: string; thread: string; address: Record<st
 export const threadKey = (ref: ThreadRef): string => `${ref.source}:${ref.id}`
 /**
  * 把有效时间戳规范化为 `Date#toISOString` 形式，使已存储的时间戳在内存和 SQL 中可按字典序比较；
- * 无法解析为时间戳的值原样返回。
+ * 无法解析为时间戳的值原样返回。时间戳之间的比较应使用 `before`，不要手写 `Date.parse`。
  */
 export function isoTime(value: string): string {
   const time = Date.parse(value)
   return Number.isFinite(time) ? new Date(time).toISOString() : value
+}
+/**
+ * `a` 是否早于 `b`：优先按时间戳比较；任一值无法解析为时间戳时回退字典序，
+ * 使比较在非法输入下仍是确定的，并与已规范化时间戳的字典序一致（空字符串早于一切）。
+ */
+export const before = (a: string, b: string): boolean => {
+  const [x, y] = [Date.parse(a), Date.parse(b)]
+  return Number.isFinite(x) && Number.isFinite(y) ? x < y : a < b
 }
 
 /** 来源产生的一个不可变事件。`text` 和 `meta` 是不可信的外部数据。 */
@@ -106,14 +114,12 @@ interface Received { source?: string; scope?: Record<string, unknown>; row?: str
  * - `addressed`：来源名单上的发送方直接面向智能体；
  * - `followup`：有工单的线程上的消息；
  * - `admission`：接收范围准入行中的单元格；在某种接受模式下产生推断候选时为 `observation`；
- * - `listed`：在授权记录依据之前被接受，来自仍必须在名单上的发送方；`authority` 是旧版本记录的内容。
  * `sender` 指接受时被允许的发送方，`rules` 指某次评估匹配到的规则。
  */
 export type MandateBasis = Received & { sender?: string; rules?: string[] } & (
   | { via: 'addressed'; addressed: 'mention' | 'direct' }
   | { via: 'followup'; authority?: string }
   | { via: 'admission'; cell: AdmissionCell; addressed?: 'mention' | 'direct'; observation?: { mode: AcceptMode } }
-  | { via: 'listed'; addressed?: 'mention' | 'direct'; observation?: { mode?: AcceptMode }; authority?: string }
   /** 来源机器人名单上的机器人的消息：最多只能是推断候选，永远不会是明确请求或停止。 */
   | { via: 'bot'; addressed?: 'mention' | 'direct'; observation: { mode: AcceptMode } }
   /**
@@ -188,7 +194,7 @@ export interface ThreadFact { label?: Text; value: Text; problem?: true }
 /** 线程按 id 组织的事实，按显示顺序排列；每个写入方拥有自己的事实 id。 */
 export type ThreadFacts = Record<string, ThreadFact>
 
-export type DecisionKind = 'ignore' | 'accept' | 'reopen' | 'stop' | 'unavailable'
+export type DecisionKind = 'ignore' | 'accept' | 'stop' | 'unavailable'
 /** 一次评估的结果，记录在线程上。 */
 export interface Decision {
   id: string
@@ -240,17 +246,12 @@ export type TicketInput =
     context?: true
     /**
      * 工作单元的会话何时把携带它的消息纳入某个步骤，模型由此读取它；在会话中等待时为 `null`。
-     * 在记录读取之前投递的输入没有该值，从 `deliveredAt` 起视为已读。
      */
     readAt?: string | null
     /** 它最后被投递到的任务分配。 */
-    deliveredTo?: string
-    /** 旧版本把它交给工作单元的时间。 */
-    deliveredAt?: string }
+    deliveredTo?: string }
   /** 策略以 `effect` 所述的方式发生变化并影响该工单；在效果出现之前写入的输入没有此字段。 */
   | { id: string; kind: 'policy-changed'; from: string; to: string; at: string; effect?: PolicyEffect }
-  /** 某个决策重新打开了该工单；在已结束工单能自行恢复之前写入。 */
-  | { id: string; kind: 'reopen'; decisionId: string; at: string }
   /** 其某个线程上人的消息，在其授权不变的情况下恢复了已结束的工单。 */
   | { id: string; kind: 'resumed'; triggerId: string; at: string }
   | { id: string; kind: 'text'; text: string; at: string }
@@ -336,12 +337,18 @@ export const latestAssignment = (ticket: Ticket): Assignment | undefined => tick
 /** 工单的任一任务分配所作的最新报告，即工单最后所述的内容。 */
 export const latestReport = (ticket: Pick<Ticket, 'assignments'>): Assignment['report'] => ticket.assignments.findLast(assignment => assignment.report)?.report
 /**
+ * 工单的工作单元是否在 `until`（其最新报告或回合结束）之前读取了某个触发器输入：其会话此前已把该消息纳入步骤。
+ * 在记录读取之前投递的输入，若在 `until` 之前已到达工作单元，则视为已读。
+ */
+export const readBefore = (input: Extract<TicketInput, { kind: 'trigger' }>, until: string): boolean =>
+  input.readAt === undefined ? input.at <= until : !!input.readAt && input.readAt < until
+/**
  * 工单的工作单元在何时之前有机会读取到达它的内容：其最新报告，但当 `progress` 为 false 时的进度报告除外，
  * 或最新回合结束的时间，取较晚者。
  */
 export function readUntil(ticket: Pick<Ticket, 'assignments'>, progress = true): string {
   const report = ticket.assignments.findLast(assignment => assignment.report && (progress || assignment.report.state !== 'progress'))?.report
-  return [report?.at ?? '', ...ticket.assignments.map(assignment => assignment.idleAt ?? '')].reduce((a, b) => a > b ? a : b)
+  return [report?.at ?? '', ...ticket.assignments.map(assignment => assignment.idleAt ?? '')].reduce((a, b) => before(a, b) ? b : a)
 }
 /**
  * 工单是否在等待人：其最新任务分配报告为 blocked 或 failed，且此后没有人的消息到达。

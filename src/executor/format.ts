@@ -60,7 +60,6 @@ export const inputResource = (ticketId: string, inputId: string): string => `tic
 /**
  * 格式化用于投递给工作单元的工单输入：通过 `trigger` 渲染的 `trigger`（缺失时按其 ID 和读取路径）、
  * `policy-changed` 通知、`resumed` 通知、编排器的 `note`，或按原文的 `text` 输入。
- * 对遗留的 `reopen` 输入返回 `undefined`，它们只是历史数据，因为 schema 11 迁移已把待处理的 reopen 输入转换为文本输入。
  */
 export function inputMessage(input: TicketInput, trigger?: object): string | undefined {
   // 标记经由仅上下文订阅到达的触发器，让工作单元知道它们并非针对该工单。

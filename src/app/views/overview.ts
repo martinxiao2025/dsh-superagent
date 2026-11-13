@@ -1,6 +1,6 @@
 /** 概览视图：活跃的系统问题、等待人员处理的工单、执行器负载，以及 24 小时触发器流。 */
 import { reasonText, ticketStage, type Decision, type Thread } from '../../core/index.ts'
-import type { Health } from '../../sources/host.ts'
+import type { Health } from '../../infra/health.ts'
 import { healthNames } from '../../sources/identity.ts'
 import type { SetupProblem } from '../../setup.ts'
 import { anyoneAllowed } from '../../policy.ts'

@@ -10,7 +10,7 @@ import type { SourceStatusView } from './views/sources.ts'
 import type { SourceCheck } from '../setup.ts'
 import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } from './views/threads.ts'
 import type { TicketListView } from './views/tickets.ts'
-import type { QueueSnapshot } from '../queue/model.ts'
+import type { QueuePage } from './scheduler.ts'
 import type { ResetReport } from './reset.ts'
 import type { CredentialCheck } from '../secrets/check.ts'
 import type { GitCredentialInput, GitCredentialView } from '../git-credentials/kind.ts'
@@ -56,7 +56,7 @@ export interface Api {
   /** 新建项目接受完整配置：向导一次提交仓库、任务来源、执行目录、轮询、重试与状态策略。 */
   'POST projects': { body: { id?: string } & Project; response: { id: string; revision: number; restarting: boolean } }
   'DELETE projects/:id': { response: { removed: true; restarting: boolean } }
-  'GET projects/:id/tasks': { response: ProjectTasksView }
+  'GET projects/:id/tasks': { query?: Paged; response: ProjectTasksView }
   'GET git-credentials': { response: { credentials: GitCredentialView[] } }
   'GET git-credentials/:id': { response: GitCredentialView }
   'POST git-credentials': { body: { id?: string; value: GitCredentialInput }; response: { id: string; revision: number } }
@@ -80,7 +80,7 @@ export interface Api {
   }
   'DELETE feishu-credentials/:id': { response: { removed: true } }
   'GET health': { response: HealthView }
-  'GET queue': { response: QueueSnapshot }
+  'GET queue': { query?: Paged; response: QueuePage }
   'POST queue/:id/retry': { response: { retried: boolean } }
   'POST queue/:id/cancel': { response: { cancelled: boolean } }
   'POST queue/clear': { query?: { project?: string }; response: { cancelled: number } }

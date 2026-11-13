@@ -1,6 +1,7 @@
 /** 已订阅线程的共享轮询辅助函数、重叠安全的游标和适配定时器的延迟。 */
 import { liveTicket, type Thread } from '../core/index.ts'
-import { health, type Health, type SourceContext } from './host.ts'
+import { health, type Health } from '../infra/health.ts'
+import { type SourceContext } from './host.ts'
 
 /** 已订阅线程在没有存活工单时，最后一次触发器或工单结束后仍继续轮询的时长。 */
 export const POLL_HORIZON_MS = 14 * 24 * 3600_000

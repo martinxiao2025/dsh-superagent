@@ -158,6 +158,6 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 1. **标准格式是唯一路径**（自定义映射已移除，不再有高级开关）——009 §13.1 第 10.13 项随此更新。
 2. **`status` 就用这五个值**（`todo` / `in_progress` / `blocked` / `done` / `cancelled`，见 `excel-format.ts` 的 `TASK_STATUSES`）；未引入 `review`，需要验收语义时由 `taskPolicy` 的状态映射表达。
 3. **`depends_on` 仅作元数据列**，不参与调度阻塞（调度器不读取该列）；引入依赖调度前不改变这一语义。
-4. **清单模式保留但非默认**：复选框解析保留在 `feishu-doc.ts`（`checklistTasks`），仅当文档没有任务表且项目显式开启时才解析。
+4. **清单模式不做**：复选框解析（原 `feishu-doc.ts` 的 `checklistTasks`）从未接线为可用路径，已随该文件的删除一并移除；任务只来自标准任务表与多维表格。
 5. **模板生成只在面板**（`GET task-format/template`），不做 CLI 命令。
 6. **严格模式默认关闭**：跨文档 `task_id` 默认按文档隔离（见 009 §13.1 第 10.12 项），严格模式留作可选。

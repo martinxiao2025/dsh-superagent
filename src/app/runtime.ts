@@ -50,7 +50,8 @@ import { feishuProbe } from '../feishu-credentials/probe.ts'
 import { httpWikiApi, larkWikiApi, type FeishuWikiApi, type FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import { httpImApi, larkImApi, type FeishuImApi, type FeishuImReader } from '../task-sources/feishu-im-api.ts'
 import { feishuSettings } from '../sources/feishu.ts'
-import { health, type Health, type SourceContext, type SourceHost } from '../sources/host.ts'
+import { health, type Health } from '../infra/health.ts'
+import type { SourceContext, SourceHost } from '../sources/host.ts'
 import type { SourceAdapter } from '../sources/kind.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
@@ -432,7 +433,8 @@ export class Runtime extends Service implements SourceHost {
     const { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks, setup, passes } = this
     return { store, sources, prompts, sessions, settings, engine, executor, health, machine, masterId, ready, sourceLinks,
       gitCredentials: this.gitCredentials, feishuCredentials: this.feishuCredentials,
-      queue: () => this.scheduler.snapshot(),
+      queue: (query?: { offset: number; limit: number }) => this.scheduler.snapshot(query?.offset, query?.limit),
+      projectQueue: id => this.scheduler.projectQueue(id),
       retryQueue: id => this.scheduler.retryEntry(id),
       cancelQueue: id => this.scheduler.cancelEntry(id),
       clearQueue: project => this.scheduler.clearQueue(project),

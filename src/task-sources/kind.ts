@@ -6,7 +6,7 @@ import type { RawTask } from './tasks.ts'
 import type { FeishuWikiApi } from './feishu-api.ts'
 import type { FeishuImApi } from './feishu-im-api.ts'
 import type { WriteTarget } from './writeback.ts'
-import type { FieldSpec, Localized } from '../sources/kind.ts'
+import type { FieldSpec, Localized } from '../fields.ts'
 import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
 
 /** 驱动注册名：小写字母开头，允许数字与连字符。内置 `excel`、`feishu-im` 与 `feishu-wiki`。 */

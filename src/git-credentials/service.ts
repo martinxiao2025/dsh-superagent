@@ -37,13 +37,15 @@ const KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/
 export function normalizePrivateKey(text: string): string {
   return text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/^\n+/, '').replace(/\s*$/, '\n')
 }
-/** 把探测错误归入面板可本地化的失败原因。 */
+/** 探测失败的语义表：按声明顺序匹配，先命中先归因；文本兜底 git 与 ssh 的历史错误文案。 */
+const PROBE_FAILURES: readonly (readonly [name: string, pattern: RegExp])[] = [
+  ['gitCredentialForbidden', /permission denied|authentication failed|could not read from remote|access denied|\b40[13]\b/i],
+  ['gitCredentialUnreachable', /could not resolve|connection (refused|timed out)|timed out|network is unreachable|no route to host|operation timed out/i],
+  ['gitCredentialRepositoryMissing', /not found|does not exist|\b404\b/i],
+]
 export function classifyProbeError(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error)
-  if (/permission denied|authentication failed|could not read from remote|access denied|\b40[13]\b/i.test(text)) return 'gitCredentialForbidden'
-  if (/could not resolve|connection (refused|timed out)|timed out|network is unreachable|no route to host|operation timed out/i.test(text)) return 'gitCredentialUnreachable'
-  if (/not found|does not exist|\b404\b/i.test(text)) return 'gitCredentialRepositoryMissing'
-  return 'gitCredentialProbeFailed'
+  return PROBE_FAILURES.find(([, pattern]) => pattern.test(text))?.[0] ?? 'gitCredentialProbeFailed'
 }
 /** 把输入转成材料；`keyPath` 在这里读取，之后的展示与探测都只用加密材料。 */
 function materialOfInput(input: Partial<GitCredentialInput>): SecretMaterial {

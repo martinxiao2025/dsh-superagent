@@ -6,7 +6,8 @@ import { feishuThreadContext } from './feishu-read.ts'
 import { refreshChatNames, runFeishu } from './feishu-loops.ts'
 import { SOURCE, feishuTriggerId } from './feishu-trigger.ts'
 import { sourceContext } from './host.ts'
-import type { Localized, SourceAdapter, SourceKind } from './kind.ts'
+import type { Localized } from '../fields.ts'
+import type { SourceAdapter, SourceKind } from './kind.ts'
 import type { SourceRegistry } from './registry.ts'
 
 export { SOURCE, feishuRef, feishuThreadId, feishuTime, feishuTrigger, feishuTriggerId, historyEvent, withMentionNames }

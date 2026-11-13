@@ -6,8 +6,8 @@ export class Later extends Error {}
 /** 某类副作用报告错误前允许的连续失败次数，与来源轮询的失败阈值一致。 */
 export const FAILURES_BEFORE_ERROR = 3
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
-import type { HealthCategory } from '../sources/host.ts'
-import type { Store } from './store.ts'
+import type { HealthCategory } from '../infra/health.ts'
+import type { Store, EffectRow } from './store.ts'
 
 export interface EffectPayloads {
   /** 构建评估的候选卡片并转发到主会话；键为评估 ID。 */
@@ -38,8 +38,8 @@ interface Handler<K extends EffectKind> {
   quiet: boolean
 }
 type Options<K extends EffectKind> = Partial<Pick<Handler<K>, 'limit' | 'retry' | 'ordered' | 'quiet'>>
-/** `seq` 保留该行的队列位置；`generation` 在载荷更新时递增，使运行中的尝试不会删除更新的载荷。 */
-interface Row { key: string; value: string; seq: number; generation: number; attempts: number; due: number }
+/** 队列行的持久化形态由 `Store` 的仓储面定义；`seq` 保留队列位置，`generation` 防止删除运行中被替换的载荷。 */
+type Row = EffectRow
 type Task = { kind: EffectKind; key: string; done: Promise<void> }
 /** 面板用于区分故障来源的子系统；未列出的副作用归入运行时。 */
 const CATEGORY: Partial<Record<EffectKind, HealthCategory>> = { writeback: 'writeback', reply: 'communication' }
@@ -60,13 +60,11 @@ export class Effects {
   private started = false
   private stopped = false
   constructor(private readonly store: Store, private readonly board: Pick<HealthBoard, 'claim'>, private readonly now = () => Date.now()) {
-    this.seq = Number(store.db.prepare('SELECT IFNULL(MAX(seq), 0) AS seq FROM effect').get()?.seq ?? 0)
+    this.seq = store.effects.maxSeq()
   }
   /** 在调用方的事务中 upsert 一个副作用，与同类同键的等待行合并，同时保留其队列位置。 */
   enqueue<K extends EffectKind>(kind: K, key: string, payload: EffectPayloads[K]): void {
-    this.store.db.prepare(`INSERT INTO effect (kind, key, value, seq, due, since) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(kind, key) DO UPDATE
-      SET value = excluded.value, generation = generation + 1, attempts = 0, error = '', due = excluded.due`)
-      .run(kind, key, JSON.stringify(payload), ++this.seq, this.now(), new Date(this.now()).toISOString())
+    this.store.effects.enqueue(kind, key, JSON.stringify(payload), ++this.seq, this.now(), new Date(this.now()).toISOString())
     this.kick()
   }
   handle<K extends EffectKind>(kind: K, run: Handler<K>['run'], options: Options<K> = {}): void {
@@ -78,11 +76,11 @@ export class Effects {
     this.kick()
   }
   pending(kind: EffectKind, key?: string): boolean {
-    return key === undefined ? !!this.store.db.prepare('SELECT 1 FROM effect WHERE kind = ? LIMIT 1').get(kind) : !!this.store.db.prepare('SELECT 1 FROM effect WHERE kind = ? AND key = ?').get(kind, key)
+    return this.store.effects.pending(kind, key)
   }
   /** 按类别和键删除排队的行；如果它已在运行，则该次尝试会正常完成。 */
   cancel(kind: EffectKind, key: string): void {
-    this.store.db.prepare('DELETE FROM effect WHERE kind = ? AND key = ?').run(kind, key)
+    this.store.effects.cancel(kind, key)
     this.store.afterCommit(() => { this.report(kind) })
   }
   start(): void { this.started = true; this.kick() }
@@ -111,10 +109,7 @@ export class Effects {
       try {
         const running = new Set([...this.tasks].filter(task => task.kind === kind).map(task => task.key))
         // 有序类别会阻塞在其最旧的行之后，即使该行尚未到期；仅在存在就绪行后才查询 limit()。
-        const rows = (handler.ordered
-          ? this.store.db.prepare('SELECT key, value, seq, generation, attempts, due FROM effect WHERE kind = ? ORDER BY seq LIMIT 1').all(kind)
-          : this.store.db.prepare('SELECT key, value, seq, generation, attempts, due FROM effect WHERE kind = ? AND due <= ? ORDER BY seq LIMIT ?')
-            .all(kind, this.now(), 16 + running.size)) as unknown as Row[]
+        const rows = this.store.effects.due(kind, { ordered: handler.ordered, now: this.now(), limit: 16 + running.size })
         const ready = handler.ordered && running.size ? [] : rows.filter(row => row.due <= this.now() && !running.has(row.key))
         let room = ready.length ? handler.limit() - running.size : 0
         for (const row of ready) {
@@ -135,17 +130,15 @@ export class Effects {
   private async attempt(kind: EffectKind, handler: Handler<never>, row: Row): Promise<void> {
     let failure: { error: unknown } | undefined
     try { await handler.run(JSON.parse(row.value) as never, row.key) } catch (error) { failure = { error } }
-    // 匹配 seq 和 generation，避免覆盖运行期间被替换或重新入队的行。
-    const own = 'kind = ? AND key = ? AND seq = ? AND generation = ?', ownRow = [kind, row.key, row.seq, row.generation] as const
-    if (!failure) this.store.db.prepare(`DELETE FROM effect WHERE ${own}`).run(...ownRow)
+    // 匹配 seq 和 generation，避免覆盖运行期间被替换或重新入队的行；仓储面的结算语句都带同一匹配条件。
+    if (!failure) this.store.effects.complete(kind, row.key, row.seq, row.generation)
     // 关闭时不改动运行中的行，使其在下次启动时重试。
     else if (this.stopped) return
     else if (failure.error instanceof Later) {
-      this.store.db.prepare(`UPDATE effect SET due = ? WHERE ${own}`).run(this.now() + handler.retry[0], ...ownRow)
+      this.store.effects.attempt(this.now() + handler.retry[0], kind, row.key, row.seq, row.generation)
     } else {
       const delay = Math.min(handler.retry[1], handler.retry[0] * 2 ** Math.min(row.attempts, 16))
-      this.store.db.prepare(`UPDATE effect SET attempts = attempts + 1, error = ?, due = ? WHERE ${own}`)
-        .run(String(failure.error).slice(0, 1000), this.now() + delay, ...ownRow)
+      this.store.effects.fail(String(failure.error).slice(0, 1000), this.now() + delay, kind, row.key, row.seq, row.generation)
     }
     if (!this.stopped) this.report(kind)
   }
@@ -155,13 +148,11 @@ export class Effects {
       category: CATEGORY[kind] ?? 'runtime' })
   }
   private report(kind: EffectKind): void {
-    const row = this.store.db.prepare(`SELECT COUNT(*) AS waiting, MIN(since) AS since, MAX(attempts) AS attempts,
-      (SELECT error FROM effect WHERE kind = ? AND attempts > 0 ORDER BY seq DESC LIMIT 1) AS error FROM effect WHERE kind = ?`).get(kind, kind)
-    const waiting = Number(row?.waiting ?? 0)
-    const failing = Number(row?.attempts ?? 0) >= FAILURES_BEFORE_ERROR && !this.handlers.get(kind)?.quiet
-    const detail = waiting ? `${waiting} waiting since ${String(row?.since)}` : 'Nothing waiting'
+    const stats = this.store.effects.stats(kind)
+    const failing = stats.attempts >= FAILURES_BEFORE_ERROR && !this.handlers.get(kind)?.quiet
+    const detail = stats.waiting ? `${stats.waiting} waiting since ${stats.since}` : 'Nothing waiting'
     this.health.get(kind)?.set(failing
-      ? { state: 'error', detail: `${detail}; the last failure: ${String(row?.error)}`, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' }
+      ? { state: 'error', detail: `${detail}; the last failure: ${stats.error}`, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' }
       : { state: 'ready', detail, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' })
   }
 }

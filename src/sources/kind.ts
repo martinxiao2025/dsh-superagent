@@ -3,24 +3,9 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { z } from 'zod'
 import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
 import type { ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
+import type { FieldSpec, Localized } from '../fields.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
-
-export interface Localized { zh: string; en: string }
-/** `advanced` 会把很少改动的字段（例如轮询可调参数）折叠到卡片的“高级”区域之后。 */
-interface FieldBase { key: string; label: Localized; hint?: Localized; advanced?: true }
-/**
- * 配置字段规范；`rows` 编辑以第一列为键的记录列表，`choose` 从已解析的来源标签中选择，
- * `sources` 从已安装的来源记录中选择（按 `kinds` 过滤），`fact` 显示来自 `facts` 的只读值。
- */
-export type FieldSpec =
-  | FieldBase & { type: 'switch' }
-  | FieldBase & { type: 'select'; options: { value: string; label: Localized }[] }
-  | FieldBase & { type: 'number'; min: number; max: number }
-  | FieldBase & { type: 'text'; pattern?: string; readonly?: boolean; choose?: Localized }
-  | FieldBase & { type: 'sources'; kinds: string[]; choose: Localized }
-  | FieldBase & { type: 'fact' }
-  | FieldBase & { type: 'rows'; columns: ({ key: string; label: Localized; type: 'text'; pattern?: string; optional?: boolean; choose?: Localized; refresh?: Localized } | { key: string; label: Localized; type: 'select'; options: { value: string; label: Localized }[] })[] }
 
 export interface VariableSpec { key: string; description: Localized }
 export interface EnvironmentInput<C> { source: ResolvedSource | undefined; config: C; trigger?: Trigger }

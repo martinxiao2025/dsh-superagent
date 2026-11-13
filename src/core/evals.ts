@@ -5,7 +5,7 @@ import { liveTicket, threadKey } from './model.ts'
 import type { Decision, DecisionKind, Evaluation, Mandate, MandateBasis, Strength, Thread, Trigger } from './model.ts'
 import type { AssessmentOutcome, Candidate, Policy } from './ports.ts'
 import { said, type Reason } from './reasons.ts'
-import { EnginePart, type EngineOptions } from './part.ts'
+import { EnginePart, type EngineOptions, type Requeues } from './part.ts'
 import type { Tickets } from './tickets.ts'
 
 /** 持有某个触发器的评估的结果；`evalId` 指明该结果是为哪次评估判定的，因此后来的评估会拒绝它。 */
@@ -25,7 +25,7 @@ const REQUEUES = 2
  * 工作单元的交还以及处理轮的评估工作都路由到这里。
  */
 export class Evals extends EnginePart {
-  constructor(options: EngineOptions, private readonly tickets: Tickets) { super(options) }
+  constructor(options: EngineOptions, private readonly tickets: Tickets, private readonly requeues: Requeues) { super(options) }
 
   /**
    * 让线程的评估在超过截止时间后过期（见 `expire`），除非处理已暂停：此时评估会记下处理暂停开始的时间，
@@ -64,9 +64,8 @@ export class Evals extends EnginePart {
     thread.expired = expired
     thread.pending = [...triggerIds, ...thread.pending.filter(item => !triggerIds.includes(item))]
     this.repo.threads.save(thread)
-    this.options.assessor.release?.(id)
-  }
-  /** 启动一次对线程上排队触发器的评估，由门禁判定，并向评估者请求评估结果。 */
+    this.defer(() => this.options.assessor.release?.(id))
+  }  /** 启动一次对线程上排队触发器的评估，由门禁判定，并向评估者请求评估结果。 */
   start(threadKeyValue: string, policy: Policy): void {
     const thread = this.repo.threads.get(threadKeyValue)!
     const at = this.now()
@@ -114,7 +113,7 @@ export class Evals extends EnginePart {
       this.repo.triggers.saveDisposition(trigger.id, { ...(this.repo.triggers.disposition(trigger.id) ?? { fanout: [], at }), evalId })
     }
     this.emit('eval.started', { evalId, threadKey: thread.key, triggerIds: thread.evaluating.triggerIds, strength: strongest.strength })
-    this.options.assessor.request(this.candidateOf(thread))
+    this.defer(() => this.options.assessor.request(this.candidateOf(thread)))
   }
   /** 持有 `triggerId` 的评估所产生的候选；没有评估持有时为 undefined。 */
   candidate(triggerId: string): Candidate | undefined {
@@ -166,7 +165,7 @@ export class Evals extends EnginePart {
     const trigger = this.repo.triggers.get(triggerId)
     if (!trigger) throw new UserError('unknownTrigger')
     if (this.holding(triggerId)) return false
-    this.queueForEval(trigger)
+    this.requeues.queueForEval(trigger)
     const disposition = this.repo.triggers.disposition(triggerId) ?? { fanout: [], at: this.now() }
     this.repo.triggers.saveDisposition(triggerId, { ...disposition, requeued: true })
     return true
@@ -181,7 +180,7 @@ export class Evals extends EnginePart {
     const ticket = this.require(ticketId)
     if (!ticket.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId)) throw new UserError('notReached')
     if (this.repo.triggers.disposition(triggerId)?.handbacks?.some(item => item.ticketId === ticketId)) throw new UserError('handedBack')
-    return this.handBack(ticketId, this.repo.triggers.get(triggerId)!, reason)
+    return this.requeues.handBack(ticketId, this.repo.triggers.get(triggerId)!, reason)
   }
   /**
    * 把人已忽略的 `unavailable` 决策标记为已忽略，使概览不再列出它。
@@ -318,7 +317,7 @@ export class Evals extends EnginePart {
     if (thread.evaluating?.id !== evaluation.id) return decision
     delete thread.evaluating; delete thread.expired
     this.repo.threads.save(thread)
-    this.options.assessor.release?.(evaluation.id)
+    this.defer(() => this.options.assessor.release?.(evaluation.id))
     return decision
   }
   private record(thread: Thread, evaluation: Evaluation, outcome: Finished): Decision {

@@ -63,6 +63,25 @@ it('sends retry, cancel and clear requests from the project queue', async () => 
   expect(posts.some(path => path.includes('queue/clear'))).toBe(true)
 })
 
+it('loads more task entries beyond the first page of the project queue', async () => {
+  server.settings = { ...server.settings, projects: { content: project } }
+  server.queueItems = Array.from({ length: 55 }, (_, index) =>
+    queued('queued', { id: `q${index}`, state: index % 2 ? 'failed' : 'queued', attempt: 1 }))
+  await mount()
+  await click(zh['tab.projects'])
+  await click('内容运营')
+  // 首页按 limit=50 请求并只渲染前 50 行；超窗时出现「加载更多」。
+  expect(document.querySelectorAll('.dt-table tbody tr')).toHaveLength(50)
+  expect(server.requests.some(request => request.path.includes('projects/content/tasks?limit=50'))).toBe(true)
+  expect(find(zh.loadMore)).toBeTruthy()
+  await click(zh.loadMore)
+  await settle()
+  // 「加载更多」把窗口放大到 100 并渲染全部 55 行，之后按钮消失。
+  expect(document.querySelectorAll('.dt-table tbody tr')).toHaveLength(55)
+  expect(server.requests.some(request => request.path.includes('projects/content/tasks?limit=100'))).toBe(true)
+  expect(() => find(zh.loadMore)).toThrow()
+})
+
 it('leads the task source step with its type and hides fields the type does not need', async () => {
   await mount()
   await click(zh['tab.settings'])

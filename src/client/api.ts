@@ -109,7 +109,7 @@ export function usePoll<T>(load: () => Promise<T>, deps: readonly unknown[], int
 
 export const DECISION_FILTERS = ['work', 'stop', 'ignore', 'unavailable', 'all'] as const
 export type DecisionFilter = typeof DECISION_FILTERS[number]
-export const DECISION_KINDS: Readonly<Record<DecisionFilter, string>> = { work: 'accept,reopen', stop: 'stop', ignore: 'ignore',
+export const DECISION_KINDS: Readonly<Record<DecisionFilter, string>> = { work: 'accept', stop: 'stop', ignore: 'ignore',
   unavailable: 'unavailable', all: '' }
 
 export type Call = <K extends keyof Api>(route: K, ...request: {} extends ApiRequest<K> ? [request?: ApiRequest<K>] : [request: ApiRequest<K>])

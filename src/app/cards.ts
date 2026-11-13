@@ -34,11 +34,10 @@ export function ticketCard(ticket: Ticket) {
 const mandateOf = ({ policyVersion: _version, ...mandate }: Mandate) => mandate
 export const INPUTS = 10, ASSIGNMENTS = 3
 const INPUT_TEXT = 80
-/** 将工单输入以内联摘要或资源引用的形式呈现；对执行器会话省略决策 ID。 */
+/** 将工单输入以内联摘要或资源引用的形式呈现。 */
 export function inputLine(ticket: Ticket, input: TicketInput, worker = false) {
   const read = { read: inputResource(ticket.id, input.id) }
   const names = input.kind === 'trigger' || input.kind === 'resumed' ? { trigger_id: input.triggerId }
-    : input.kind === 'reopen' && !worker ? { decision_id: input.decisionId }
     : input.kind !== 'text' ? read
     : input.text.length <= INPUT_TEXT ? { text: input.text }
     : { preview: preview(input.text).slice(0, INPUT_TEXT), chars: input.text.length, ...read }

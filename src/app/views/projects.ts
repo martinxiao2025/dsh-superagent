@@ -27,6 +27,10 @@ export interface ProjectTasksView {
   /** 因本项目有任务在执行而推迟轮询的原因与时间；下一次真正轮询时清除。 */
   deferred?: { reason: string; at: string }
   items: QueueSnapshot['items']
+  /** 该项目全部条目数（活动 + 终态）；面板据此显示「加载更多」。 */
+  total?: number
+  /** 分页窗口之后是否还有更早的条目。 */
+  more?: boolean
 }
 
 /** 仓库在面板上的短名：优先仓库路径，其次远端地址，最后退回类型名。 */
@@ -35,9 +39,11 @@ export function repoLabel(kind: ProjectRepo['kind'], config: Record<string, unkn
   return typeof text === 'string' && text ? text : kind
 }
 
-/** 组装项目详情页所需的数据；队列条目只保留属于 `id` 的部分。 */
-export function projectTasksView(id: string, project: Project, snapshot: QueueSnapshot): ProjectTasksView {
-  const items = snapshot.items.filter(item => item.project === id)
+/** 组装项目详情页所需的数据；队列条目只保留属于 `id` 的部分，终态历史按页窗口展示。 */
+export function projectTasksView(id: string, project: Project, snapshot: QueueSnapshot,
+  page: { offset: number; limit: number } = { offset: 0, limit: 50 }): ProjectTasksView {
+  const all = snapshot.items.filter(item => item.project === id)
+  const items = all.slice(page.offset, page.offset + page.limit)
   const status = snapshot.projects.find(item => item.id === id)
   return {
     project: {
@@ -54,9 +60,11 @@ export function projectTasksView(id: string, project: Project, snapshot: QueueSn
     at: snapshot.at,
     maxWorkers: snapshot.maxWorkers,
     used: snapshot.used,
-    queued: items.filter(item => item.state === 'queued').length,
-    running: items.filter(item => item.state === 'running' || item.state === 'starting').length,
+    queued: all.filter(item => item.state === 'queued').length,
+    running: all.filter(item => item.state === 'running' || item.state === 'starting').length,
     items,
+    total: all.length,
+    ...(all.length > page.offset + page.limit ? { more: true } : {}),
     // 调度状态可选：没有轮询过或没有错误的项目不携带这些字段。
     ...(status?.nextPollAt ? { nextPollAt: status.nextPollAt } : {}),
     ...(status?.lastError ? { lastError: status.lastError } : {}),

@@ -26,6 +26,8 @@ export interface SettingsVersion {
   revision: number; savedAt: string; source: SettingsOrigin | 'internal'; block?: SettingsSave
   policyVersion: string; policyChanged: boolean; notified: string[]; settings: Settings
 }
+/** 副作用队列中的一行：`seq` 保留队列位置，`generation` 在载荷更新时递增，使运行中的尝试不会删除更新的载荷。 */
+export interface EffectRow { key: string; value: string; seq: number; generation: number; attempts: number; due: number }
 /**
  * 定义活跃工作集的生成列和部分索引，使轮次只扫描活跃行。
  * 打开数据库时按这里的定义补齐列与索引，由 SQLite 从已存储的 JSON 行填充。
@@ -51,6 +53,8 @@ const SETS: Record<string, Record<string, string>> = {
     uniqueKey: `TEXT AS (CASE WHEN value ->> '$.state' IN ('queued','starting','running')
       THEN (value ->> '$.project') || char(31) || (value ->> '$.task') || char(31)
         || COALESCE(value ->> '$.itemKey', '#' || (value ->> '$.item')) END)`,
+    // 建单后的工单反查（调度器结算）：只在建单中/执行中的行上非 NULL，终态行不会误命中。
+    ticketId: `TEXT AS (CASE WHEN value ->> '$.state' IN ('starting','running') THEN value ->> '$.ticketId' END)`,
   },
 }
 /** 当前数据库模式版本；只有这一版本的数据库可以被打开，其他版本必须重置。 */
@@ -216,16 +220,26 @@ export class Store implements Repositories {
 
   /** 带版本的设置快照；当前设置即最新修订的快照。 */
   private readonly settingsVersions = new Versions<SettingsVersion>(this, KV.settings.revision, KV.settings.version)
+  /** 已解析设置的修订键缓存：KV 指针未变时直接复用，免去热路径的全量 parse；键失配即失效（回滚后指针未动，自然失配）。 */
+  private settingsCache: { revision: number; value: Settings } | undefined
   /** 当前已校验的设置。 */
-  settings(): Settings { return SettingsSchema.parse(this.settingsVersions.current()?.settings ?? {}) }
+  settings(): Settings {
+    const revision = this.settingsVersions.revision()
+    if (this.settingsCache?.revision === revision) return this.settingsCache.value
+    const value = SettingsSchema.parse(this.settingsVersions.current()?.settings ?? {})
+    this.settingsCache = { revision, value }
+    return value
+  }
   /** 单个设置块的修订；每个配置页按自己的块进行乐观并发保存。 */
   blockRevision(block: SettingsSave): number { return this.get(KV.settings.block(block)) ?? 0 }
   /** 将设置保存为下一个修订（使其成为当前），并在存在时递增 `record.block` 的修订计数器。 */
   saveSettings(value: unknown, record: Omit<SettingsVersion, 'revision' | 'savedAt' | 'settings'> = { source: 'internal', policyVersion: '', policyChanged: false, notified: [] }): Settings {
     const settings = SettingsSchema.parse(value)
     return this.atomic(() => {
-      this.settingsVersions.save(revision => ({ ...record, revision, savedAt: new Date().toISOString(), settings }))
+      const saved = this.settingsVersions.save(revision => ({ ...record, revision, savedAt: new Date().toISOString(), settings }))
       if (record.block) this.set(KV.settings.block(record.block), this.blockRevision(record.block) + 1)
+      // 写者即失效点：同一事务把缓存推进到新修订；事务回滚时 KV 指针未动，缓存键失配即不会读到脏值。
+      this.settingsCache = { revision: saved.revision, value: saved.settings }
       return settings
     })
   }
@@ -314,11 +328,27 @@ export class Store implements Repositories {
       const row = this.db.prepare('SELECT value FROM queue WHERE id=?').get(id)
       return row ? QueueEntrySchema.parse(JSON.parse(String(row.value))) : undefined
     },
-    save: (entry: QueueEntry): void => { this.db.prepare('INSERT INTO queue VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, seq=excluded.seq').run(entry.id, JSON.stringify(entry), entry.seq) },
+    save: (entry: QueueEntry): void => { this.db.prepare('INSERT INTO queue (id, value, seq) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, seq=excluded.seq').run(entry.id, JSON.stringify(entry), entry.seq) },
     /** 全部条目，按全局入队顺序。 */
     list: (): QueueEntry[] => this.queueValues('SELECT value FROM queue ORDER BY seq'),
     /** 仍在队列或执行中的条目，按全局入队顺序。 */
     active: (): QueueEntry[] => this.queueValues('SELECT value FROM queue WHERE active IS NOT NULL ORDER BY seq'),
+    /** 排队中的条目，按全局入队顺序；由活动部分索引支撑。 */
+    queued: (): QueueEntry[] => this.queueValues('SELECT value FROM queue WHERE inflight IS NULL AND active IS NOT NULL ORDER BY seq'),
+    /** 已到期可派工的排队条目，按全局入队顺序；调度器的出队扫描只读这些行。 */
+    ready: (now: number): QueueEntry[] => this.queueValues("SELECT value FROM queue WHERE inflight IS NULL AND active IS NOT NULL AND json_extract(value, '$.dueAt') <= ? ORDER BY seq", now),
+    /** 建单中或执行中的条目里工单 ID 匹配的那一条；工单终态回写按它反查所属队列条目。 */
+    byTicket: (ticketId: string): QueueEntry | undefined => this.queueValues('SELECT value FROM queue WHERE ticketId = ?', ticketId)[0],
+    /** 一个项目当前的活动条目，按全局入队顺序；索引按项目直接定位。 */
+    activeIn: (project: string): QueueEntry[] => this.queueValues('SELECT value FROM queue WHERE active = ? ORDER BY seq', project),
+    /** 一个项目的终态条目，最新的在前；项目详情页是交互路径，允许这一受保留期约束的扫描。 */
+    terminalIn: (project: string): QueueEntry[] =>
+      this.queueValues("SELECT value FROM queue WHERE active IS NULL AND inflight IS NULL AND json_extract(value, '$.project') = ? ORDER BY json_extract(value, '$.endedAt') DESC, seq DESC", project),
+    /** 全部终态条目的最新一页，最新的在前；全局队列快照按页读取，不再解析整表 JSON。 */
+    terminal: (offset: number, limit: number): QueueEntry[] =>
+      this.queueValues("SELECT value FROM queue WHERE active IS NULL AND inflight IS NULL ORDER BY json_extract(value, '$.endedAt') DESC, seq DESC LIMIT ? OFFSET ?", limit, offset),
+    /** 全部条目数；队列快照用它给出分页元数据，避免为计数解析整表 JSON。 */
+    count: (): number => Number((this.db.prepare('SELECT COUNT(*) AS n FROM queue').get() as { n: number }).n),
     /** 项目当前占用的执行位置（正在建单或执行），按项目记录 ID 去重。 */
     inflight: (): string[] => this.db.prepare('SELECT DISTINCT inflight FROM queue WHERE inflight IS NOT NULL').all().map(row => String(row.inflight)),
     maxSeq: (): number => Number((this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM queue').get() as { seq: number }).seq),
@@ -330,20 +360,70 @@ export class Store implements Repositories {
       AND value ->> '$.endedAt' < ?`).run(project, before).changes),
   }
   /** 队列读取统一按 schema 解析，字段缺失或类型变化会明确失败而不是变成 `undefined`。 */
-  private queueValues(sql: string): QueueEntry[] {
-    return this.db.prepare(sql).all().map(row => QueueEntrySchema.parse(JSON.parse(String(row.value))))
+  private queueValues(sql: string, ...parameters: SQLInputValue[]): QueueEntry[] {
+    return this.db.prepare(sql).all(...parameters).map(row => QueueEntrySchema.parse(JSON.parse(String(row.value))))
   }
-  /** 工单/线程/决策的读取校验：关键字段必须存在且类型正确，未知字段放行；损坏行明确报错而不是静默传播。 */
+  /** 工单/线程/决策的列表读取校验：关键字段必须存在且类型正确，未知字段放行；单行损坏跳过并上报，不让整个列表失败（详情页 `get` 仍 fail-fast）。 */
   private entityValues<T>(sql: string, schema: z.ZodType, ...parameters: SQLInputValue[]): T[] {
-    return this.db.prepare(sql).all(...parameters).map(row => {
-      const value = JSON.parse(String(row.value)) as unknown
-      const parsed = schema.safeParse(value)
-      if (!parsed.success) {
-        throw new Error(`Stored record is corrupt: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`)
+    const values: T[] = []
+    for (const row of this.db.prepare(sql).all(...parameters)) {
+      try {
+        const value = JSON.parse(String(row.value)) as unknown
+        const parsed = schema.safeParse(value)
+        if (!parsed.success) {
+          throw new Error(`Stored record is corrupt: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`)
+        }
+        // 关键字段已经过校验；其余字段仍以领域类型为准（与 `entity` 的单一记录校验同口径）。
+        values.push(value as T)
+      } catch (error) {
+        // 单行损坏只跳过并上报；列表保持可用，详情接口按 id 直读（`entity`）仍会明确报错。
+        this.report(error)
       }
-      // 关键字段已经过校验；其余字段仍以领域类型为准（与 `entity` 的单一记录校验同口径）。
-      return value as T
-    })
+    }
+    return values
+  }
+  /** 副作用队列的仓储面：入队、取消、到期分发与按序号+代数的结算，全部供 `Effects` 调度使用。 */
+  readonly effects = {
+    /** 重启时延续全局队列顺序的最大序号。 */
+    maxSeq: (): number => Number(this.db.prepare('SELECT IFNULL(MAX(seq), 0) AS seq FROM effect').get()?.seq ?? 0),
+    /** 在调用方的事务中 upsert 一个副作用，与同类同键的等待行合并，保留队列位置并在载荷更新时递增 generation。 */
+    enqueue: (kind: string, key: string, value: string, seq: number, due: number, since: string): void => {
+      this.db.prepare(`INSERT INTO effect (kind, key, value, seq, due, since) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(kind, key) DO UPDATE
+        SET value = excluded.value, generation = generation + 1, attempts = 0, error = '', due = excluded.due`)
+        .run(kind, key, value, seq, due, since)
+    },
+    /** 是否存在等待中的副作用：整个类别或某个键。 */
+    pending: (kind: string, key?: string): boolean => key === undefined
+      ? !!this.db.prepare('SELECT 1 FROM effect WHERE kind = ? LIMIT 1').get(kind)
+      : !!this.db.prepare('SELECT 1 FROM effect WHERE kind = ? AND key = ?').get(kind, key),
+    /** 按类别和键删除排队的行；如果它已在运行，则该次尝试会正常完成。 */
+    cancel: (kind: string, key: string): void => { this.db.prepare('DELETE FROM effect WHERE kind = ? AND key = ?').run(kind, key) },
+    /** 有序类别取最旧的一行；无序类别取已到期的前 `limit` 行（运行中的键由调用方在内存里排除）。 */
+    due: (kind: string, query: { ordered: boolean; now: number; limit: number }): EffectRow[] =>
+      (query.ordered
+        ? this.db.prepare('SELECT key, value, seq, generation, attempts, due FROM effect WHERE kind = ? ORDER BY seq LIMIT 1').all(kind)
+        : this.db.prepare('SELECT key, value, seq, generation, attempts, due FROM effect WHERE kind = ? AND due <= ? ORDER BY seq LIMIT ?')
+          .all(kind, query.now, query.limit)) as unknown as EffectRow[],
+    /** 仅当序号与代数仍匹配时删除已完成的行，避免删除运行期间被替换或重新入队的行。 */
+    complete: (kind: string, key: string, seq: number, generation: number): void => {
+      this.db.prepare('DELETE FROM effect WHERE kind = ? AND key = ? AND seq = ? AND generation = ?').run(kind, key, seq, generation)
+    },
+    /** 仅当序号与代数仍匹配时，把一行推迟到 `due`（不计失败），例如处理方报告的 `Later`。 */
+    attempt: (due: number, kind: string, key: string, seq: number, generation: number): void => {
+      this.db.prepare('UPDATE effect SET due = ? WHERE kind = ? AND key = ? AND seq = ? AND generation = ?').run(due, kind, key, seq, generation)
+    },
+    /** 仅当序号与代数仍匹配时记录一次失败：递增尝试数、保存截断后的错误文本并按退避推迟。 */
+    fail: (error: string, due: number, kind: string, key: string, seq: number, generation: number): void => {
+      this.db.prepare('UPDATE effect SET attempts = attempts + 1, error = ?, due = ? WHERE kind = ? AND key = ? AND seq = ? AND generation = ?')
+        .run(error, due, kind, key, seq, generation)
+    },
+    /** 汇总一个类别的等待数、最早入队时间、最大尝试数与最近一次失败文本，供健康上报。 */
+    stats: (kind: string): { waiting: number; since: string | null; attempts: number; error: string | null } => {
+      const row = this.db.prepare(`SELECT COUNT(*) AS waiting, MIN(since) AS since, MAX(attempts) AS attempts,
+        (SELECT error FROM effect WHERE kind = ? AND attempts > 0 ORDER BY seq DESC LIMIT 1) AS error FROM effect WHERE kind = ?`).get(kind, kind)
+      return { waiting: Number(row?.waiting ?? 0), since: row?.since == null ? null : String(row.since),
+        attempts: Number(row?.attempts ?? 0), error: row?.error == null ? null : String(row.error) }
+    },
   }
   /** 管理视图、编排工具和来源轮询的只读查询（见 `storeReads`）。 */
   readonly read: ReturnType<typeof storeReads>

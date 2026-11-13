@@ -4,9 +4,11 @@ import { key } from './ids.ts'
 import { isoTime, liveTicket, threadKey } from './model.ts'
 import type { ChannelRef, Decision, Mandate, PolicyEffect, ThreadRef, Ticket, Trigger } from './model.ts'
 import type { Candidate, Repositories } from './ports.ts'
-import type { EngineOptions } from './part.ts'
+import { EvaluationQueue, touchThread, type EngineOptions } from './part.ts'
 import { Assignments, type WorkerReport } from './assignments.ts'
 import { Evals, type Outcome } from './evals.ts'
+import { Follows } from './follows.ts'
+import { Inputs } from './inputs.ts'
 import { Intake, type ReceiveResult } from './intake.ts'
 import { Replies, type Reply, type ReplyRequest } from './replies.ts'
 import { Tickets } from './tickets.ts'
@@ -43,16 +45,21 @@ export class Engine {
   private readonly repo: Repositories
   private readonly replies: Replies
   private readonly tickets: Tickets
+  private readonly follows: Follows
+  private readonly inputs: Inputs
   private readonly assignments: Assignments
   private readonly evals: Evals
   private readonly intake: Intake
   constructor(private readonly options: EngineOptions) {
     this.repo = options.repo
-    this.replies = new Replies(options)
-    this.tickets = new Tickets(options, this.replies)
-    this.assignments = new Assignments(options, this.tickets, this.replies)
-    this.evals = new Evals(options, this.tickets)
-    this.intake = new Intake(options, this.tickets)
+    const requeues = new EvaluationQueue(options)
+    this.replies = new Replies(options, requeues)
+    this.inputs = new Inputs(options)
+    this.tickets = new Tickets(options, this.replies, this.inputs, requeues)
+    this.follows = new Follows(options, this.tickets, this.inputs, requeues)
+    this.assignments = new Assignments(options, this.tickets, this.replies, this.follows, requeues)
+    this.evals = new Evals(options, this.tickets, requeues)
+    this.intake = new Intake(options, this.tickets, this.inputs, requeues)
   }
 
   // 来源
@@ -78,10 +85,7 @@ export class Engine {
       const at = this.now()
       const ref = trigger.threads[0]!
       const keyOfThread = threadKey(ref)
-      const thread = this.repo.threads.get(keyOfThread)
-        ?? { key: keyOfThread, ref: { source: ref.source, id: ref.id }, createdAt: at, subscriptions: [], correlated: [], pending: [], meta: {} }
-      if (!thread.lastAt || trigger.at > thread.lastAt) thread.lastAt = trigger.at
-      this.repo.threads.save(thread)
+      this.repo.threads.save(touchThread(this.repo, ref, trigger.at, at))
       this.repo.triggers.save(trigger)
       const policyVersion = this.options.policy().version
       const mandate: Mandate = { strength: 'explicit', policyVersion, scope: input.scope, actor: trigger.actor,
@@ -103,7 +107,7 @@ export class Engine {
    * @throws 当工单未知或已结束时抛出 UserError。
    */
   bindThread(ticketId: string, thread: ThreadRef, own: boolean): Ticket {
-    return this.repo.atomic(() => this.tickets.bind(ticketId, thread, own))
+    return this.repo.atomic(() => this.follows.bind(ticketId, thread, own))
   }
   /**
    * 某个来源提供的事实：线程在发生时已关闭，例如其拉取请求已合并。关注它的未结束工单，
@@ -112,7 +116,7 @@ export class Engine {
    */
   threadClosed(thread: ThreadRef, outcome: 'merged' | 'closed', at: string): void {
     // 把来源时间戳（例如 GitHub 的整秒时间）规范化为标准 ISO 形式。
-    this.repo.atomic(() => { this.tickets.threadClosed(thread, outcome, isoTime(at)) })
+    this.repo.atomic(() => { this.follows.threadClosed(thread, outcome, isoTime(at)) })
   }
 
   // 时钟
@@ -159,9 +163,9 @@ export class Engine {
       // 该工单的工作单元交还的消息不属于它的工作：若在此附加，没有工作单元会决定它，且无法再次交还。
       const handedBack = this.repo.triggers.disposition(triggerId)?.handbacks?.some(item => item.ticketId === ticketId)
       if (handedBack) throw new UserError('handedBackHere')
-      const trigger = this.tickets.attachable(ticketId, triggerId)
+      const trigger = this.inputs.attachable(ticketId, triggerId)
       this.evals.withdraw(trigger)
-      this.tickets.attach(ticketId, trigger, note)
+      this.inputs.attach(ticketId, trigger, note)
       this.evals.routed(triggerId, ticketId)
       this.tickets.wake(ticketId)
       return this.repo.tickets.get(ticketId)!
@@ -172,7 +176,7 @@ export class Engine {
    * @returns 是否询问了该工作单元。
    * @throws 当工单未知时抛出 UserError。
    */
-  requestStatus(ticketId: string): boolean { return this.repo.atomic(() => this.tickets.requestStatus(ticketId)) }
+  requestStatus(ticketId: string): boolean { return this.repo.atomic(() => this.inputs.requestStatus(ticketId)) }
   /**
    * 为用途所指定的渠道排队一条消息：确认或回答发到人的消息所在处，attention 发到引发提问的消息所在处，
    * 否则（与结果一样）发到工单启动时所在的会话。已经排队的消息不会再次排队（见 `Replies.reply`）。
@@ -198,7 +202,7 @@ export class Engine {
    * 丢弃每个工单对某个线程的订阅，直到新的决策再次订阅它。
    * @returns 是否丢弃了订阅。
    */
-  unsubscribe(thread: string): boolean { return this.repo.atomic(() => this.tickets.dropSubscriptions(thread, 'person')) }
+  unsubscribe(thread: string): boolean { return this.repo.atomic(() => this.follows.dropSubscriptions(thread, 'person')) }
   /**
    * 人停止一个工单，其授权随之撤回：工单结束，不再接收任何内容。
    * @throws 当工单未知时抛出 UserError。
@@ -250,7 +254,7 @@ export class Engine {
    * 或它未关注的线程时抛出 UserError。
    */
   markUnrelated(ticketId: string, thread: string, reason: string): void {
-    this.repo.atomic(() => { this.tickets.markUnrelated(ticketId, thread, reason) })
+    this.repo.atomic(() => { this.follows.markUnrelated(ticketId, thread, reason) })
   }
   /**
    * 执行器为上下文而订阅一个它认为相关的线程：见 `Tickets.followForContext` 和 `Thread.context`。
@@ -258,13 +262,13 @@ export class Engine {
    * @throws 当工单未知或已结束时抛出 UserError。
    */
   followForContext(ticketId: string, thread: ThreadRef): boolean {
-    return this.repo.atomic(() => this.tickets.followForContext(ticketId, thread))
+    return this.repo.atomic(() => this.follows.followForContext(ticketId, thread))
   }
   /**
    * 主会话给未结束工单的执行器的一条事实：见 `Tickets.note`。
    * @throws 当工单未知或已结束时抛出 UserError。
    */
-  note(ticketId: string, text: string): Ticket { return this.repo.atomic(() => this.tickets.note(ticketId, text)) }
+  note(ticketId: string, text: string): Ticket { return this.repo.atomic(() => this.inputs.note(ticketId, text)) }
   /**
    * 执行器交还一条已到达其工单、但要求的范围超出它的消息：见 `Evals.handback`。
    * @returns 是否已排队等待评估：当另一个工单仍决定它、或该工单并未决定它（见 `Evals.handback`）时为 false。
@@ -296,7 +300,7 @@ export class Engine {
    * 策略发生变化：`effects` 中的每个未结束工单都会被告知该变化对它的影响，进行中的评估会在新版本下重新开始。
    */
   policyChanged(from: string, to: string, effects: ReadonlyMap<string, PolicyEffect> = new Map()): void {
-    this.repo.atomic(() => { this.tickets.policyChanged(from, to, effects); this.evals.policyChanged(from, to) })
+    this.repo.atomic(() => { this.inputs.policyChanged(from, to, effects); this.evals.policyChanged(from, to) })
   }
 
   /** 引擎当前使用的时钟；测试可注入固定时间。 */

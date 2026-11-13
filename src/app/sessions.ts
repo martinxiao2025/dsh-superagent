@@ -89,6 +89,9 @@ function noWait({ name, arguments: input }: { name: string; arguments: unknown }
   return undefined
 }
 
+/** 每个会话保留的提示词修订上限：`mayRead` 只需授权近期版本，数组封顶避免无界增长。 */
+const PROMPT_REVISIONS_KEEP = 50
+
 /**
  * 创建并装饰编排器和执行器的 DSH `Agent` 会话，为其注入角色模型、来自 `Prompts` 的系统提示词部分、运行时技能和受限工具集。
  * `Runtime`、`DshExecutor`、`MasterAssessor`、`Settings` 以及管理路由/工具使用它来确保会话存在、通过 `AgentDelivery` 投递去重消息，并处理有序的 `relay` 和 `notice` 副作用。
@@ -342,7 +345,8 @@ export class Sessions {
     if (binding) this.bindSkills(binding, version)
     const { store } = this.host
     const revisions = store.get(KV.sessions.prompts(agent.id)) ?? []
-    const bound = [...revisions.filter(revision => revision !== version.revision), version.revision]
+    // 修订数组封顶：只保留最近 N 个，防止提示词多次更新后 KV 无界增长。
+    const bound = [...revisions.filter(revision => revision !== version.revision), version.revision].slice(-PROMPT_REVISIONS_KEEP)
     if (revisions.at(-1) !== version.revision) store.set(KV.sessions.prompts(agent.id), bound)
     return version
   }

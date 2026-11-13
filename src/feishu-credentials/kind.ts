@@ -1,7 +1,7 @@
 /** 飞书凭据：独立于飞书来源记录存储，应用密钥在 `<stateDir>/secrets/feishu` 加密保存。 */
 import { z } from 'zod'
 import { LIMITS } from '../limits.ts'
-import { CredentialIdSchema } from '../git-credentials/kind.ts'
+import { CredentialIdSchema } from '../secrets/id.ts'
 
 /** 身份来源：自建应用（App ID/Secret）或本机 lark CLI 的登录态。 */
 export const FEISHU_CREDENTIAL_MODES = ['app', 'cli'] as const

@@ -7,10 +7,11 @@ import { threadKey, type Thread, type Trigger } from '../core/index.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { ResolvedFeishuSource } from '../deployment.ts'
 import { validItems, spawnCommand, type Tally } from '../infra/commands.ts'
-import { readFeishu, type FeishuRef } from './feishu-read.ts'
+import { readFeishu, type FeishuRef, type SourceMemo } from './feishu-read.ts'
 import { feishuRef, feishuTime, feishuTrigger, HistoricalMessageSchema, historyEvent, HistoryPageSchema, topicEvent }
   from './feishu-trigger.ts'
-import { health, type SourceContext } from './host.ts'
+import { health } from '../infra/health.ts'
+import { type SourceContext } from './host.ts'
 import { KV } from '../kv.ts'
 import { cursorAt, POLL_HORIZON_MS, polled, pollThreads as pollEach } from './poll.ts'
 import type { FeishuConfig } from './feishu.ts'
@@ -66,6 +67,9 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
 /** 重启事件消费者前的等待时间：运行超过一分钟时等待 1 秒，否则指数退避，最多 60 秒。 */
 export const consumerRetry = (previous: number | undefined, ranMs: number): number =>
   previous === undefined || ranMs >= 60_000 ? 1000 : Math.min(previous * 2, 60_000)
+/** 事件处理的有界并发数，以及暂停读取 CLI 输出前的缓冲上限：缓冲满即暂停，使积压对事件源可见。 */
+const EVENT_CONCURRENCY = 4
+const EVENT_BUFFER = 200
 /**
  * 停止消费者：先关闭其 stdin，再终止进程树，因为 Windows 批处理 CLI 运行在
  * `cmd.exe` 下，只杀掉 `cmd.exe` 会让 CLI 本身继续运行。
@@ -85,7 +89,7 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
     { stdio: ['pipe', 'pipe', 'pipe'], windowsVerbatimArguments, env: { ...process.env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1',
       LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
   const stdout = createInterface({ input: child.stdout }); const stderr = createInterface({ input: child.stderr })
-  let chain = Promise.resolve(); let diagnostic = ''; let ready = false
+  let diagnostic = ''; let ready = false
   const stop = (): void => { stopConsumer(child) }
   signal.addEventListener('abort', stop, { once: true })
   const timeout = setTimeout(() => { diagnostic = 'Feishu event consumer did not become ready within 45 seconds'; stop() }, 45_000)
@@ -96,17 +100,40 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       ctx.report('feishu', { state: 'ready', detail: 'Listening for bot events', at: new Date().toISOString() })
     } else if (/WARN|drop|error/.test(line)) ctx.report('feishu', { state: 'error', detail: diagnostic, at: new Date().toISOString() })
   })
+  // 事件以有界并发处理；缓冲满时暂停读取 CLI 输出，代替原来不可见的无界串行链。
+  const queue: string[] = []
+  let inflight = 0; let drainedWake: (() => void) | undefined
+  const handleEvent = async (line: string): Promise<void> => {
+    if (line.length > 1_048_576) throw new Error('Feishu event exceeds 1 MiB')
+    const trigger = feishuTrigger(ctx.id, JSON.parse(line), bot(ctx).botId, bot(ctx).appId)
+    // 来源被禁用时已读取的事件会被丢弃；消费者随后不久停止。
+    if (!trigger || !enabled(ctx)) return
+    const chats = ctx.state.get(KV.feishu.chats(ctx.id)) ?? {}
+    chats[String(trigger.meta.chatId)] = trigger.meta.direct === true
+    ctx.state.set(KV.feishu.chats(ctx.id), chats)
+    await receive(ctx, trigger)
+  }
+  const drain = (): void => {
+    while (inflight < EVENT_CONCURRENCY && queue.length) {
+      const line = queue.shift()!
+      inflight++
+      handleEvent(line).catch(error => { ctx.report('feishu', { state: 'error', detail: String(error), at: new Date().toISOString() }) })
+        .finally(() => {
+          inflight--
+          if (queue.length < EVENT_BUFFER) stdout.resume()
+          drain()
+          if (!inflight && !queue.length) drainedWake?.()
+        })
+    }
+  }
   stdout.on('line', (line: string) => {
-    chain = chain.then(async () => {
-      if (line.length > 1_048_576) throw new Error('Feishu event exceeds 1 MiB')
-      const trigger = feishuTrigger(ctx.id, JSON.parse(line), bot(ctx).botId, bot(ctx).appId)
-      // 来源被禁用时已读取的事件会被丢弃；消费者随后不久停止。
-      if (!trigger || !enabled(ctx)) return
-      const chats = ctx.state.get(KV.feishu.chats(ctx.id)) ?? {}
-      chats[String(trigger.meta.chatId)] = trigger.meta.direct === true
-      ctx.state.set(KV.feishu.chats(ctx.id), chats)
-      await receive(ctx, trigger)
-    }).catch(error => { ctx.report('feishu', { state: 'error', detail: String(error), at: new Date().toISOString() }) })
+    queue.push(line)
+    if (queue.length >= EVENT_BUFFER) stdout.pause()
+    drain()
+  })
+  /** 等待退出前已在缓冲中的事件全部处理完。 */
+  const drained = (): Promise<void> => new Promise(resolve => {
+    if (!inflight && !queue.length) resolve(); else drainedWake = resolve
   })
   try {
     await new Promise<void>((resolve, reject) => {
@@ -114,7 +141,7 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       const exited = (code: number | null) => new Error(`Feishu event consumer exited (${code}, ready=${ready}): ${diagnostic}`)
       child.once('close', (code) => signal.aborted ? resolve() : reject(exited(code)))
     })
-  } finally { clearTimeout(timeout); signal.removeEventListener('abort', stop); stdout.close(); stderr.close(); await chain }
+  } finally { clearTimeout(timeout); signal.removeEventListener('abort', stop); stdout.close(); stderr.close(); await drained() }
 }
 
 /** 刷新已加入群的映射（`chat_id -> name`）；失败时抛出，以便之前存储的列表保持完整。 */
@@ -126,7 +153,7 @@ export async function refreshChatNames(ctx: SourceContext, signal?: AbortSignal)
   ctx.state.set(KV.sources.labels(ctx.id), names)
   return names
 }
-/** 独立于历史补收每分钟重读群列表（后者的轮次可能长得多），使新加入的群能在一分钟内出现。 */
+/** 独立于历史补收每五分钟重读群列表（后者的轮次可能长得多），使新加入的群能在五分钟内出现。 */
 async function chatNamesLoop(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
   if (!available(ctx)) return
@@ -135,12 +162,16 @@ async function chatNamesLoop(ctx: SourceContext, signal: AbortSignal): Promise<v
       try { await refreshChatNames(ctx, signal) }
       catch { /* 名字只是显示辅助；存储的列表会保留，直到后续读取成功。 */ }
     }
-    await delay(60_000, undefined, { signal }).catch(() => {})
+    await delay(300_000, undefined, { signal }).catch(() => {})
   }
 }
+/** 补收轮次之间的等待：成功时 60 秒加最多 15 秒抖动；失败时指数退避（首败 30 秒，封顶 10 分钟），恢复成功后回到基线。 */
+export const backfillDelay = (previous: number | undefined, failed: boolean): number =>
+  failed ? Math.min(previous === undefined ? 30_000 : previous * 2, 600_000) : 60_000 + Math.floor(Math.random() * 15_000)
 async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   await ctx.ready
   if (!available(ctx)) { ctx.report('history', health('paused', 'feishuBotMissing')); return }
+  let backoff: number | undefined
   while (!signal.aborted) {
     const config = enabled(ctx)
     if (!config) {
@@ -169,7 +200,9 @@ async function backfillLoop(ctx: SourceContext, signal: AbortSignal): Promise<vo
     if (!signal.aborted) ctx.report('history', errors.length
       ? { state: 'error', detail: errors.join('\n') }
       : { state: 'ready', detail: `Configured groups and known direct chats recovered${skipped}`, at: new Date().toISOString() })
-    await delay(60_000, undefined, { signal }).catch(() => {})
+    const wait = backfillDelay(backoff, errors.length > 0)
+    backoff = errors.length ? wait : undefined
+    await delay(wait, undefined, { signal }).catch(() => {})
   }
 }
 /**
@@ -239,13 +272,15 @@ async function pollThread(ctx: SourceContext, thread: Thread, signal?: AbortSign
   if (!config) return
   const commands = ctx.commands.withSignal(signal)
   const pageSize = config.readPageSize
+  // 一次轮询突发共享来源消息缓存：初始化读取与话题翻页不再每页重复 mget 同一条消息。
+  const memo: SourceMemo = new Map()
   const checkpoint = KV.feishu.seen(thread.key)
   const known = new Set(ctx.state.get(checkpoint) ?? [])
   const initialized = ctx.state.get(KV.feishu.initialized(thread.key))
   if (!initialized) {
     // 首次轮询把根消息和父消息标记为已见，避免历史上下文被当作新触发器接入。
     for (const section of ['root', 'parent']) {
-      const result = await readFeishu(commands, ref, `feishu/${ref.triggerId}/${section}`, pageSize)
+      const result = await readFeishu(commands, ref, `feishu/${ref.triggerId}/${section}`, pageSize, 'asc', memo)
       if ('message' in result && result.message) known.add(result.message.message_id)
     }
     ctx.state.set(checkpoint, [...known])

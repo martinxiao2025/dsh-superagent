@@ -66,4 +66,3 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
       : 'dsh-superagent is not running; GET /orchestrator/api/health reports the startup phase')
 }
 export type { Deployment, DeploymentConfig } from './deployment.ts'
-export * from './core/index.ts'

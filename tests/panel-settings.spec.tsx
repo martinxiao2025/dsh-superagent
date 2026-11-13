@@ -261,6 +261,93 @@ it('keeps Feishu credentials on their own page with a CLI identity', async () =>
   expect(document.querySelector('.dt-card .dt-add-grid')).not.toBeNull()
 })
 
+it('saves an edited Git credential without resubmitting its stored material', async () => {
+  server.gitCredentials = [{ id: 'cred', name: '机器人凭据', kind: 'https', provider: 'github', username: 'agent-bot', note: '',
+    origin: 'pasted' as const, keyPath: '', revision: 1, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••oken' }]
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))
+  await click(find(zh.edit, '.dt-card button'))
+  // 材料在保险库中：编辑表单不回填令牌，保存时也不把空字段提交成空字符串覆盖旧材料。
+  expect(field<HTMLInputElement>(zh.credentialToken).value).toBe('')
+  await type(field<HTMLTextAreaElement>(zh.credentialNote), '轮换前的机器人令牌')
+  await click(find(zh.save, '.dt-card button'))
+  await settle()
+  const saved = server.requests.find(request => request.method === 'PUT' && request.path === 'git-credentials/cred')
+  expect(saved?.body).toEqual({ value: { name: '机器人凭据', kind: 'https', provider: 'github', username: 'agent-bot',
+    note: '轮换前的机器人令牌' }, revision: 1 })
+  expect(JSON.stringify(saved?.body)).not.toContain('token')
+  expect(server.gitCredentials[0]).toMatchObject({ revision: 2, note: '轮换前的机器人令牌' })
+  expect(document.querySelector('.dt-toast')?.textContent).toBe('已保存凭据：机器人凭据（版本 2）')
+})
+
+it('refuses to delete a Git credential a project still references, with the count in the refusal', async () => {
+  server.gitCredentials = [{ id: 'cred', name: '机器人凭据', kind: 'https', provider: 'github', username: 'agent-bot', note: '',
+    origin: 'pasted' as const, keyPath: '', revision: 1, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••oken' }]
+  server.settings = { ...server.settings, projects: { content: { name: '内容运营', enabled: true,
+    codeRepo: { kind: 'github' as const, config: { repository: 'acme/widgets' } }, taskSource: { kind: 'excel', config: {} },
+    gitCredential: 'cred', feishuCredential: '', execution: { directory: '', branch: '' },
+    schedule: { intervalMinutes: 30, runOnStart: true }, retry: { maxRetries: 2, retryBackoffSeconds: 60 },
+    taskPolicy: { pendingStatuses: ['待处理'], doneStatus: '已完成', failedStatus: '失败' } } } }
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))
+  await click(find(zh.credentialDelete, '.dt-card button'))
+  await click(find(zh.confirm, '.dt-modal button'))
+  await settle()
+  // 记录仍在：引用计数拒绝删除，确认弹窗保持打开，并按插值提示引用数量。
+  expect(server.gitCredentials.map(item => item.id)).toEqual(['cred'])
+  expect(document.querySelector('.dt-toast')?.textContent).toBe('Git 凭据 cred 仍被 1 个项目引用。')
+  expect(find(zh.confirm, '.dt-modal button')).toBeTruthy()
+})
+
+it('gates the Git add form on a name and usable material before enabling save and verify', async () => {
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))
+  await click(find(zh.credentialNew, '.dt-add-trigger button'))
+  const gated = () => all('.dt-source-add .dt-row-buttons button')
+    .filter(button => button.textContent === zh.verify || button.textContent === zh.credentialNew)
+  // 没有名称与材料时，验证与新增都不可用。
+  expect(gated().every(button => button.hasAttribute('disabled'))).toBe(true)
+  await type(field<HTMLInputElement>(zh.credentialName), '部署机器人')
+  // 只有名称仍不够：材料决定能否验证。
+  expect(gated().find(button => button.textContent === zh.credentialNew)!.hasAttribute('disabled')).toBe(true)
+  await type(field<HTMLSelectElement>(zh.credentialKind), 'https')
+  await type(field<HTMLInputElement>(zh.credentialToken), 'ghp_abcdefgh')
+  expect(gated().every(button => !button.hasAttribute('disabled'))).toBe(true)
+})
+
+it('saves an edited Feishu credential and verifies the app identity with a wiki space', async () => {
+  server.feishuCredentials = [{ id: 'bot', name: '知识库机器人', mode: 'app', appId: 'cli_bot', cli: '', note: '',
+    revision: 2, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••wxyz' }]
+  await mount()
+  await click(zh['tab.settings'])
+  await click(find(zh['settingsGroup.feishuCredentials'], '.dt-settings-link'))
+  // 应用身份验证：可选填写知识库 ID，验证弹窗按记录 ID 与 spaceId 一并检查。
+  await click(find(zh.verify, '.dt-card button'))
+  const dialog = document.querySelector('.dt-modal')!
+  await type(field<HTMLInputElement>(zh.feishuSpaceId, dialog), '6946842750923456789')
+  await click(find(zh.verify, '.dt-modal button'))
+  await settle()
+  expect(all('.dt-card .dt-check').map(check => check.textContent))
+    .toEqual(['应用凭据可用：cli_bot（••••wxyz）', '知识库可读取：6946842750923456789'])
+  expect(server.requests.find(request => request.path === 'feishu-credentials/verify')?.body)
+    .toMatchObject({ id: 'bot', spaceId: '6946842750923456789' })
+  expect(document.querySelector('.dt-modal .dt-verify-summary')?.textContent).toBe('验证通过：2 项检查')
+  await click(find(zh.cancel, '.dt-modal button'))
+  // 编辑保存：密钥不回填也不重发，只有变更过的备注随身份字段一起提交。
+  await click(find(zh.edit, '.dt-card button'))
+  expect(field<HTMLInputElement>(zh.feishuAppSecret).value).toBe('')
+  await type(field<HTMLTextAreaElement>(zh.credentialNote), '知识库巡检机器人')
+  await click(find(zh.save, '.dt-card button'))
+  await settle()
+  const saved = server.requests.find(request => request.method === 'PUT' && request.path === 'feishu-credentials/bot')
+  expect(saved?.body).toEqual({ value: { name: '知识库机器人', mode: 'app', appId: 'cli_bot', note: '知识库巡检机器人' }, revision: 2 })
+  expect(JSON.stringify(saved?.body)).not.toContain('appSecret')
+  expect(server.feishuCredentials[0]).toMatchObject({ revision: 3 })
+})
+
 it('lists the settings groups stages first, opens each stage\'s group from its status, and returns to the last group opened',
   async () => {
   await mount()

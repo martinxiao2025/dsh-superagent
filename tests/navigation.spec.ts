@@ -63,6 +63,26 @@ it('reads each page a tab remembered with the parameters it takes, and leaves ou
     .toEqual({ page: 'settings', query: { group: 'projects', source: 'feishu' } })
   expect([parseRoute('overview'), parseRoute(null)]).toEqual([undefined, undefined])
 })
+it('parses every unreadable route shape to nothing and survives hostile route memories', () => {
+  // 非对象与未知页面都解析为 undefined；查询不是对象时按缺失处理，合法的 24h 窗口保留。
+  expect([parseRoute(undefined), parseRoute(7), parseRoute({}), parseRoute({ page: 'nope' })]).toEqual([undefined, undefined, undefined, undefined])
+  expect(parseRoute({ page: 'trigger', query: 'recent' })).toEqual({ page: 'trigger' })
+  expect(parseRoute({ page: 'eval', query: { filter: 'stop', window: '24h' } }))
+    .toEqual({ page: 'eval', query: { filter: 'stop', window: '24h' } })
+  // 很长的栈只保留其中可读的路由，顺序不变。
+  const long = Array.from({ length: 500 }, (_, index) => index % 2 ? { page: 'overview' } : index)
+  sessionStorage.setItem('dsh-superagent/route', JSON.stringify({ route: { page: 'overview' }, stack: long }))
+  expect(initialLocation().stack).toEqual(Array.from({ length: 250 }, () => ({ page: 'overview' })))
+  // 'null' 与抛错的 sessionStorage 读取都回退到 HOME；写入失败同样只是失去记忆，不抛出。
+  sessionStorage.setItem('dsh-superagent/route', 'null')
+  expect(initialLocation()).toEqual({ route: { page: 'overview' }, stack: [] })
+  const denied = vi.spyOn(sessionStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
+  expect(initialLocation()).toEqual({ route: { page: 'overview' }, stack: [] })
+  denied.mockRestore()
+  const quota = vi.spyOn(sessionStorage, 'setItem').mockImplementation(() => { throw new Error('quota') })
+  expect(() => remember({ route: { page: 'overview' }, stack: [] })).not.toThrow()
+  quota.mockRestore()
+})
 it('opens the settings that fix each setup problem: the Deployment group, or the message-intake page of the Source it names', () => {
   expect(setupPage('deployment')).toEqual({ page: 'settings', query: { group: 'deployment' } })
   // 消息来源记录进入飞书凭据的「消息接入」页签。

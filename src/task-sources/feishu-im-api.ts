@@ -1,9 +1,8 @@
 /**
  * 飞书群消息读取接口：按群拉取最近消息并抽取纯文本，供飞书消息任务来源使用。
- * 应用身份走 HTTP，本机 CLI 身份走 `lark api`；两种实现共用同一套消息解析。
+ * 端点映射、字段解析与分页只写一遍；CLI 与 HTTP 的传输差异由 FeishuTransport 承担。
  */
-import type { LarkCall } from './feishu-doc.ts'
-import { FeishuApiError } from './feishu-api.ts'
+import { larkTransport, httpTransport, type FeishuTransport, type LarkCall } from '../feishu-transport.ts'
 
 /** 一条群消息的最小视图：编号稳定，文本已抽取，发送者与时间用于展示与排障。 */
 export interface ImMessage {
@@ -89,18 +88,19 @@ function messageOf(value: Record<string, unknown>): ImMessage {
   }
 }
 
-/** CLI 身份：`lark api GET <path> --params <json>`，返回 `data`。 */
-export function larkImApi(lark: LarkCall): FeishuImApi {
+const itemsOf = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
+  Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
+
+/** 群消息与群列表端点映射的唯一实现；`transport.get` 返回已解包的 `data`。 */
+export function feishuImApi(transport: FeishuTransport): FeishuImApi {
   return {
     /** 按群读取最近消息；倒序读取，取够 `limit` 条即停止。 */
     async messages(chatId, { limit }) {
       return pagedMessages(async pageToken => {
-        const data = await lark(['api', 'GET', '/open-apis/im/v1/messages', '--params', JSON.stringify({
+        const data = await transport.get('/im/v1/messages', {
           container_id_type: 'chat', container_id: chatId, sort_type: 'ByCreateTimeDesc',
-          page_size: Math.min(limit, PAGE), page_token: pageToken })])
-        const record = (data ?? {}) as Record<string, unknown>
-        const items = Array.isArray(record.items) ? record.items as Record<string, unknown>[] : []
-        return { items: items.map(messageOf), hasMore: record.has_more === true, pageToken: String(record.page_token ?? '') }
+          page_size: Math.min(limit, PAGE), ...pageToken ? { page_token: pageToken } : {} })
+        return { items: itemsOf(data).map(messageOf), hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
       }, limit)
     },
     /** 机器人已加入的群；分页读满 200 个为止。 */
@@ -108,81 +108,23 @@ export function larkImApi(lark: LarkCall): FeishuImApi {
       const chats: { id: string; name: string }[] = []
       let pageToken = ''
       for (let page = 0; page < 4; page += 1) {
-        const data = await lark(['api', 'GET', '/open-apis/im/v1/chats', '--params',
-          JSON.stringify({ page_size: PAGE, page_token: pageToken })])
-        const record = (data ?? {}) as Record<string, unknown>
-        const items = Array.isArray(record.items) ? record.items as Record<string, unknown>[] : []
-        chats.push(...items.map(item => ({ id: String(item.chat_id ?? ''), name: String(item.name ?? '') }))
+        const data = await transport.get('/im/v1/chats', { page_size: PAGE, ...pageToken ? { page_token: pageToken } : {} })
+        chats.push(...itemsOf(data).map(item => ({ id: String(item.chat_id ?? ''), name: String(item.name ?? '') }))
           .filter(chat => chat.id))
-        if (record.has_more !== true || !record.page_token) break
-        pageToken = String(record.page_token)
+        if (data.has_more !== true || !data.page_token) break
+        pageToken = String(data.page_token)
       }
       return chats.slice(0, 200)
     },
   }
 }
 
-const BASE = 'https://open.feishu.cn/open-apis'
+/** CLI 身份入口（保持既有签名）：`lark api GET <path> --params <json>`，返回 `data`。 */
+export function larkImApi(lark: LarkCall): FeishuImApi {
+  return feishuImApi(larkTransport(lark))
+}
 
-/** 应用身份：先换 tenant_access_token，再按同样的接口读取；token 缓存到过期前 60 秒。 */
+/** 应用身份入口（保持既有签名）：tenant_access_token 缓存到过期前 60 秒。 */
 export function httpImApi(appId: string, appSecret: string, signal?: AbortSignal): FeishuImApi {
-  let cached: { token: string; expiresAt: number } | undefined
-  const tenant = async (): Promise<string> => {
-    if (cached && cached.expiresAt > Date.now()) return cached.token
-    const response = await fetch(`${BASE}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST', signal, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-    })
-    const payload = await response.json() as { code?: number; msg?: string; tenant_access_token?: string; expire?: number }
-    if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
-      throw new FeishuApiError(payload.msg ?? `tenant token 换取失败（HTTP ${response.status}）`, response.status, payload.code)
-    }
-    cached = { token: payload.tenant_access_token, expiresAt: Date.now() + Math.max(60, (payload.expire ?? 7200) - 60) * 1000 }
-    return cached.token
-  }
-  return {
-    /** 按群读取最近消息；HTTP 错误保留状态码与业务码，供驱动区分无权与不存在。 */
-    async messages(chatId, { limit }) {
-      return pagedMessages(async pageToken => {
-        const url = new URL(`${BASE}/im/v1/messages`)
-        url.searchParams.set('container_id_type', 'chat')
-        url.searchParams.set('container_id', chatId)
-        url.searchParams.set('sort_type', 'ByCreateTimeDesc')
-        url.searchParams.set('page_size', String(Math.min(limit, PAGE)))
-        if (pageToken) url.searchParams.set('page_token', pageToken)
-        const response = await fetch(url, { signal, headers: { authorization: `Bearer ${await tenant()}` } })
-        const payload = await response.json() as { code?: number; msg?: string; data?: Record<string, unknown> }
-        if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
-          throw new FeishuApiError(`${payload.msg ?? `飞书返回 HTTP ${response.status}`}${payload.code ? ` (${payload.code})` : ''}`,
-            response.status, payload.code)
-        }
-        const data = payload.data ?? {}
-        const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : []
-        return { items: items.map(messageOf), hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
-      }, limit)
-    },
-    /** 机器人已加入的群；分页读满 200 个为止。 */
-    async chats() {
-      const chats: { id: string; name: string }[] = []
-      let pageToken = ''
-      for (let page = 0; page < 4; page += 1) {
-        const url = new URL(`${BASE}/im/v1/chats`)
-        url.searchParams.set('page_size', String(PAGE))
-        if (pageToken) url.searchParams.set('page_token', pageToken)
-        const response = await fetch(url, { signal, headers: { authorization: `Bearer ${await tenant()}` } })
-        const payload = await response.json() as { code?: number; msg?: string; data?: Record<string, unknown> }
-        if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
-          throw new FeishuApiError(`${payload.msg ?? `飞书返回 HTTP ${response.status}`}${payload.code ? ` (${payload.code})` : ''}`,
-            response.status, payload.code)
-        }
-        const data = payload.data ?? {}
-        const items = Array.isArray(data.items) ? data.items as Record<string, unknown>[] : []
-        chats.push(...items.map(item => ({ id: String(item.chat_id ?? ''), name: String(item.name ?? '') }))
-          .filter(chat => chat.id))
-        if (data.has_more !== true || !data.page_token) break
-        pageToken = String(data.page_token ?? '')
-      }
-      return chats.slice(0, 200)
-    },
-  }
+  return feishuImApi(httpTransport(appId, appSecret, signal))
 }

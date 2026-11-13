@@ -1,16 +1,17 @@
 /** 项目页签与项目设置：项目自带代码仓库与任务来源，直接引用 Git 与飞书凭据。 */
-import { useEffect, useState, type ReactElement } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { FeishuCredentialView } from '../feishu-credentials/kind.ts'
 import { repositoryOfRemote } from '../code-repos/kind.ts'
 import type { GitCredentialView } from '../git-credentials/kind.ts'
-import type { FieldSpec, Localized } from '../sources/kind.ts'
+import type { FieldSpec, Localized } from '../fields.ts'
 import type { SourceCheck } from '../setup.ts'
 import { ApiError, usePoll, type SettingsView } from './api.ts'
+import { VerifyRow, useFieldChecks } from './checks.tsx'
 import { Button, Input, SegmentedControl, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { useAction, usePanel } from './provider.tsx'
 import { Field, Fields, numberOf, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
-import { errorText, localized, sourceCheckText, when, type T } from './text.ts'
+import { errorText, localized, when, type T } from './text.ts'
 import { ConfirmButton, Hint, LabelValue, LoadState, PageHead, Section, StatusHead } from './widgets.tsx'
 
 type ProjectView = SettingsView['projects'][number]
@@ -43,34 +44,28 @@ function hostKind(remote: string): RepoKind | undefined {
   return info.host.includes('gitlab') ? 'gitlab' : info.host.includes('github') ? 'github' : undefined
 }
 
-/** 读取 Git 与飞书凭据；它们不属于设置快照，进入项目表单时单独读取一次。 */
-function useCredentials() {
+/** Git 与飞书凭据的共享上下文：项目设置区只读取一次，向导与每张已展开的项目卡片复用，不再逐卡片重复请求。 */
+interface Credentials { git: GitCredentialView[]; feishu: FeishuCredentialView[]; error?: string }
+const CredentialsContext = createContext<Credentials | undefined>(undefined)
+/** 读取项目设置区共享的凭据列表。 */
+function useCredentials(): Credentials {
+  const value = useContext(CredentialsContext)
+  if (!value) throw new Error('project settings rendered outside their credentials provider')
+  return value
+}
+/** 拉取一次 Git 与飞书凭据；它们不属于设置快照，进入项目表单时由整个设置区共享这一份。 */
+function CredentialsProvider({ children }: { children: ReactNode }) {
   const { call } = usePanel()
   const [git, setGit] = useState<GitCredentialView[]>([])
   const [feishu, setFeishu] = useState<FeishuCredentialView[]>([])
   const [error, setError] = useState<string>()
   useEffect(() => {
     Promise.all([call('GET git-credentials'), call('GET feishu-credentials')]).then(([gitList, feishuList]) => {
-      setGit(gitList.credentials)
-      setFeishu(feishuList.credentials)
+      setGit(gitList.credentials); setFeishu(feishuList.credentials)
     }, failure => setError(errorText(failure)))
   }, [call])
-  return { git, feishu, error }
-}
-
-/** 一行字段加一个独立的验证按钮，结果就地显示在字段下方。 */
-function VerifyRow({ label, busy, check, onVerify, children }: { label: string; busy: boolean; check?: SourceCheck
-  onVerify: () => void; children: ReactElement<{ id?: string }> }) {
-  const { t } = usePanel()
-  return <div className="dt-verify-item">
-    <div className="dt-verify-row">{children}
-      <Button variant="outline" size="sm" disabled={busy} aria-busy={busy} aria-label={`${t('verify')} · ${label}`}
-        onClick={onVerify}>{busy ? t('verifyBusy') : t('verify')}</Button>
-    </div>
-    {check && <p className={check.ok ? 'dt-hint dt-check' : 'dt-error dt-check'} role={check.ok ? 'status' : 'alert'}>
-      {sourceCheckText(t, check)}
-    </p>}
-  </div>
+  const value = useMemo(() => ({ git, feishu, error }), [git, feishu, error])
+  return <CredentialsContext.Provider value={value}>{children}</CredentialsContext.Provider>
 }
 
 /** 代码仓库编辑：Git 凭据（认证方式随凭据）、仓库全地址与分支；站点与仓库路径由地址推导，不再单独填写。 */
@@ -285,10 +280,14 @@ export function ProjectsPage() {
   </>
 }
 
+/** 项目任务表的每页条数；「加载更多」按它放大窗口，轮询始终读取当前窗口而不是追加历史状态。 */
+const TASKS_PAGE = 50
+
 /** 单项目详情：项目配置摘要与该项目队列中的任务状态，并提供重试/取消/清空排队操作。 */
 export function ProjectPage({ id }: { id: string }) {
   const { t, call, notify, navigate } = usePanel()
-  const { data, error } = usePoll(() => call('GET projects/:id/tasks', { id }), [id], 3000)
+  const [limit, setLimit] = useState(TASKS_PAGE)
+  const { data, error } = usePoll(() => call('GET projects/:id/tasks', { id, query: { limit } }), [id, limit], 3000)
   const retry = useAction((entryId: string) => call('POST queue/:id/retry', { id: entryId }))
   const cancel = useAction((entryId: string) => call('POST queue/:id/cancel', { id: entryId }))
   const clear = useAction(() => call('POST queue/clear', { query: { project: id } }))
@@ -306,7 +305,7 @@ export function ProjectPage({ id }: { id: string }) {
     </div>
     {data.lastError && <Hint>{t('projectLastError')}: {data.lastError}</Hint>}
     {data.deferred && <Hint>{t('projectDeferred')}: {data.deferred.reason}</Hint>}
-    <Section title={t('projectTasksTitle')} hint={t('projectTasksHint')} count={data.items.length}
+    <Section title={t('projectTasksTitle')} hint={t('projectTasksHint')} count={data.total ?? data.items.length}
       action={data.queued > 0 ? <Button variant="outline" size="sm" disabled={clear.busy}
         onClick={() => { void clear.run().then(done => done && notify(t('queueCleared', { count: data.queued }))) }}>
         {t('queueClear')}</Button> : undefined}>
@@ -334,6 +333,9 @@ export function ProjectPage({ id }: { id: string }) {
                 onClick={() => { void retry.run(item.id).then(done => done && notify(t('queueRetried'))) }}>{t('queueRetry')}</Button>}</td>
         </tr>)}</tbody>
       </table>}
+      {data.more && <div className="dt-actions">
+        <Button variant="outline" size="sm" onClick={() => setLimit(value => Math.min(value + TASKS_PAGE, 1000))}>{t('loadMore')}</Button>
+      </div>}
     </Section>
   </>
 }
@@ -342,13 +344,13 @@ export function ProjectPage({ id }: { id: string }) {
 export function ProjectSettings({ focus }: { focus?: string }) {
   const { t } = usePanel()
   const { settings } = useSettings()
-  return <>
+  return <CredentialsProvider>
     <ProjectWizard />
     <div className="dt-cards">
       {settings.projects.length === 0 ? <p className="dt-hint">{t('projectNone')}</p>
         : settings.projects.map(project => <ProjectCard key={project.id} project={project} focus={focus === project.id} />)}
     </div>
-  </>
+  </CredentialsProvider>
 }
 
 /** 向导步骤：基本信息，代码仓库，任务来源，执行与调度。 */
@@ -364,38 +366,53 @@ const emptyRepo = (kinds: readonly CodeRepoKindView[]): RepoValue => ({ kind: (k
 const emptySource = (kinds: readonly TaskSourceKindView[]): SourceValue =>
   ({ kind: (kinds.find(item => item.kind === 'excel') ?? kinds[0])?.kind ?? 'excel', config: {} })
 
+/** 向导草稿：四步的全部表单值收敛为单一对象，重置即整体替换为 emptyWizard。 */
+interface WizardDraft {
+  name: string
+  enabled: boolean
+  repo: RepoValue
+  gitCredential: string
+  source: SourceValue
+  feishuCredential: string
+  directory: string
+  branch: string
+  intervalMinutes: string
+  runOnStart: boolean
+  maxRetries: string
+  retryBackoffSeconds: string
+  pendingStatuses: string
+  doneStatus: string
+  failedStatus: string
+}
+/** 空白向导：仓库取目录第一项，任务来源优先 Excel；配置为空，保存时由服务端补默认值。 */
+const emptyWizard = (repoKinds: readonly CodeRepoKindView[], sourceKinds: readonly TaskSourceKindView[]): WizardDraft => ({
+  name: '', enabled: true, repo: emptyRepo(repoKinds), gitCredential: '', source: emptySource(sourceKinds),
+  feishuCredential: '', directory: '', branch: '', intervalMinutes: PROJECT_DEFAULTS.intervalMinutes, runOnStart: true,
+  maxRetries: PROJECT_DEFAULTS.maxRetries, retryBackoffSeconds: PROJECT_DEFAULTS.retryBackoffSeconds,
+  pendingStatuses: PROJECT_DEFAULTS.pendingStatuses, doneStatus: PROJECT_DEFAULTS.doneStatus, failedStatus: PROJECT_DEFAULTS.failedStatus,
+})
+
 /** 新建项目向导：四步填写完整参数，仓库与任务来源随项目一起创建。 */
 function ProjectWizard() {
   const { t, call, notify } = usePanel()
   const { settings, reload } = useSettings()
   const { git, feishu, error: credentialError } = useCredentials()
   const [step, setStep] = useState<ProjectStep>('basics')
-  const [name, setName] = useState('')
-  const [enabled, setEnabled] = useState(true)
-  const [repo, setRepo] = useState<RepoValue>(() => emptyRepo(settings.codeRepoKinds))
-  const [source, setSource] = useState<SourceValue>(() => emptySource(settings.taskSourceKinds))
-  const [gitCredential, setGitCredential] = useState('')
-  const [feishuCredential, setFeishuCredential] = useState('')
-  const [repoChecks, setRepoChecks] = useState<Record<string, SourceCheck>>({})
-  const [sourceChecks, setSourceChecks] = useState<Record<string, SourceCheck>>({})
-  const [checking, setChecking] = useState<Record<string, boolean>>({})
+  const [draft, setDraft] = useState<WizardDraft>(() => emptyWizard(settings.codeRepoKinds, settings.taskSourceKinds))
   const [branches, setBranches] = useState<string[]>([])
   const [defaultBranch, setDefaultBranch] = useState('')
-  const [directory, setDirectory] = useState('')
-  const [branch, setBranch] = useState('')
-  const [intervalMinutes, setIntervalMinutes] = useState(PROJECT_DEFAULTS.intervalMinutes)
-  const [runOnStart, setRunOnStart] = useState(true)
-  const [maxRetries, setMaxRetries] = useState(PROJECT_DEFAULTS.maxRetries)
-  const [retryBackoffSeconds, setRetryBackoffSeconds] = useState(PROJECT_DEFAULTS.retryBackoffSeconds)
-  const [pendingStatuses, setPendingStatuses] = useState(PROJECT_DEFAULTS.pendingStatuses)
-  const [doneStatus, setDoneStatus] = useState(PROJECT_DEFAULTS.doneStatus)
-  const [failedStatus, setFailedStatus] = useState(PROJECT_DEFAULTS.failedStatus)
+  const { name, enabled, repo, gitCredential, source, feishuCredential, directory, branch, intervalMinutes, runOnStart,
+    maxRetries, retryBackoffSeconds, pendingStatuses, doneStatus, failedStatus } = draft
+  const edit = (next: Partial<WizardDraft>) => setDraft(current => ({ ...current, ...next }))
+  const repoChecks = useFieldChecks('POST code-repos/verify', () => ({ kind: repo.kind, config: repo.config, gitCredential }))
+  const sourceChecks = useFieldChecks('POST task-sources/verify', () =>
+    ({ kind: source.kind, config: source.config, repo, gitCredential, feishuCredential }))
   const interval = Number(intervalMinutes), retries = Number(maxRetries), backoff = Number(retryBackoffSeconds)
   const numbersValid = [interval, retries, backoff].every(value => Number.isInteger(value) && value >= 0)
   const policyValid = [pendingStatuses, doneStatus, failedStatus].every(value => value.trim() !== '')
   /** 仓库步就绪：全地址已填、连通性验证通过且已选分支；配置或凭据变更后必须重新验证。 */
-  const repoConnected = repoChecks.remote?.ok === true
-  const sourceVerified = sourceChecks[sourcePrimaryField(source.kind)]?.ok === true
+  const repoConnected = repoChecks.checks.remote?.ok === true
+  const sourceVerified = sourceChecks.checks[sourcePrimaryField(source.kind)]?.ok === true
   const ready = name.trim() !== '' && source.kind !== '' && numbersValid && policyValid
   const stepReady: Record<ProjectStep, boolean> = { basics: name.trim() !== '',
     codeRepo: String(repo.config.remote ?? '').trim() !== '' && repoConnected && branch.trim() !== '',
@@ -407,35 +424,23 @@ function ProjectWizard() {
     const result = await call('POST code-repos/branches', { body: { kind: repo.kind, config: repo.config, gitCredential } })
     setBranches(result.branches)
     setDefaultBranch(result.defaultBranch)
-    setBranch(current => current && result.branches.includes(current) ? current : result.defaultBranch || current)
+    setDraft(current => ({ ...current, branch: current.branch && result.branches.includes(current.branch)
+      ? current.branch : result.defaultBranch || current.branch }))
   })
   /** 仓库或凭据变更：清空验证结果与分支，逼着用户对新配置重新验证，避免把旧结论带进下一步。
    *  仓库类型与认证方式随凭据的联动在 RepoEditor 内完成。 */
-  const updateRepo = (next: RepoValue) => { setRepo(next); setRepoChecks({}); setBranches([]); setDefaultBranch(''); setBranch('') }
-  const updateGitCredential = (next: string) => {
-    setGitCredential(next); setRepoChecks({}); setBranches([]); setDefaultBranch(''); setBranch('')
+  const updateRepo = (repo: RepoValue) => { edit({ repo, branch: '' }); repoChecks.reset(); setBranches([]); setDefaultBranch('') }
+  const updateGitCredential = (gitCredential: string) => {
+    edit({ gitCredential, branch: '' }); repoChecks.reset(); setBranches([]); setDefaultBranch('')
   }
   /** 任务来源变更：同样清空该步的验证结果。 */
-  const updateSource = (next: SourceValue) => { setSource(next); setSourceChecks({}) }
+  const updateSource = (source: SourceValue) => { edit({ source }); sourceChecks.reset() }
   /** 仓库字段预检：候选配置与 Git 凭据一起提交，不写入设置；地址字段验证通过后自动拉取分支。 */
-  const verifyRepo = async (field: string) => {
-    setChecking(current => ({ ...current, [field]: true }))
-    try {
-      const result = await call('POST code-repos/verify', { body: { kind: repo.kind, config: repo.config, field,
-        gitCredential } })
-      setRepoChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
-      if (result.checks.some(check => check.field === 'remote' && check.ok)) void fetchBranches.run()
-    } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
-  }
+  const verifyRepo = (field: string) => repoChecks.verify(field, checks => {
+    if (checks.some(check => check.field === 'remote' && check.ok)) void fetchBranches.run()
+  })
   /** 任务来源字段预检：连同项目的仓库候选与飞书凭据一起提交，驱动据此读取真实任务。 */
-  const verifySource = async (field: string) => {
-    setChecking(current => ({ ...current, [field]: true }))
-    try {
-      const result = await call('POST task-sources/verify', { body: { kind: source.kind, config: source.config, field,
-        repo, gitCredential, feishuCredential } })
-      setSourceChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
-    } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
-  }
+  const verifySource = (field: string) => sourceChecks.verify(field)
   const create = useAction(async () => {
     const { id } = await call('POST projects', { body: {
       name: name.trim(), enabled, codeRepo: repo, taskSource: source,
@@ -447,12 +452,8 @@ function ProjectWizard() {
         doneStatus: doneStatus.trim(), failedStatus: failedStatus.trim() },
     } })
     notify(t('projectAdded', { id }))
-    setName(''); setRepo(emptyRepo(settings.codeRepoKinds)); setSource(emptySource(settings.taskSourceKinds))
-    setGitCredential(''); setFeishuCredential('')
-    setRepoChecks({}); setSourceChecks({}); setBranches([]); setDefaultBranch(''); setDirectory(''); setBranch('')
-    setIntervalMinutes(PROJECT_DEFAULTS.intervalMinutes); setMaxRetries(PROJECT_DEFAULTS.maxRetries)
-    setRetryBackoffSeconds(PROJECT_DEFAULTS.retryBackoffSeconds); setPendingStatuses(PROJECT_DEFAULTS.pendingStatuses)
-    setDoneStatus(PROJECT_DEFAULTS.doneStatus); setFailedStatus(PROJECT_DEFAULTS.failedStatus)
+    setDraft(emptyWizard(settings.codeRepoKinds, settings.taskSourceKinds))
+    repoChecks.reset(); sourceChecks.reset(); setBranches([]); setDefaultBranch('')
     setStep('basics')
   }, { reload })
   return <div className="dt-source-add" role="group" aria-label={t('projectWizardTitle')}>
@@ -466,28 +467,29 @@ function ProjectWizard() {
     <div className="dt-form dt-block">
       {step === 'basics' && <>
         <Field label={t('projectName')} hint={t('projectNameHint')}>
-          <Input required value={name} placeholder={t('projectNamePlaceholder')} onChange={event => setName(event.target.value)} />
+          <Input required value={name} placeholder={t('projectNamePlaceholder')}
+            onChange={event => edit({ name: event.target.value })} />
         </Field>
         <Field label={t('projectEnabled')} hint={t('projectEnabledHint')}>
-          <div><Switch checked={enabled} onChange={setEnabled} label={t('projectEnabled')} /></div>
+          <div><Switch checked={enabled} onChange={enabled => edit({ enabled })} label={t('projectEnabled')} /></div>
         </Field>
       </>}
       {step === 'codeRepo' && <>
         <div className="dt-add-grid">
           <RepoEditor kinds={settings.codeRepoKinds} value={repo} credential={gitCredential} credentials={git}
-            checks={repoChecks} checking={checking} credentialError={credentialError} onChange={updateRepo}
+            checks={repoChecks.checks} checking={repoChecks.checking} credentialError={credentialError} onChange={updateRepo}
             onCredential={updateGitCredential} onVerify={field => { void verifyRepo(field) }} />
         </div>
         <Field label={t('projectBranch')} hint={t('projectBranchHint')}>
           <div className="dt-verify-row">
             {branches.length
               ? <select className="dt-select" aria-label={t('projectBranch')} value={branch}
-                onChange={event => setBranch(event.target.value)}>
+                onChange={event => edit({ branch: event.target.value })}>
                 {branches.map(item => <option key={item} value={item}>{item === defaultBranch
                   ? `${item} (${t('projectBranchDefault')})` : item}</option>)}
               </select>
               : <Input aria-label={t('projectBranch')} value={branch} placeholder={t('projectBranchEmpty')}
-                onChange={event => setBranch(event.target.value)} />}
+                onChange={event => edit({ branch: event.target.value })} />}
             <Button variant="outline" size="sm" disabled={fetchBranches.busy} aria-busy={fetchBranches.busy}
               onClick={() => { void fetchBranches.run() }}>{fetchBranches.busy ? t('verifyBusy') : t('projectBranchFetch')}</Button>
           </div>
@@ -496,36 +498,40 @@ function ProjectWizard() {
       {step === 'taskSource' && <>
         <div className="dt-add-grid">
           <SourceEditor kinds={settings.taskSourceKinds} value={source} credential={feishuCredential}
-            feishuCredentials={feishu} checks={sourceChecks} checking={checking} credentialError={credentialError}
-            onChange={updateSource} onCredential={setFeishuCredential} onVerify={field => { void verifySource(field) }} />
+            feishuCredentials={feishu} checks={sourceChecks.checks} checking={sourceChecks.checking}
+            credentialError={credentialError}
+            onChange={updateSource} onCredential={feishuCredential => edit({ feishuCredential })}
+            onVerify={field => { void verifySource(field) }} />
         </div>
         {source.kind === 'excel' && <div className="dt-row-buttons"><DownloadTemplateButton /></div>}
       </>}
       {step === 'execution' && <>
         <Field label={t('projectDirectory')} hint={t('projectDirectoryHint')}>
           <Input className="dt-mono" value={directory} placeholder={t('executionDirectoryEmpty')}
-            onChange={event => setDirectory(event.target.value)} />
+            onChange={event => edit({ directory: event.target.value })} />
         </Field>
         <Field label={t('projectInterval')} hint={t('projectIntervalHint')}>
-          <Input type="number" required value={intervalMinutes} onChange={event => setIntervalMinutes(event.target.value)} />
+          <Input type="number" required value={intervalMinutes}
+            onChange={event => edit({ intervalMinutes: event.target.value })} />
         </Field>
         <Field label={t('projectRunOnStart')} hint={t('projectRunOnStartHint')}>
-          <div><Switch checked={runOnStart} onChange={setRunOnStart} label={t('projectRunOnStart')} /></div>
+          <div><Switch checked={runOnStart} onChange={runOnStart => edit({ runOnStart })} label={t('projectRunOnStart')} /></div>
         </Field>
         <Field label={t('projectMaxRetries')} hint={t('projectMaxRetriesHint')}>
-          <Input type="number" required value={maxRetries} onChange={event => setMaxRetries(event.target.value)} />
+          <Input type="number" required value={maxRetries} onChange={event => edit({ maxRetries: event.target.value })} />
         </Field>
         <Field label={t('projectBackoff')} hint={t('projectBackoffHint')}>
-          <Input type="number" required value={retryBackoffSeconds} onChange={event => setRetryBackoffSeconds(event.target.value)} />
+          <Input type="number" required value={retryBackoffSeconds}
+            onChange={event => edit({ retryBackoffSeconds: event.target.value })} />
         </Field>
         <Field label={t('projectPendingStatuses')} hint={t('projectPendingStatusesHint')}>
-          <Input required value={pendingStatuses} onChange={event => setPendingStatuses(event.target.value)} />
+          <Input required value={pendingStatuses} onChange={event => edit({ pendingStatuses: event.target.value })} />
         </Field>
         <Field label={t('projectDoneStatus')} hint={t('projectDoneStatusHint')}>
-          <Input required value={doneStatus} onChange={event => setDoneStatus(event.target.value)} />
+          <Input required value={doneStatus} onChange={event => edit({ doneStatus: event.target.value })} />
         </Field>
         <Field label={t('projectFailedStatus')} hint={t('projectFailedStatusHint')}>
-          <Input required value={failedStatus} onChange={event => setFailedStatus(event.target.value)} />
+          <Input required value={failedStatus} onChange={event => edit({ failedStatus: event.target.value })} />
         </Field>
         <div className="dt-row-meta dt-status-line">
           <LabelValue label={t('projectWizardSummaryName')} value={name.trim() || t('unsetValue')} />
@@ -576,66 +582,64 @@ function ProjectCard({ project, focus }: { project: ProjectView; focus: boolean 
   </div>
 }
 
+/** 项目编辑表单值：执行参数以字符串承载输入，保存时按声明式 spec 写回 API 值。 */
+type ProjectFormValue = Omit<ProjectView['value'], 'schedule' | 'retry' | 'taskPolicy'> & {
+  schedule: { intervalMinutes: string; runOnStart: boolean }
+  retry: { maxRetries: string; retryBackoffSeconds: string }
+  taskPolicy: { pendingStatuses: string; doneStatus: string; failedStatus: string }
+}
+/** 表单字符串 ⇄ 保存值的单字段双向转换。 */
+interface FieldConversion<Form, Saved> { read: (saved: Saved) => Form; write: (form: Form) => Saved }
+/** 数字输入：表单以字符串承载；保存时解析，非法输入按 0 提交，由服务端校验拒绝。 */
+const numberField: FieldConversion<string, number> = { read: String, write: text => numberOf(text) ?? 0 }
+/** 状态清单：表单是逗号分隔字符串；保存时拆分、去空白、去空项。 */
+const statusListField: FieldConversion<string, string[]> = { read: list => list.join(', '),
+  write: text => text.split(/[,，]/).map(status => status.trim()).filter(Boolean) }
+/** 原样字段：读写都不转换。 */
+const plainField: FieldConversion<string, string> = { read: value => value, write: form => form }
+/** 项目编辑表单的声明式规格：saved 与 toValue 由同一份 spec 派生，转换规则只写一遍。 */
+const PROJECT_FORM_SPEC = {
+  schedule: { intervalMinutes: numberField },
+  retry: { maxRetries: numberField, retryBackoffSeconds: numberField },
+  taskPolicy: { pendingStatuses: statusListField, doneStatus: plainField, failedStatus: plainField },
+}
+/** 已保存项目值 → 表单初值：spec 声明的组按 read 逐字段转换，其余原样保留。 */
+const projectFormOf = (value: ProjectView['value']): ProjectFormValue => ({
+  ...value,
+  schedule: { ...value.schedule, intervalMinutes: PROJECT_FORM_SPEC.schedule.intervalMinutes.read(value.schedule.intervalMinutes) },
+  retry: { ...value.retry, maxRetries: PROJECT_FORM_SPEC.retry.maxRetries.read(value.retry.maxRetries),
+    retryBackoffSeconds: PROJECT_FORM_SPEC.retry.retryBackoffSeconds.read(value.retry.retryBackoffSeconds) },
+  taskPolicy: { ...value.taskPolicy,
+    pendingStatuses: PROJECT_FORM_SPEC.taskPolicy.pendingStatuses.read(value.taskPolicy.pendingStatuses),
+    doneStatus: PROJECT_FORM_SPEC.taskPolicy.doneStatus.read(value.taskPolicy.doneStatus),
+    failedStatus: PROJECT_FORM_SPEC.taskPolicy.failedStatus.read(value.taskPolicy.failedStatus) },
+})
+/** 表单值 → 保存载荷：与 projectFormOf 使用同一份 spec，按 write 方向写回。 */
+const projectValueOf = (form: ProjectFormValue): ProjectView['value'] => ({
+  ...form,
+  schedule: { ...form.schedule, intervalMinutes: PROJECT_FORM_SPEC.schedule.intervalMinutes.write(form.schedule.intervalMinutes) },
+  retry: { ...form.retry, maxRetries: PROJECT_FORM_SPEC.retry.maxRetries.write(form.retry.maxRetries),
+    retryBackoffSeconds: PROJECT_FORM_SPEC.retry.retryBackoffSeconds.write(form.retry.retryBackoffSeconds) },
+  taskPolicy: { ...form.taskPolicy,
+    pendingStatuses: PROJECT_FORM_SPEC.taskPolicy.pendingStatuses.write(form.taskPolicy.pendingStatuses),
+    doneStatus: PROJECT_FORM_SPEC.taskPolicy.doneStatus.write(form.taskPolicy.doneStatus),
+    failedStatus: PROJECT_FORM_SPEC.taskPolicy.failedStatus.write(form.taskPolicy.failedStatus) },
+})
+
 /** 项目编辑：仓库、任务来源、执行位置与调度策略在同一表单中保存。 */
 function ProjectForm({ project }: { project: ProjectView }) {
-  const { t, call, notify } = usePanel()
+  const { t } = usePanel()
   const { settings } = useSettings()
   const { git, feishu, error: credentialError } = useCredentials()
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
-  const [checking, setChecking] = useState<Record<string, boolean>>({})
-  const saved = {
-    name: project.value.name,
-    enabled: project.value.enabled,
-    codeRepo: project.value.codeRepo,
-    taskSource: project.value.taskSource,
-    gitCredential: project.value.gitCredential,
-    feishuCredential: project.value.feishuCredential,
-    execution: { directory: project.value.execution.directory, branch: project.value.execution.branch },
-    schedule: { intervalMinutes: String(project.value.schedule.intervalMinutes), runOnStart: project.value.schedule.runOnStart },
-    retry: { maxRetries: String(project.value.retry.maxRetries), retryBackoffSeconds: String(project.value.retry.retryBackoffSeconds) },
-    taskPolicy: {
-      pendingStatuses: project.value.taskPolicy.pendingStatuses.join(', '),
-      doneStatus: project.value.taskPolicy.doneStatus,
-      failedStatus: project.value.taskPolicy.failedStatus,
-    },
-  }
-  const draft = useBlockDraft(`project:${project.id}`, saved, project.revision, value => ({
-    name: value.name,
-    enabled: value.enabled,
-    codeRepo: value.codeRepo,
-    taskSource: value.taskSource,
-    gitCredential: value.gitCredential,
-    feishuCredential: value.feishuCredential,
-    execution: value.execution,
-    schedule: { intervalMinutes: numberOf(value.schedule.intervalMinutes) ?? 0, runOnStart: value.schedule.runOnStart },
-    retry: { maxRetries: numberOf(value.retry.maxRetries) ?? 0, retryBackoffSeconds: numberOf(value.retry.retryBackoffSeconds) ?? 0 },
-    taskPolicy: {
-      pendingStatuses: value.taskPolicy.pendingStatuses.split(/[,，]/).map(status => status.trim()).filter(Boolean),
-      doneStatus: value.taskPolicy.doneStatus,
-      failedStatus: value.taskPolicy.failedStatus,
-    },
-  }))
+  const draft = useBlockDraft(`project:${project.id}`, projectFormOf(project.value), project.revision, projectValueOf)
   const value = draft.value
-  const edit = (next: Partial<typeof value>) => draft.edit({ ...value, ...next })
-  /** 保存前的仓库预检：使用当前草稿的凭据引用，不写入设置。 */
-  const verifyRepo = async (field: string) => {
-    setChecking(current => ({ ...current, [field]: true }))
-    try {
-      const result = await call('POST code-repos/verify', { body: { kind: value.codeRepo.kind, config: value.codeRepo.config,
-        field, gitCredential: value.gitCredential } })
-      setChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
-    } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
-  }
+  const repoChecks = useFieldChecks('POST code-repos/verify', () =>
+    ({ kind: value.codeRepo.kind, config: value.codeRepo.config, gitCredential: value.gitCredential }))
   /** 任务来源预检：用已保存的项目 ID 解析真实仓库，Excel 驱动因此能读到项目的工作副本。 */
-  const verifySource = async (field: string) => {
-    setChecking(current => ({ ...current, [field]: true }))
-    try {
-      const result = await call('POST task-sources/verify', { body: { kind: value.taskSource.kind, config: value.taskSource.config,
-        field, projectId: project.id, repo: value.codeRepo, gitCredential: value.gitCredential,
-        feishuCredential: value.feishuCredential } })
-      setChecks(current => ({ ...current, ...Object.fromEntries(result.checks.map(check => [check.field, check])) }))
-    } catch (failure) { notify(errorText(failure)) } finally { setChecking(current => ({ ...current, [field]: false })) }
-  }
+  const sourceChecks = useFieldChecks('POST task-sources/verify', () =>
+    ({ kind: value.taskSource.kind, config: value.taskSource.config, projectId: project.id, repo: value.codeRepo,
+      gitCredential: value.gitCredential, feishuCredential: value.feishuCredential }))
+  const edit = (next: Partial<ProjectFormValue>) => draft.edit({ ...value, ...next })
   return <form className="dt-form" onSubmit={event => { void draft.submit(event) }}>
     <Fields disabled={draft.busy}>
       <div className="dt-form dt-block">
@@ -658,18 +662,19 @@ function ProjectForm({ project }: { project: ProjectView }) {
         <div className="dt-subhead"><span className="dt-field-head">{t('projectCodeRepoLabel')}</span></div>
         <div className="dt-add-grid">
           <RepoEditor kinds={settings.codeRepoKinds} value={value.codeRepo} credential={value.gitCredential} credentials={git}
-            checks={checks} checking={checking} credentialError={credentialError}
+            checks={repoChecks.checks} checking={repoChecks.checking} credentialError={credentialError}
             onChange={codeRepo => edit({ codeRepo })} onCredential={gitCredential => edit({ gitCredential })}
-            onVerify={field => { void verifyRepo(field) }} />
+            onVerify={field => { void repoChecks.verify(field) }} />
         </div>
       </div>
       <div className="dt-form dt-block">
         <div className="dt-subhead"><span className="dt-field-head">{t('projectTaskSourceLabel')}</span></div>
         <div className="dt-add-grid">
           <SourceEditor kinds={settings.taskSourceKinds} value={value.taskSource} credential={value.feishuCredential}
-            feishuCredentials={feishu} checks={checks} checking={checking} credentialError={credentialError}
+            feishuCredentials={feishu} checks={sourceChecks.checks} checking={sourceChecks.checking}
+            credentialError={credentialError}
             onChange={taskSource => edit({ taskSource })} onCredential={feishuCredential => edit({ feishuCredential })}
-            onVerify={field => { void verifySource(field) }} />
+            onVerify={field => { void sourceChecks.verify(field) }} />
         </div>
         {value.taskSource.kind === 'excel' && <div className="dt-row-buttons"><DownloadTemplateButton /></div>}
       </div>

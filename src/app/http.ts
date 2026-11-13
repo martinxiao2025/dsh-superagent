@@ -15,7 +15,7 @@ import { SetupError, type SetupProblem, type SourceCheck } from '../setup.ts'
 import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
 import { firstSource, type Deployment, type Machine } from '../deployment.ts'
 import type { DshExecutor } from '../executor/dsh.ts'
-import type { Health } from '../sources/host.ts'
+import type { Health } from '../infra/health.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
 import type { Sessions } from './sessions.ts'
 import type { Store } from './store.ts'
@@ -30,6 +30,7 @@ import { sourceHealth, sourceState, sourcesStatus, type SetupState } from './vie
 import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
 import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
 import type { StartupStatus } from './startup.ts'
+import type { QueuePage } from './scheduler.ts'
 import type { QueueSnapshot } from '../queue/model.ts'
 import type { ResetReport } from './reset.ts'
 import type { GitCredentials } from '../git-credentials/service.ts'
@@ -67,8 +68,10 @@ export interface HttpHost {
   readonly sourceProblem?: SetupProblem | undefined
   readonly feishuProblem?: SetupProblem | undefined
   configured(): boolean
-  /** 项目调度队列的只读快照；P5 面板与外部集成读取。 */
-  queue(): QueueSnapshot
+  /** 项目调度队列的分页快照；P5 面板轮询读取，终态历史按页加载。 */
+  queue(query?: { offset: number; limit: number }): QueuePage
+  /** 项目详情视图的完整条目集（活动 + 终态），交互路径不分页。 */
+  projectQueue(projectId: string): QueueSnapshot
   /** 手动重试一个已结束或退避中的队列条目。 */
   retryQueue(id: string): { retried: boolean }
   /** 手动取消一个活动中的队列条目；运行中的工单会被停止。 */
@@ -214,6 +217,8 @@ const offset = z.coerce.number().int().nonnegative().catch(0)
 const limit = (fallback: number, max: number) => z.coerce.number().int().positive().catch(fallback).transform(value => Math.min(max, value))
 const TicketsQuery = z.object({ state: z.enum(TICKET_FILTERS).catch('open'), offset, limit: limit(20, 1000) })
 const ThreadsQuery = z.object({ filter: z.enum(THREAD_FILTERS).catch('subscribed'), offset, limit: limit(20, 1000) })
+const QueueQuery = z.object({ offset, limit: limit(200, 1000) })
+const ProjectTasksQuery = z.object({ offset, limit: limit(50, 1000) })
 const ThreadQuery = z.object({ limit: limit(50, 100), before: z.string().optional(), around: z.string().optional() })
 const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.literal('24h').optional().catch(undefined), offset,
   limit: limit(30, 200) })
@@ -297,11 +302,11 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
       return removed
     },
     // 项目详情页读取该项目在队列中的任务与全局运行时占用；项目不存在时 404。
-    'GET projects/:id/tasks': ({ params }) => {
+    'GET projects/:id/tasks': ({ params, query }) => {
       const settings = store.settings()
       const project = settings.projects[params.id]
       if (!project) throw new RouteError(404, 'Project not found')
-      return projectTasksView(params.id, project, runtime.queue())
+      return projectTasksView(params.id, project, runtime.projectQueue(params.id), ProjectTasksQuery.parse(query))
     },
     // 凭据与来源相互独立：路由、校验端点与材料存储都不共用。
     'GET git-credentials': () => ({ credentials: runtime.gitCredentials.list() }),
@@ -346,7 +351,7 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'DELETE feishu-credentials/:id': ({ params }) => runtime.feishuCredentials.remove(params.id),
     // 健康探针附带启动阶段：即使运行时已就绪，也能看出这次启动经历了锁等待还是直接就绪。
     'GET health': () => healthView(runtime, listen(), startup),
-    'GET queue': () => runtime.queue(),
+    'GET queue': ({ query }) => runtime.queue(QueueQuery.parse(query)),
     // 队列操作面：重试/取消单条，或清空排队项；运行中的任务不会被清空操作打断。
     'POST queue/:id/retry': ({ params }) => runtime.retryQueue(params.id),
     'POST queue/:id/cancel': ({ params }) => runtime.cancelQueue(params.id),

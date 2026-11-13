@@ -55,7 +55,7 @@ function emptyRegistry(record: { id: string; kind: string } = { id: 'feishu', ki
 const subscribed = (h: ReturnType<typeof host>, ref: { source: string; id: string }, meta: Record<string, unknown> = {}) =>
   h.store.threads.save({ key: `${ref.source}:${ref.id}`, ref, createdAt: new Date().toISOString(), subscriptions: ['ticket'], correlated: [], pending: [], meta })
 const openTicket = (id: string): Ticket => ({ id, title: id, decisionId: `d-${id}`, mandate: { strength: 'explicit', policyVersion: '',
-  basis: { via: 'listed' }, actor: { source: 'github', id: 'alice' }, scope: '' },
+  basis: { via: 'addressed' as const, addressed: 'mention' as const }, actor: { source: 'github', id: 'alice' }, scope: '' },
   channels: [], assignments: [], inputs: [], undelivered: [], createdAt: '', updatedAt: '', origin: { triggerId: `source-${id}`, triggerIds: [] } })
 describe('feishu source', () => {
   it('registers its kind without a bot, and names on its health what setup still needs', async () => {

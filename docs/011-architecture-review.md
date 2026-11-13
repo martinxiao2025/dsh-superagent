@@ -143,7 +143,7 @@
 ### P1-8 飞书知识库仍是「单节点 docx」，且唯一性表述自相矛盾
 
 - **问题**：现有驱动只接受一个 `url`，解析到单个 `docx` 节点；009 §6.3 的「spaceId + roots[]、文件夹递归、shortcut 解引用、bitable、失效文档隔离、跨文档去重」均未实现。同时 009 §9.1 要求 `spaceId` 全库唯一，而 §10.11 推荐「空间唯一归属 + 根节点集合」，两处结论不一致。
-- **证据**：[feishu-wiki.ts](../src/task-sources/feishu-wiki.ts) 的 `url` 字段与单节点解析；[feishu-doc.ts:46-70](../src/task-sources/feishu-doc.ts#L46-L70) 要求 `obj_type === 'docx'`；[009 §6.3](../docs/009-authoritative-project-design.md#L227-L242)；[009 §9.1 L419](../docs/009-authoritative-project-design.md#L419)；[009 §10.11 L485](../docs/009-authoritative-project-design.md#L485)。
+- **证据**：[feishu-wiki.ts](../src/task-sources/feishu-wiki.ts) 的 `url` 字段与单节点解析；`feishu-doc.ts:46-70` 要求 `obj_type === 'docx'`（该文件已删除，节点类型判定现位于 [feishu-wiki-read.ts](../src/task-sources/feishu-wiki-read.ts#L129-L148)）；[009 §6.3](../docs/009-authoritative-project-design.md#L227-L242)；[009 §9.1 L419](../docs/009-authoritative-project-design.md#L419)；[009 §10.11 L485](../docs/009-authoritative-project-design.md#L485)。
 - **影响**：目标能力缺口最大的部分；若先按单 URL 做 UI，后续多文档改造会连带改绑定模型、校验、错误码与回写。
 - **建议**：先定案并统一为一套模型（建议根集合唯一 + 重叠检测，`spaceId` 只做归属提示），再实现遍历器；`list` 返回 `{tasks, skipped, warnings, invalidDocs}`，单文档失败只跳过该文档并计数，不整批失败；任务键含 `nodeToken`。
 - **工作量**：8–12 人日。
@@ -302,6 +302,8 @@
     - C1 飞书读取原语下沉：`feishuToken`、`tableRows`、`checklistTasks` 等读取逻辑在
       `feishu-doc.ts` 与 `feishu-wiki.ts` 间重叠，应下沉到 `feishu-doc.ts`，`feishu-wiki.ts`
       只保留驱动与 `verify`；
+      （已随 2026-11-13 的传输层统一完成：`feishu-doc.ts` 整文件删除（其读取原语无外部引用），
+      端点映射收敛于 `feishu-api.ts` / `feishu-im-api.ts`，传输与错误分类表在 `src/feishu-transport.ts`。）
     - C2 `RepoPort` 收敛：`code-repos/sync.ts`、`work.ts`、`read.ts` 边界靠命名约定，
       应定义统一的 probe / ensure / read 端口并删除跨文件重复的路径与远端解析；
     - C8 `views/settings.ts` 拆分：聚合下发多类记录，应拆成 projects / credentials 视图。

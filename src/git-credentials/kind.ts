@@ -1,13 +1,12 @@
 /** Git 凭据：独立于代码仓库记录存储，材料在 `<stateDir>/secrets/git` 加密保存。 */
 import { z } from 'zod'
 import { LIMITS } from '../limits.ts'
+import { CredentialIdSchema } from '../secrets/id.ts'
 
 /** 认证方式：SSH 私钥或 HTTPS 访问令牌。 */
 export const GIT_CREDENTIAL_KINDS = ['ssh', 'https'] as const
 /** 托管平台；`generic` 表示自建或未识别的站点。 */
 export const GIT_CREDENTIAL_PROVIDERS = ['github', 'gitlab', 'generic'] as const
-/** 凭据记录 ID 与其它记录使用同一套命名规则，避免拼出目录穿越的路径。 */
-export const CredentialIdSchema = z.string().trim().regex(/^[a-z][a-z0-9-]*$/, '凭据 ID')
 
 /** 记录元数据（写入 SQLite）；私钥与令牌不在其中。 */
 export const GitCredentialSchema = z.object({

@@ -2,14 +2,18 @@
 import { useEffect, useState } from 'react'
 import type { FeishuCredentialInput, FeishuCredentialView } from '../feishu-credentials/kind.ts'
 import type { SourceCheck } from '../setup.ts'
-import { Button, Input, Modal, SegmentedControl, Tag } from './controls.tsx'
+import { mergeChecks } from './checks.tsx'
+import { Button, Input, SegmentedControl, Tag } from './controls.tsx'
+import { CredentialChecks, CredentialVerifyModal, credentialDraftOf, credentialInputOf,
+  type CredentialVerifyWords } from './credential-form.tsx'
 import { usePanel } from './provider.tsx'
 import { Field, useSettings } from './settings-kit.tsx'
 import { SourceSettings } from './source.tsx'
-import { errorText, sourceCheckText } from './text.ts'
+import { errorText, type T } from './text.ts'
 import { ConfirmButton, Hint } from './widgets.tsx'
 
-interface Draft {
+/** 表单草稿；用 type 别名（而非 interface）以满足凭据基座的字符串记录约束。 */
+type Draft = {
   name: string
   mode: 'app' | 'cli'
   appId: string
@@ -20,66 +24,15 @@ interface Draft {
 const EMPTY: Draft = { name: '', mode: 'app', appId: '', appSecret: '', cli: '', note: '' }
 
 /** 空字段不提交，避免把旧密钥覆盖成空字符串。 */
-function inputOf(draft: Draft): FeishuCredentialInput {
-  const value: Record<string, string> = { name: draft.name.trim(), mode: draft.mode }
-  for (const key of ['appId', 'appSecret', 'cli', 'note'] as const) {
-    if (draft[key].trim() !== '') value[key] = draft[key]
-  }
-  return value as unknown as FeishuCredentialInput
-}
-function draftOf(record: FeishuCredentialView): Draft {
-  return { ...EMPTY, name: record.name, mode: record.mode, appId: record.appId, cli: record.cli, note: record.note }
-}
-/** 收集预检结果：同一字段的旧结果被新结果覆盖。 */
-function merge(current: Record<string, SourceCheck>, checks: readonly SourceCheck[]): Record<string, SourceCheck> {
-  const next = { ...current }
-  for (const check of checks) next[check.field] = check
-  return next
-}
+const inputOf = (draft: Draft): FeishuCredentialInput => credentialInputOf<Draft, FeishuCredentialInput>(draft,
+  ['name', 'mode'], ['appId', 'appSecret', 'cli', 'note'])
+const draftOf = (record: FeishuCredentialView): Draft =>
+  credentialDraftOf(EMPTY, record, ['name', 'mode', 'appId', 'cli', 'note'])
 const VERIFY_FIELDS = ['identity', 'space'] as const
 
-/** 逐个展示预检结果，文案走 `check.*` 字典。 */
-function Checks({ checks }: { checks: Record<string, SourceCheck> }) {
-  const { t } = usePanel()
-  return <>{VERIFY_FIELDS.map(field => checks[field] && <p key={field}
-    className={checks[field]!.ok ? 'dt-hint dt-check' : 'dt-error dt-check'} role={checks[field]!.ok ? 'status' : 'alert'}>
-    {sourceCheckText(t, checks[field]!)}
-  </p>)}</>
-}
-
-/** 验证弹窗：可选填写知识库 spaceId，真实调用飞书接口并展示结果；每次打开都从空结果开始。 */
-function VerifyModal({ open, error, onClose, onVerify, checks, busy }: {
-  open: boolean; error: string; onClose: () => void; onVerify: (spaceId: string) => void
-  checks: Record<string, SourceCheck>; busy: boolean
-}) {
-  const { t } = usePanel()
-  const [spaceId, setSpaceId] = useState('')
-  useEffect(() => { if (open) setSpaceId('') }, [open])
-  const values = Object.values(checks)
-  const failed = values.filter(check => !check.ok).length
-  return <Modal open={open} onClose={onClose} title={t('feishuVerifyTitle')} closeLabel={t('close')}
-    description={t('feishuVerifyDescription')}
-    footer={<>
-      <Button variant="outline" onClick={onClose}>{t('cancel')}</Button>
-      <Button variant="primary" disabled={busy} aria-busy={busy} onClick={() => onVerify(spaceId.trim())}>
-        {busy ? t('verifyBusy') : t('verify')}
-      </Button>
-    </>}>
-    <div className="dt-form">
-      <Field label={t('feishuSpaceId')} hint={t('feishuSpaceIdHint')}>
-        <Input value={spaceId} placeholder="6946842750923456789" onChange={event => setSpaceId(event.target.value)} />
-      </Field>
-      {busy ? <p className="dt-hint" role="status">{t('verifyBusy')}</p>
-        : error ? <p className="dt-error" role="alert">{error}</p>
-          : values.length > 0 ? <>
-            <p className={failed ? 'dt-error dt-verify-summary' : 'dt-hint dt-verify-summary'} role={failed ? 'alert' : 'status'}>
-              {failed ? t('verifySummaryFail', { failed: String(failed) }) : t('verifySummaryOk', { count: String(values.length) })}
-            </p>
-            <Checks checks={checks} />
-          </> : null}
-    </div>
-  </Modal>
-}
+/** 验证弹窗文案：补充查询是可选的知识库 spaceId。 */
+const verifyWords = (t: T): CredentialVerifyWords => ({ title: t('feishuVerifyTitle'), description: t('feishuVerifyDescription'),
+  queryLabel: t('feishuSpaceId'), queryHint: t('feishuSpaceIdHint'), queryPlaceholder: '6946842750923456789' })
 
 /** 凭据表单：身份来源决定要填应用密钥还是 CLI。 */
 function CredentialFields({ draft, edit, disabled }: { draft: Draft; edit: (next: Partial<Draft>) => void; disabled: boolean }) {
@@ -129,7 +82,7 @@ function CredentialCard({ record, changed }: { record: FeishuCredentialView; cha
     try {
       const result = await call('POST feishu-credentials/verify', { body: { id: record.id,
         ...spaceId ? { spaceId } : {} } })
-      setChecks(merge({}, result.checks))
+      setChecks(mergeChecks({}, result.checks))
     } catch (failure) {
       setVerifyError(errorText(failure)); notify(errorText(failure))
     } finally { setChecking(false) }
@@ -167,7 +120,7 @@ function CredentialCard({ record, changed }: { record: FeishuCredentialView; cha
     </div>
     <p className="dt-hint">{record.mode === 'app' ? record.hint || t('credentialNoMaterial') : record.cli}
       {' · '}{t('credentialFingerprint', { fingerprint: record.fingerprint || '—' })}</p>
-    <Checks checks={checks} />
+    <CredentialChecks fields={VERIFY_FIELDS} checks={checks} />
     {open && <form className="dt-form" onSubmit={event => { event.preventDefault(); void save() }}>
       <CredentialFields draft={draft} edit={next => setDraft(current => ({ ...current, ...next }))} disabled={busy} />
       <div className="dt-row-buttons">
@@ -175,8 +128,8 @@ function CredentialCard({ record, changed }: { record: FeishuCredentialView; cha
         <Button variant="outline" onClick={() => setOpen(false)}>{t('cancel')}</Button>
       </div>
     </form>}
-    <VerifyModal open={verifyOpen} error={verifyError} onClose={() => setVerifyOpen(false)}
-      onVerify={spaceId => { void check(spaceId) }} checks={checks} busy={checking} />
+    <CredentialVerifyModal open={verifyOpen} error={verifyError} words={verifyWords(t)} onClose={() => setVerifyOpen(false)}
+      onVerify={spaceId => { void check(spaceId) }} fields={VERIFY_FIELDS} checks={checks} busy={checking} />
   </div>
 }
 
@@ -219,7 +172,7 @@ function CredentialList() {
     try {
       const result = await call('POST feishu-credentials/verify', { body: { value: inputOf(draft),
         ...spaceId ? { spaceId } : {} } })
-      setChecks(merge({}, result.checks))
+      setChecks(mergeChecks({}, result.checks))
     } catch (failure) {
       setVerifyError(errorText(failure)); notify(errorText(failure))
     } finally { setChecking(false) }
@@ -251,9 +204,9 @@ function CredentialList() {
         <Button variant="primary" disabled={busy || !draft.name.trim()} onClick={() => { void create() }}>{t('credentialNew')}</Button>
         <Button variant="outline" onClick={closeAdd}>{t('cancel')}</Button>
       </div>
-      <Checks checks={checks} />
-      <VerifyModal open={verifyOpen} error={verifyError} onClose={() => setVerifyOpen(false)}
-        onVerify={spaceId => { void verify(spaceId) }} checks={checks} busy={checking} />
+      <CredentialChecks fields={VERIFY_FIELDS} checks={checks} />
+      <CredentialVerifyModal open={verifyOpen} error={verifyError} words={verifyWords(t)} onClose={() => setVerifyOpen(false)}
+        onVerify={spaceId => { void verify(spaceId) }} fields={VERIFY_FIELDS} checks={checks} busy={checking} />
     </div>}
     <div className="dt-cards">
       {items === null ? <Hint>{t('loading')}</Hint> : items.length === 0 ? <Hint>{t('feishuCredentialNone')}</Hint>

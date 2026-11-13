@@ -224,6 +224,9 @@ beforeEach(async () => {
   services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller, sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) }, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer: { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }, jobs: jobs.service }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   for (const cli of [AGENT(), OTHER(), BOT()]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
+  // 宿主进程可能自带 GIT_CONFIG_GLOBAL 等遗留值：垫片用例假定 stop 把环境恢复为进入前的形态，
+  // 因此在运行时启动前清空这些变量，使「恢复为 undefined」的断言在任何宿主环境下都自洽。
+  vi.stubEnv('GIT_CONFIG_GLOBAL', undefined); vi.stubEnv('GIT_CONFIG_NOSYSTEM', undefined)
   const store = new Store(join(directory, 'orchestrator.sqlite')); seed(store); store.close()
   runtime = new Runtime(ctx, testMachine({ stateDir: directory }), restarts)
   await runtime.ready
@@ -232,7 +235,7 @@ beforeEach(async () => {
   runtime.store.saveSettings({ ...runtime.store.settings(), policy: { ...runtime.store.settings().policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT } } }, eval: { ...runtime.store.settings().eval, mode: 'auto' }, sources: { feishu: { kind: 'feishu', name: '飞书', enabled: true, config: { cli: BOT(), chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
   deliveries.mockClear()
 })
-afterEach(async () => { expect(controller.prompt).not.toHaveBeenCalled(); await runtime?.stop(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) })
+afterEach(async () => { expect(controller.prompt).not.toHaveBeenCalled(); await runtime?.stop(); vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(directory, { recursive: true, force: true }) })
 
 it('relays an explicit member mention as a candidate and creates the ticket, acknowledgement, subscription and worker on accept', async () => {
   const { trigger, ticket, sessionId } = await acceptedTicket()
@@ -673,8 +676,8 @@ it('counts every step of the day\'s flow over the same arriving messages and lis
   await receive(feishu('7', '另一个群', { chat_id: 'oc_elsewhere', create_time: now }))
   const since = new Date(Date.now() - 86_400_000).toISOString()
   expect(overviewOf(runtime).flow).toMatchObject({ received: 2, filtered: 1, triggers: 1, judged: 1, accepted: 1 })
-  expect(decisionList(viewsOf(runtime), ['accept', 'reopen'], 0, 10, since).items).toHaveLength(1)
-  expect(decisionList(viewsOf(runtime), ['accept', 'reopen'], 0, 10, new Date(Date.now() + 60_000).toISOString()).items).toEqual([])
+  expect(decisionList(viewsOf(runtime), ['accept'], 0, 10, since).items).toHaveLength(1)
+  expect(decisionList(viewsOf(runtime), ['accept'], 0, 10, new Date(Date.now() + 60_000).toISOString()).items).toEqual([])
 })
 
 it('queues a requeued trigger visibly and tells the orchestrator', async () => {

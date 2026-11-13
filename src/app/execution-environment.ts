@@ -4,7 +4,8 @@ import { key } from '../core/ids.ts'
 import type { Ticket, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Settings } from '../policy.ts'
-import type { Localized, VariableSpec } from '../sources/kind.ts'
+import type { Localized } from '../fields.ts'
+import type { VariableSpec } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
 
 /** 由执行器注册的变量；`ticket` 条目仅在有工单时填充。 */

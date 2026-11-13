@@ -4,7 +4,7 @@ import { UserError } from './errors.ts'
 import { latestAssignment, liveTicket, ticketOutcome } from './model.ts'
 import type { ChannelRef, Ticket, Trigger } from './model.ts'
 import type { ReplyStatus } from './ports.ts'
-import { EnginePart } from './part.ts'
+import { EnginePart, type EngineOptions, type Requeues } from './part.ts'
 
 /**
  * 发往某个渠道的消息，按用途区分：执行器对其正在处理的人的请求的确认、工作单元报告之后对人的问题的回答、
@@ -23,6 +23,7 @@ export interface Reply { id: string; status: ReplyStatus; reused: boolean }
  * Tickets 向它索取接受时携带的确认，Assignments 请它撤回被报告替换的提问。
  */
 export class Replies extends EnginePart {
+  constructor(options: EngineOptions, private readonly requeues: Requeues) { super(options) }
   /**
    * 为用途指定的渠道排队一条消息：确认或回答发到该人的消息所在处，attention 发到引发提问的消息所在处
    * （或工单起始会话），结果发到工单启动时所在的会话（`result` 仅对处于 `ready`、`completed`、`merged`
@@ -54,7 +55,7 @@ export class Replies extends EnginePart {
     if (!existing && !trigger.human) throw new UserError('ackNotPerson')
     // 保留自动的或最先排队的确认。
     if (!existing) this.options.outbox.send({ id, channel: trigger.channel, text: request.text, kind: 'acknowledgement', ticketId: ticket.id })
-    this.takeUp(ticket.id, trigger.id)
+    this.requeues.takeUp(ticket.id, trigger.id)
     return { id, status: this.options.outbox.status(id) ?? 'pending', reused: existing !== undefined }
   }
   private answer(request: Exclude<ReplyRequest, { purpose: 'acknowledgement' }>): Reply {

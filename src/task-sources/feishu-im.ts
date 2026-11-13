@@ -4,7 +4,7 @@
  */
 import { z } from 'zod'
 import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
-import { FeishuApiError } from './feishu-api.ts'
+import { feishuFailureCode } from '../feishu-transport.ts'
 import type { FeishuImApi } from './feishu-im-api.ts'
 import {
   DEFAULT_TASK_FIELDS, errorText,
@@ -43,18 +43,9 @@ const fields: TaskSourceDriver['fields'] = [
       en: 'Removes @_user_N placeholders so they do not reach task titles.' } },
 ]
 
-/** 把消息权限与不存在分别归入面板可本地化的原因。 */
+/** 把消息权限与不存在分别归入面板可本地化的原因；语义判定由传输层的分类表单点维护。 */
 function chatErrorCode(error: unknown): string {
-  const text = errorText(error)
-  const status = error instanceof FeishuApiError ? error.status : undefined
-  const code = error instanceof FeishuApiError ? error.code : undefined
-  if (status === 403 || [99991663, 99991672, 230003].includes(code ?? -1) || /permission|forbidden|无权限|\b403\b/i.test(text)) {
-    return 'feishuChatForbidden'
-  }
-  if (status === 404 || [230001, 230002].includes(code ?? -1) || /not found|not in chat|does not exist|\b404\b/i.test(text)) {
-    return 'feishuChatMissing'
-  }
-  return 'feishuChatUnreadable'
+  return feishuFailureCode(error, { forbidden: 'feishuChatForbidden', missing: 'feishuChatMissing', fallback: 'feishuChatUnreadable' })
 }
 
 /** 取凭据：未填写、未安装或材料不可用都给出不同的可读结果。 */

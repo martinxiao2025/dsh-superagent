@@ -47,16 +47,18 @@ flowchart TB
 
 Engine 的所有方法都是同步的。每条命令在一个事务中修改其聚合。`evaluateDue` 为它修改的每个评估或工单使用单独的事务。端口在事务内排队外部工作；适配器在提交后执行。无效请求抛出 `UserError`。
 
-Engine 暴露一个入口点，并委托给五个内部部件。它拥有每条命令的事务。跨部件的命令（例如 `attach`、`evaluateDue` 和 `policyChanged`）按顺序调用各部件。
+Engine 暴露一个入口点，并委托给七个内部部件。它拥有每条命令的事务。跨部件的命令（例如 `attach`、`evaluateDue` 和 `policyChanged`）按顺序调用各部件。
 
-每个部件都扩展 `EnginePart`（`src/core/part.ts`），后者提供选项和共享读取。部件之间的依赖只朝一个方向流动：
+每个部件都扩展 `EnginePart`（`src/core/part.ts`），后者提供选项和共享读取。跨部件的评估队列原语——交还、承接与排队——由 `Requeues` 接口（`EvaluationQueue` 实现）显式提供，不再由基类隐式共享。部件之间的依赖只朝一个方向流动：
 
 | 部件 | 职责 | 依赖 |
 | --- | --- | --- |
-| `Intake` | 来源的触发器：连同其去向存储一次，记录在其线程及其关联上，扇出给已订阅的工单，并且除非它是抵达某个工单的人的消息，否则在其主线程上排队等待评估 | Tickets |
+| `Intake` | 来源的触发器：连同其去向存储一次，记录在其线程及其关联上，扇出给已订阅的工单，并且除非它是抵达某个工单的人的消息，否则在其主线程上排队等待评估 | Tickets、Inputs |
 | `Evals` | 线程的评估：批处理、准入层的强度、行动者和依据（由其触发器 `primary` 给出）、从候选投递开始的截止时间及其因暂停的顺延、过期评估的重新入队、候选、重放和交回、策略变更时的重新入队，以及每次评估最终给出的决定：accept、stop、ignore 或 unavailable | Tickets |
-| `Tickets` | 工单生命周期：由接受创建及其授权、订阅和首次派工，它关注的线程及其关闭（`followsDone`），被关联的线程和仅作上下文关注的线程，输入和备注，恢复以及恢复拒绝的消息，重试、重启、停止和结束，它取消的订阅，以及向受策略变更影响的工单发送通知 | Replies |
-| `Assignments` | 执行器及其执行器报告的内容：派工已启动、输入已抵达或投递失败、重启中断了派工，以及执行器报告及其向人提出的问题 | Tickets、Replies |
+| `Tickets` | 工单生命周期：由接受创建及其授权、订阅和首次派工，恢复以及恢复拒绝的消息，重试、重启、停止和结束，结束时放手其工作单元无从承接的消息 | Inputs |
+| `Follows` | 工单关注的线程：绑定与上下文关注、线程关闭对关注工作的结算（`followsDone`/`unfinished`）、无关订阅的丢弃与交回，以及订阅的取消 | Tickets、Inputs |
+| `Inputs` | 工单的输入：把工单订阅到线程（订阅使后续消息成为输入）、输入的加入与人未写输入的暂扣、触发器的附加、状态请求与备注、策略变更通知，以及承接状态的读取 | 无 |
+| `Assignments` | 执行器及其执行器报告的内容：派工已启动、输入已抵达或投递失败、重启中断了派工，以及执行器报告及其向人提出的问题 | Tickets、Follows、Replies |
 | `Replies` | 通过 `Outbox` 写渠道：确认、回答、结果和待人工决定消息，各按允许它的规则 | 无 |
 
 命令使用祈使式名称，例如 `stopTicket`；适配器报告的事实使用过去式名称，例如 `assignmentStarted`。查询 `candidate` 使用名词。
@@ -256,7 +258,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 ## 依赖规则
 
 - **显式、狭窄的依赖。** 每个类收到一个接口，指明它使用的内容，大多是其他类的 `Pick` 类型：核心类使用 `ExecutorHost`、`AssessorHost`、`SessionsHost`、`SettingsHost`、`SetupHost`、`PassesHost` 和 `OutboxHost`，胶水层使用 `HttpHost`、`MainToolsHost`、`ExecutorToolsHost`、`ResourceHost`、`LinkHost` 和 `SourceContextDeps`，Engine 则以调用它的角色 `Pick` 形式出现。Runtime 只在此类接口背后传递自身。内置适配器由主插件在 `src/index.ts` 注册，接入 `SourceHost`（registry 与逐记录上下文）；适配器代码只能看到该记录的 `SourceContext`。
-- **谁能导入什么。** 除 Node 的哈希外，`src/core` 不导入自身之外的任何内容，也不做 I/O。`src/sources` 不从 `src/app` 导入任何内容。面板只从宿主侧导入类型，以及 `src/admission.ts`、`src/limits.ts`、`src/setup.ts`、`src/navigation.ts`、`src/sources/host.ts`、`src/core/errors.ts`、`src/core/reasons.ts` 的普通值和 `src/app/api.ts` 的过滤列表。
+- **谁能导入什么。** 除 Node 的哈希外，`src/core` 不导入自身之外的任何内容，也不做 I/O。`src/sources` 不从 `src/app` 导入任何内容。面板只从宿主侧导入类型（含 `src/fields.ts` 的字段规范与 `src/infra/health.ts` 的健康类型），以及 `src/admission.ts`、`src/limits.ts`、`src/setup.ts`、`src/navigation.ts`、`src/infra/health.ts`、`src/core/errors.ts`、`src/core/reasons.ts` 的普通值和 `src/app/api.ts` 的过滤列表。
 - **每种状态只有一个写入者。** 每种状态只有一个写入者，其他部分读取它或向该写入者询问。
 
   | 状态 | 写入者 |
@@ -272,7 +274,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
   来源只通过 `SourceContext.tickets.bindThread` 和 `threadClosed` 更改工单，它们调用 Engine。
 - **请求与事实。** 请求某事的方法用祈使动词及其对象命名，例如 `stopTicket` 或 `bindThread`，并且可以被拒绝；记录适配器所做事情的方法用过去式命名，例如 `assignmentStarted` 或 `deliveryFailed`。每个宿主以它需要的角色类型接收 Engine。
 - **有类型的字段，来源数据放在来源下。** 代码读取工单和授权的有类型字段。来源不在工单上保留任何东西：工单关注其哪些线程属于工单的 `follows`，它关于触发器或线程保留的内容在它们的 `meta` 中。
-- **固定拒绝。** 人或智能体可以引发的拒绝是 `src/core/errors.ts` 中 `USER_ERRORS` 的 `UserError(code, values)`。管理 API 对 `missing` 错误码答复 404，对其他错误码答复 400，面板用其语言为每个错误码措辞。安装问题是 `SetupError` 错误码（`src/setup.ts`），固定健康文本是 `HealthCode`（`src/sources/host.ts`），措辞方式相同。
+- **固定拒绝。** 人或智能体可以引发的拒绝是 `src/core/errors.ts` 中 `USER_ERRORS` 的 `UserError(code, values)`。管理 API 对 `missing` 错误码答复 404，对其他错误码答复 400，面板用其语言为每个错误码措辞。安装问题是 `SetupError` 错误码（`src/setup.ts`），固定健康文本是 `HealthCode`（`src/infra/health.ts`），措辞方式相同。
 ### 来源特有依赖
 
 一些通用模块仍然直接引用飞书：
@@ -295,7 +297,10 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/admin-mount.ts` | `AdminMount`：Runtime 创建之前挂载 `/orchestrator/api`，初始化失败时用启动状态回答健康探针与 503 |
 | `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveGithubSource`、`resolveGitlabSource` 和 `resolveFeishuSource` 按记录解析仓库、项目和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出各类型安装读取的字段。代码不指名任何人、账号或组织 |
 | `src/setup.ts` | 安装问题：`SetupError`，带错误码、修复它的位置，以及日志、主会话和面板共享的英文文本 |
-| `src/policy.ts` | 策略：按块划分的设置架构、策略版本、准入层和授权重新校验；`SettingsSchema` 校验项目对代码仓库与任务来源的引用完整性 |
+| `src/policy.ts` | 策略聚合出口：设置架构、评估校验与门禁的三层实现经此处具名再导出，保持宿主与测试的导入路径不变 |
+| `src/settings/schema.ts` | 设置 schema 叶子层：评估规则、来源策略、评估与执行器配置、来源记录以及完整设置快照的类型 |
+| `src/policy/assessment.ts` | 评估校验层：规则评估 schema、方向判定与 `assessmentOutcome` 到引擎 `AssessmentOutcome` 的转换 |
+| `src/policy/gate.ts` | 门禁层：`settingsPolicy` 活动策略（gate/重校验）、`policyEffects` 设置变更影响（规则经 schema 规范化后深比较）与授权版本哈希 |
 | `src/projects/kind.ts` | `ProjectSchema`：项目名称、启停、一对一的 `codeRepo` / `taskSource` 引用、执行目录与分支、调度、重试和任务状态口径 |
 | `src/code-repos/kind.ts` | `CodeRepoRecordSchema` 与 `CodeRepoKindSchema`：代码仓库记录的类型、名称、启停与配置，以及代码仓库类型描述 `CodeRepoType` |
 | `src/code-repos/types.ts` | 代码仓库类型清单 `CODE_REPO_TYPES` 与按 `kind` 查找的 `codeRepoType`，供预检和面板共用 |
@@ -316,24 +321,27 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/secrets/vault.ts` | 凭据加密存储与掩码：AES-256-GCM、按区域（Git / 飞书）分目录、指纹与 `••••` 末四位提示 |
 | `src/secrets/credential-service.ts` | 两个凭据域共享的服务骨架：材料先落盘再写元数据、修订乐观并发、引用拒绝删除；域差异（分区、错误码、记录形状）由 Git/飞书服务注入 |
 | `src/secrets/check.ts` | 凭据预检结果 `CredentialCheck` 与构造函数，供两个凭据页共用 |
-| `src/secrets/id.ts` | 凭据记录 ID：按名称生成小写连字符 ID |
+| `src/secrets/id.ts` | 凭据记录 ID：按名称生成小写连字符 ID，以及两个凭据域共享的 `CredentialIdSchema` 命名规则 |
 | `src/git-credentials/kind.ts`、`service.ts`、`probe.ts` | Git 凭据：独立记录、独立路由与身份校验；私钥或令牌只进加密存储，项目只存引用 |
 | `src/feishu-credentials/kind.ts`、`service.ts`、`probe.ts` | 飞书凭据：独立记录、独立路由与身份校验；应用密钥只进加密存储，任务来源只存引用 |
+| `src/feishu-transport.ts` | 飞书 OpenAPI 传输层：`FeishuTransport.get` 双实现（CLI / HTTP）、`TokenManager` 的 tenant token 换取与内存缓存、`BASE` 常量与业务码 → 语义族的分类表，知识库/群消息读取与凭据探测共用 |
 | `src/task-sources/table.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
 | `src/task-sources/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解与稳定键 |
 | `src/task-sources/writeback.ts` | 任务结果回写：更新 CSV/TSV 匹配行与 `.xlsx` 状态列（保留样式与 BOM/CRLF）；飞书文档明确报未支持 |
-| `src/task-sources/feishu-doc.ts` | 飞书知识库任务源：节点解析、文档纯文本读取、Markdown 表格与复选框还原 |
 | `src/admission.ts` | 准入表的取值、每个单元格的选项和默认值，与面板共享 |
 | `src/limits.ts` | 人设置的值的限制，由设置架构检查，并由面板字段提供 |
+| `src/fields.ts` | UI 表单字段规范的中性叶子：`Localized`、`FieldSpec` 及其字段基型，来源、代码仓库与任务来源三域及面板共用 |
 | `src/kv.ts` | `KV`：每一族 `kv` 记录及其键、值类型和拥有者，以及 Store 和 `SourceContext.state` 接受的 `Key` 和 `Family` 类型 |
 | `src/navigation.ts` | 宿主的目录列出会话后，从面板打开 DeepSeek Harness 会话 |
 | `src/core/model.ts` | 领域类型，其中包括带类型的工单和 `MandateBasis`，以及 `threadKey`、`ticketOutcome`、`reached`、`followupOwners`、`settled`、`waitsForPerson`、`liveTicket`、`runningAssignment`、`latestAssignment` 和 `latestReport` |
 | `src/core/ports.ts` | 端口：`Repositories`、`Policy`、`SourceScope`、`Assessor`、`Executor`、`Outbox`，以及领域事件 |
 | `src/core/engine.ts` | Engine，核心的入口点，以及角色接口 `EngineForSources`、`EngineForMainSession`、`EngineForPeople`、`EngineForSettings` 和 `EngineForExecutor` |
-| `src/core/part.ts` | `EnginePart`，Engine 各部分的基类，以及 `EngineOptions` |
+| `src/core/part.ts` | `EnginePart`，Engine 各部分的基类；`Requeues` 协作接口及其 `EvaluationQueue` 实现；`touchThread` |
 | `src/core/intake.ts` | `Intake`：来自来源的触发器，送往其工单；除非人的消息已抵达某个工单，否则也送往评估 |
 | `src/core/evals.ts` | `Evals`：线程的评估及其决定 |
-| `src/core/tickets.ts` | `Tickets`：工单生命周期、工单关注的线程、订阅和输入 |
+| `src/core/tickets.ts` | `Tickets`：工单生命周期、任务分配与放手无承接消息 |
+| `src/core/follows.ts` | `Follows`：工单关注的线程——绑定、上下文关注、关闭结算、无关订阅的丢弃与订阅取消 |
+| `src/core/inputs.ts` | `Inputs`：工单的输入——订阅、加入与暂扣、附加、状态请求与备注、策略变更通知、承接状态读取 |
 | `src/core/assignments.ts` | `Assignments`：执行器的事实及其执行器的报告 |
 | `src/core/replies.ts` | `Replies`：Engine 的渠道写入 |
 | `src/core/stage.ts` | `ticketStage` 和 `canRetry`：[003 执行](003-execution.md) 中的工单阶段 |
@@ -344,7 +352,10 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/core/index.ts` | 核心的导出 |
 | `src/app/runtime.ts` | Runtime，组合根，及其启动和停止 |
 | `src/app/setup.ts` | 安装，以及 `setupChanged`：保存是否更改了安装读取的字段 |
-| `src/app/scheduler.ts` | ProjectScheduler：按项目轮询任务来源、维护持久化队列、按容量出队建单并跟踪终态 |
+| `src/app/scheduler.ts` | ProjectScheduler 门面：持有调度状态与共享助手，按项目轮询任务来源、维护持久化队列、按容量出队建单并跟踪终态 |
+| `src/app/scheduler-reconcile.ts` | SchedulerReconcile：轮询任务来源并把结果原子地合并进队列 |
+| `src/app/scheduler-dispatch.ts` | SchedulerDispatch：到期工作项出队建单，按工单实际状态结算队列条目 |
+| `src/app/scheduler-writeback.ts` | SchedulerWriteback：把工单终态经持久化副作用回写任务来源 |
 | `src/app/workspace-gc.ts` | `collectWorkspaces`：按工单结束时间回收执行工作区，跳过运行中与不属于任何工单的目录 |
 | `src/app/reset.ts` | `resetState`：先备份状态目录，再清空插件拥有的条目；启动参数、面板与命令共用同一实现 |
 | `src/queue/model.ts` | 队列条目与快照模型 |
@@ -385,7 +396,11 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/views/projects.ts` | 项目运行视图：项目配置、该项目在队列中的任务，以及全局 worker 占用 |
 | `src/app/views/overview.ts` | 概览：需要人处理的工单、问题、过去一天的流动以及执行器负载 |
 | `src/executor/format.ts` | 面向模型的工单文本格式化（只依赖领域内核）：工作单元会话 ID、`triggerMessage`、`inputMessage`、`mandateInstructions`、`WorktreeNameSchema` 与同批触发器卡片 |
-| `src/executor/dsh.ts` | DshExecutor、`WorkerSlots`、`ticketExecution`：每工单一个会话与工作区的启动、投递、并发槽位与恢复 |
+| `src/executor/dsh.ts` | DshExecutor 门面与 `WorkerSlots`：每工单一个会话与工作区的并发槽位，按工单聚合的 `WorkerState` 状态登记，启动/投递效果接线与对拆分模块的 `WorkerContext` 共享上下文 |
+| `src/executor/launch.ts` | 工作单元启动：`ticketExecution` 执行元数据、工作区准备命令与校验、排队的启动流程与启动失败报告 |
+| `src/executor/delivery.ts` | 工作单元投递：待处理输入逐条注入运行中的会话，空闲工作单元的唤醒预留与输入文本截断 |
+| `src/executor/lifecycle.ts` | 工作单元生命周期：结束事务后的停止收尾、宿主停机、重启对账与宿主 agent 事件订阅 |
+| `src/executor/idle.ts` | 工作单元空闲与重试：瞬时失败分类 `transient`、退避重试、交接给人的作业收集与等待中报告组装 |
 | `src/executor/background.ts` | DeepSeek Harness 中执行器的后台工作、其会话拥有的 shell 任务（`ctx.jobs`）及其子代理（`ctx.subagents`）：`runningJobs`、`untilQuiet`、`killJobs`、`collectJobs`、`stopSubagents`、`stopBackground`、`until`，以及 `cancelled`（其子代理停止时取消了回合的执行器） |
 | `src/infra/commands.ts` | `Commands`，CLI 传输：`run`；`api` 和 `pages`，限制在已配置仓库并经过校验；`glab`、`gitlabApi` 和 `gitlabPages`，限制在已配置的 GitLab 项目并经过校验；以机器人身份运行的 `lark`；`git`。`CliError` 携带命令输出报告的错误码，例如 GitHub 或 GitLab 的 HTTP 状态；不打印任何内容的命令以结束方式失败，绝不带出其参数；`validItems` 跳过并计数列表中的格式错误项 |
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |
@@ -426,11 +441,13 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/draft.tsx` | 设置草稿：`draftReducer`、其状态及其与更新保存修订的合并、`saveBarText`（保存条的那行文字），以及保存条 |
 | `src/client/controls.tsx` | DeepSeek Harness 控件的本地副本，遵循其标记、键盘行为和设计令牌，因为插件包不导入 `@deepseek-ai/dsh-client-ui-primitives`；它们不读取上下文 |
 | `src/client/widgets.tsx` | 页面共享的小组件，读取面板上下文：区块、页头、加载状态、时间、链接、需确认的操作、安装检查和 Markdown |
+| `src/client/checks.tsx` | 字段级预检基座：单一 VerifyRow、useFieldChecks（checks/checking 状态）与结果按字段合并 |
+| `src/client/credential-form.tsx` | 凭据表单基座：Git 与飞书凭据共享的草稿转换（空字段不提交）、预检展示与验证弹窗 |
 | `src/client/rows.tsx` | 页面共享的行：工单、线程和决定，线程的小标签，以及连续自动消息的折叠 |
 | `src/client/markdown.ts` | 报告和问题支持的 Markdown 子集，以及消息中的裸地址，作为块和内联部分 |
 | `src/client/text.ts` | 按键取文案，以及领域取值、理由、发送者和时间的措辞 |
 | `src/client/marks.ts` | 视图分类的状态标记：工单或线程的阶段、来源的状态和决定的结果，各以一个圆点、图标、色调和标签表示 |
-| `src/client/locales.ts` | 两种语言的全部文案，以及 [001 领域模型](001-domain.md) 的术语表 |
+| `src/client/locales.ts`、`src/client/locales/shared.ts`、`src/client/locales/pages.ts`、`src/client/locales/settings.ts`、`src/client/locales/reasons.ts`、`src/client/locales/glossary.ts`、`src/client/locales/user-error.ts`、`src/client/locales/setup-health.ts`、`src/client/locales/checks.ts` | 两种语言的全部文案：按命名空间拆分在 `locales/` 下、在 locales.ts 合并出口汇成一份并做可枚举前缀的编译期穷举守卫，以及 [001 领域模型](001-domain.md) 的术语表 |
 | `src/client/client.css`、`css.d.ts` | 面板的样式表，以文本加载 |
 
 `src/sources/github.ts`、`src/sources/gitlab.ts` 与 `src/sources/feishu.ts` 描述来源类型；Git 记录只作为代码仓库，不产生触发器，由 `src/sources/adapters.ts` 汇总的消息来源适配器只有飞书。主插件启动后为每条已存储的消息来源记录运行其适配器。`package.json` 没有来源子路径导出，`cordis.patch.yml` 只插入主插件和两个会话预设。
@@ -472,6 +489,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
+| `tests/worker-sources.spec.ts` | 调度器脚本的直接单测：以 Node 运行分发脚本正文，验证命令识别、记录选择（显式指定 → 目录祖先登记 → 该种类唯一一条，绝不按位置兜底）、worker-bin 离开 PATH 与凭据协议参数转发 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |
 | `tests/feishu-wiki.spec.ts` | 飞书知识库遍历：根节点顺序与目录递归、多文档与多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突 |
@@ -485,10 +503,12 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/workspace-gc.spec.ts` | 执行工作区回收：保留期、运行中与未知目录、禁用回收与删除失败 |
 | `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败（每次重试都是新工单）、工作项级增删改、`runOnStart`、停用/删除项目、活动条目唯一索引与终态清理、回写副作用与重启恢复 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
+| `tests/thread-timeline.spec.ts` | 线程时间线的客户端合并：新页与已加载更早页之间的间隙检测、按时间去重合并（重复 id 以更早页为准）与分页游标推进 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |
 | `tests/panel-settings.spec.tsx`、`panel-prompts.spec.tsx`、`panel-deployment.spec.tsx`、`panel-panel.spec.tsx`、`panel-projects.spec.tsx` | 设置分组、草稿和历史、提示词、部署页面、面板的搜索、术语表和路由记忆，以及项目列表、详情与设置 |
 | `tests/draft.spec.ts`、`tests/prompt-config.spec.ts`、`tests/markdown.spec.ts`、`tests/marks.spec.ts` | 草稿状态、合并和保存条文字；按段落划分的提示词配置和行差异；Markdown 子集及其链接；视图分类的每种状态标记 |
 | `tests/locales.spec.ts`、`tests/styles.spec.ts` | 两种语言的文案、样式表 |
+| `tests/text.spec.ts` | 词数统计（IM 消息限制依赖的分词计数）与统一脱敏：URL 内嵌凭据、带引号与裸键的 Authorization/Bearer 头、令牌型查询参数和私钥块 |
 | `tests/class-docs.spec.ts` | `src` 中每个类之前都有 JSDoc 块 |
 | `tests/docs.spec.ts` | 编号文档只链接到更早的文档、每个本地链接都能解析、没有文档包含合并冲突标记，以及本文档的表格列出每个模块和每个测试 |
 

@@ -4,7 +4,8 @@
  */
 import { z } from 'zod'
 import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
-import { FeishuApiError, type FeishuWikiApi } from './feishu-api.ts'
+import { type FeishuWikiApi } from './feishu-api.ts'
+import { feishuFailureCode } from '../feishu-transport.ts'
 import { issuesText, readWikiTasks } from './feishu-wiki-read.ts'
 import {
   DEFAULT_TASK_FIELDS, errorText, taskColumnShape, taskColumnsOf,
@@ -42,16 +43,9 @@ const fields: TaskSourceDriver['fields'] = [
   { key: 'priorityColumn', type: 'text', label: { zh: '优先级列', en: 'Priority column' }, advanced: true },
 ]
 
-/** 把知识库链接触发的失败归入面板可本地化的原因。 */
+/** 把知识库链接触发的失败归入面板可本地化的原因；语义判定由传输层的分类表单点维护。 */
 function wikiErrorCode(error: unknown): string {
-  const text = errorText(error)
-  const status = error instanceof FeishuApiError ? error.status : undefined
-  const code = error instanceof FeishuApiError ? error.code : undefined
-  if (status === 403 || [99991663, 99991672, 131006].includes(code ?? -1) || /permission|forbidden|无权限|\b403\b/i.test(text)) {
-    return 'feishuWikiForbidden'
-  }
-  if (status === 404 || [131002, 131003].includes(code ?? -1) || /not found|does not exist|\b404\b/i.test(text)) return 'feishuWikiMissing'
-  return 'feishuWikiUnreadable'
+  return feishuFailureCode(error, { forbidden: 'feishuWikiForbidden', missing: 'feishuWikiMissing', fallback: 'feishuWikiUnreadable' })
 }
 
 /** 列字段逐项预检；多维表格同样按这组列名匹配字段。 */

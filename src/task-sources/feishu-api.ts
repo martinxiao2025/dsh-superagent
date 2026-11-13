@@ -1,8 +1,8 @@
 /**
- * 飞书知识库读取接口：把 wiki 节点、docx 正文与多维表格记录收敛成一套最小调用，
- * 应用身份走 HTTP，本机 CLI 身份走 `lark api`；两种实现共用同一遍历逻辑。
+ * 飞书知识库读取接口：把 wiki 节点、docx 正文与多维表格记录收敛成一套最小调用。
+ * 端点映射、字段解析与分页只写一遍；CLI 与 HTTP 的传输差异由 FeishuTransport 承担。
  */
-import type { LarkCall } from './feishu-doc.ts'
+import { larkTransport, httpTransport, type FeishuTransport, type LarkCall } from '../feishu-transport.ts'
 
 /** 知识库节点：`nodeToken` 是稳定身份，真正的数据对象在 `objToken`。 */
 export interface WikiNodeRef {
@@ -30,11 +30,6 @@ export interface FeishuWikiApi {
 /** 凭据读取知识库的能力；未安装或材料不可用时返回 undefined，由驱动给出可读的预检结果。 */
 export type FeishuWikiReader = (credential: string) => Promise<FeishuWikiApi | undefined>
 
-/** 飞书 OpenAPI 失败：保留状态码与业务码，供预检区分「无权」与「不存在」。 */
-export class FeishuApiError extends Error {
-  constructor(message: string, readonly status?: number, readonly code?: number) { super(message) }
-}
-
 const PAGE = 50
 
 /** 逐页读取列表接口，直到 `has_more` 为 false。 */
@@ -59,48 +54,43 @@ const nodeOf = (value: Record<string, unknown>): WikiNodeRef => ({
   spaceId: String(value.space_id ?? value.spaceId ?? ''),
 })
 
-interface Envelope { code?: number; msg?: string; message?: string; data?: unknown }
+const itemsOf = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
+  Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
 
-/** CLI 身份：`lark api GET <path> --params <json>`，返回 `data`。 */
-export function larkWikiApi(lark: LarkCall): FeishuWikiApi {
-  const get = async (path: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
-    const data = await lark(['api', 'GET', path, '--params', JSON.stringify(params)])
-    return (data ?? {}) as Record<string, unknown>
-  }
+/** 五个读取方法的唯一实现；`transport.get` 返回已解包的 `data`。 */
+export function feishuWikiApi(transport: FeishuTransport): FeishuWikiApi {
   const spacePath = (spaceId: string, suffix: string): string =>
-    `/open-apis/wiki/v2/spaces/${encodeURIComponent(spaceId)}/${suffix}`
-  const items = (data: Record<string, unknown>, key: string): Record<string, unknown>[] =>
-    Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
+    `/wiki/v2/spaces/${encodeURIComponent(spaceId)}/${suffix}`
   return {
     async node(token) {
-      const data = await get('/open-apis/wiki/v2/spaces/get_node', { token })
+      const data = await transport.get('/wiki/v2/spaces/get_node', { token })
       const node = data.node
       if (!node || typeof node !== 'object') throw new Error(`飞书没有返回节点 ${token}`)
       return nodeOf(node as Record<string, unknown>)
     },
     async children(spaceId, parentToken) {
       return paged(async pageToken => {
-        const data = await get(spacePath(spaceId, 'nodes'), { parent_node_token: parentToken, page_size: PAGE, page_token: pageToken })
-        return { items: items(data, 'items').map(nodeOf), hasMore: data.has_more === true,
+        const data = await transport.get(spacePath(spaceId, 'nodes'), { parent_node_token: parentToken, page_size: PAGE, page_token: pageToken })
+        return { items: itemsOf(data).map(nodeOf), hasMore: data.has_more === true,
           pageToken: String(data.page_token ?? data.next_page_token ?? '') }
       })
     },
     async document(documentId) {
-      const data = await get(`/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}/raw_content`)
+      const data = await transport.get(`/docx/v1/documents/${encodeURIComponent(documentId)}/raw_content`)
       return String(data.content ?? '')
     },
     async tables(appToken) {
       return paged(async pageToken => {
-        const data = await get(`/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables`, { page_size: 100, page_token: pageToken })
-        return { items: items(data, 'items').map(item => ({ tableId: String(item.table_id ?? ''), name: String(item.name ?? '') }))
+        const data = await transport.get(`/bitable/v1/apps/${encodeURIComponent(appToken)}/tables`, { page_size: 100, page_token: pageToken })
+        return { items: itemsOf(data).map(item => ({ tableId: String(item.table_id ?? ''), name: String(item.name ?? '') }))
           .filter(item => item.tableId), hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
       })
     },
     async records(appToken, tableId) {
       return paged(async pageToken => {
-        const data = await get(`/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
+        const data = await transport.get(`/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
           { page_size: 100, page_token: pageToken })
-        return { items: items(data, 'items').map(item => ({ recordId: String(item.record_id ?? ''),
+        return { items: itemsOf(data).map(item => ({ recordId: String(item.record_id ?? ''),
           fields: (item.fields ?? {}) as Record<string, unknown> })).filter(item => item.recordId),
         hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
       })
@@ -108,71 +98,12 @@ export function larkWikiApi(lark: LarkCall): FeishuWikiApi {
   }
 }
 
-const BASE = 'https://open.feishu.cn/open-apis'
+/** CLI 身份入口（保持既有签名）：`lark api GET <path> --params <json>`，返回 `data`。 */
+export function larkWikiApi(lark: LarkCall): FeishuWikiApi {
+  return feishuWikiApi(larkTransport(lark))
+}
 
-/** 应用身份：先换 tenant_access_token，再按同样的接口读取；token 缓存到过期前 60 秒。 */
+/** 应用身份入口（保持既有签名）：tenant_access_token 缓存到过期前 60 秒。 */
 export function httpWikiApi(appId: string, appSecret: string, signal?: AbortSignal): FeishuWikiApi {
-  let cached: { token: string; expiresAt: number } | undefined
-  const tenant = async (): Promise<string> => {
-    if (cached && cached.expiresAt > Date.now()) return cached.token
-    const response = await fetch(`${BASE}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST', signal, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-    })
-    const payload = await response.json() as { code?: number; msg?: string; tenant_access_token?: string; expire?: number }
-    if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
-      throw new FeishuApiError(payload.msg ?? `tenant token 换取失败（HTTP ${response.status}）`, response.status, payload.code)
-    }
-    cached = { token: payload.tenant_access_token, expiresAt: Date.now() + Math.max(60, (payload.expire ?? 7200) - 60) * 1000 }
-    return cached.token
-  }
-  const get = async (path: string, query: Record<string, unknown> = {}): Promise<Record<string, unknown>> => {
-    const url = new URL(`${BASE}${path}`)
-    for (const [key, value] of Object.entries(query)) if (value !== '') url.searchParams.set(key, String(value))
-    const response = await fetch(url, { signal, headers: { authorization: `Bearer ${await tenant()}` } })
-    const payload = await response.json() as Envelope
-    if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
-      throw new FeishuApiError(`${payload.msg ?? payload.message ?? `飞书返回 HTTP ${response.status}`}${payload.code ? ` (${payload.code})` : ''}`,
-        response.status, payload.code)
-    }
-    return (payload.data ?? {}) as Record<string, unknown>
-  }
-  const items = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
-    Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
-  const spacePath = (spaceId: string, suffix: string): string =>
-    `/wiki/v2/spaces/${encodeURIComponent(spaceId)}/${suffix}`
-  return {
-    async node(token) {
-      const data = await get('/wiki/v2/spaces/get_node', { token })
-      const node = data.node
-      if (!node || typeof node !== 'object') throw new Error(`飞书没有返回节点 ${token}`)
-      return nodeOf(node as Record<string, unknown>)
-    },
-    async children(spaceId, parentToken) {
-      return paged(async pageToken => {
-        const data = await get(spacePath(spaceId, 'nodes'), { parent_node_token: parentToken, page_size: PAGE, page_token: pageToken })
-        return { items: items(data).map(nodeOf), hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
-      })
-    },
-    async document(documentId) {
-      const data = await get(`/docx/v1/documents/${encodeURIComponent(documentId)}/raw_content`)
-      return String(data.content ?? '')
-    },
-    async tables(appToken) {
-      return paged(async pageToken => {
-        const data = await get(`/bitable/v1/apps/${encodeURIComponent(appToken)}/tables`, { page_size: 100, page_token: pageToken })
-        return { items: items(data).map(item => ({ tableId: String(item.table_id ?? ''), name: String(item.name ?? '') }))
-          .filter(item => item.tableId), hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
-      })
-    },
-    async records(appToken, tableId) {
-      return paged(async pageToken => {
-        const data = await get(`/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
-          { page_size: 100, page_token: pageToken })
-        return { items: items(data).map(item => ({ recordId: String(item.record_id ?? ''),
-          fields: (item.fields ?? {}) as Record<string, unknown> })).filter(item => item.recordId),
-        hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
-      })
-    },
-  }
+  return feishuWikiApi(httpTransport(appId, appSecret, signal))
 }

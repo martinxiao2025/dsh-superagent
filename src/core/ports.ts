@@ -105,6 +105,12 @@ export type DomainEvent = { [K in keyof DomainEvents]: { type: K; at: string; da
 /** 持久化状态。所有方法都是同步的，以便 `atomic` 能包裹一个工作单元。 */
 export interface Repositories {
   atomic<T>(work: () => T): T
+  /**
+   * 把 `action` 安排到最外层事务提交之后运行；不在事务中则立即运行；回滚的事务丢弃其回调（语义同 `Store.afterCommit`）。
+   * 执行器与评估者端口的调用应经由它推迟：端口调用只在其领域变更确实提交后才变得可观察，
+   * 事务回滚时不会向内存实现或测试假件泄漏启动、停止或评估请求。
+   */
+  afterCommit(action: () => void): void
   triggers: {
     get(id: string): Trigger | undefined
     save(trigger: Trigger): void

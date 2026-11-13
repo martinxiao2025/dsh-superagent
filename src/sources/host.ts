@@ -1,29 +1,12 @@
 /** 连接来源插件与应用的宿主和上下文接口；Web 面板也会导入，因此不得导入仅限 Node 的模块。 */
 import type { ChannelRef, ReceiveResult, OutboundMessage, Thread, ThreadFact, ThreadRef, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
+import type { Health } from '../infra/health.ts'
 import type { Deployment, ResolvedSource } from '../deployment.ts'
 import type { SourceRegistry } from './registry.ts'
 import type { SetupProblem } from '../setup.ts'
 import type { Family, Key } from '../kv.ts'
-import { fill } from '../infra/text.ts'
 
-/** 固定的英文健康模板（`{name}` 占位符）；面板按界面语言本地化每个 `code`。 */
-export const HEALTH_TEXT = {
-  setupPending: 'Waiting for the deployment check',
-  sourceOff: 'Off',
-  feishuCliUnset: 'The Source is on, and its bot lark-cli is not set',
-  feishuBotMissing: 'Waiting for the Feishu bot',
-  pollFailures: '{count} consecutive failed polls; last: {error}',
-} as const
-export type HealthCode = keyof typeof HEALTH_TEXT
-/** 健康条目所属的子系统；面板据此区分运行时、写回、调度、同步与沟通故障。 */
-export const HEALTH_CATEGORIES = ['runtime', 'writeback', 'schedule', 'sync', 'workspace', 'communication'] as const
-export type HealthCategory = typeof HEALTH_CATEGORIES[number]
-export type Health = { state: 'starting' | 'ready' | 'paused' | 'error'; detail: string; at?: string; code?: HealthCode; values?: Record<string, string>;
-  category?: HealthCategory }
-export function health(state: Health['state'], code: HealthCode, values: Record<string, string> = {}): Health {
-  return { state, detail: fill(HEALTH_TEXT[code], values), code, ...Object.keys(values).length ? { values } : {} }
-}
 export interface SourceHost {
   readonly sources: SourceRegistry
   /** 返回某条来源记录的上下文；它的 `report` 只写入该记录的健康条目。 */

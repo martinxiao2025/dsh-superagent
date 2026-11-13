@@ -58,7 +58,7 @@ const at = new Date().toISOString()
 /** 一个没有派工的活跃工单，正如后续消息的所有者需要的那样。 */
 const live = (id: string) => store.tickets.save({ id, title: id, decisionId: 'd', channels: [], undelivered: [], createdAt: at,
   updatedAt: at,
-  mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'listed' }, actor: { source: 'feishu', id: 'ou_alice' }, scope: '' },
+  mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'addressed' as const, addressed: 'mention' as const }, actor: { source: 'feishu', id: 'ou_alice' }, scope: '' },
   origin: { triggerId: 'e0', triggerIds: ['e0'] }, assignments: [], inputs: [] })
 const message = (id: string, actor: { source: string; id: string }, human = true) => ({ id, source: actor.source,
   threads: [{ source: 'feishu', id: 'oc_1:om_root' }], actor, human, at, text: `message ${id}`, meta: {} })
@@ -125,7 +125,7 @@ it('follows the Ticket\'s stage: a blocked Ticket a person answered since is wor
   const host = views()
   const blocked = { state: 'blocked' as const, summary: 'Needs the design file', at: '2026-09-22T00:01:00Z' }
   const ticket = { id: 't1', title: 'Fix', decisionId: 'd', channels: [], undelivered: [], createdAt: at, updatedAt: at,
-    mandate: { strength: 'explicit' as const, policyVersion: 'v', basis: { via: 'listed' as const }, actor: { source: 'feishu',
+    mandate: { strength: 'explicit' as const, policyVersion: 'v', basis: { via: 'addressed' as const, addressed: 'mention' as const }, actor: { source: 'feishu',
       id: 'ou_alice' }, scope: '' },
     origin: { triggerId: 'e1', triggerIds: ['e1'] }, assignments: [{ id: 'a1', state: 'running' as const, createdAt: at, startedAt: at,
       report: blocked }],
@@ -260,7 +260,7 @@ it('shows a follow-up that reached a ticket as delivered, the tickets that hande
     correlated: [], pending: [], meta: {} })
   expect(threadDetail(host, 'feishu:oc_7:om_root', undefined, 50)?.context).toEqual(['t1'])
   store.tickets.save({ id: 't1', title: 'Fix', decisionId: 'd', channels: [], undelivered: [], createdAt: at, updatedAt: at,
-    mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'listed' }, actor: { source: 'feishu', id: 'ou_alice' }, scope: '' },
+    mandate: { strength: 'explicit', policyVersion: 'v', basis: { via: 'addressed' as const, addressed: 'mention' as const }, actor: { source: 'feishu', id: 'ou_alice' }, scope: '' },
     origin: { triggerId: 'e1', triggerIds: ['e1'] }, assignments: [],
     inputs: [{ id: 'i1', kind: 'trigger', triggerId: 'f1', at }, { id: 'i2', kind: 'trigger', triggerId: 'f2', at }] })
   const page = ticketDetail(host, 't1')!

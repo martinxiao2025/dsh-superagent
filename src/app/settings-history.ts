@@ -1,5 +1,5 @@
 /** 计算各已保存修订之间的结构化设置差异，供管理面板展示。 */
-import type { FieldSpec } from '../sources/kind.ts'
+import type { FieldSpec } from '../fields.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
 import { KV } from '../kv.ts'
 import type { Store, SettingsVersion } from './store.ts'

@@ -54,6 +54,24 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
       list: () => [...entries.values()].sort((left, right) => left.seq - right.seq),
       active: () => [...entries.values()].filter(entry => entry.state === 'queued' || entry.state === 'starting' || entry.state === 'running')
         .sort((left, right) => left.seq - right.seq),
+      // 以下下推查询按真实 SQL 语义在内存集合上实现（lead 已批准的假存储扩展）。
+      /** 对应 SQL：`inflight IS NULL AND active IS NOT NULL ORDER BY seq`。 */
+      queued: () => store.queue.active().filter(entry => entry.state === 'queued'),
+      /** 对应 SQL：`… AND json_extract(value,'$.dueAt') <= ? ORDER BY seq`。 */
+      ready: (now: number) => store.queue.queued().filter(entry => entry.dueAt <= now),
+      /** 对应 SQL：`ticketId` 生成列匹配（只在建单中/执行中的行上非 NULL）。 */
+      byTicket: (ticketId: string) => store.queue.active().find(entry =>
+        (entry.state === 'starting' || entry.state === 'running') && entry.ticketId === ticketId),
+      /** 对应 SQL：`active = ? ORDER BY seq`（索引按项目定位）。 */
+      activeIn: (project: string) => store.queue.active().filter(entry => entry.project === project),
+      /** 对应 SQL：终态行按 `endedAt` 倒序（受保留期约束的扫描）。 */
+      terminalIn: (project: string) => [...entries.values()].filter(entry => entry.project === project && !['queued', 'starting', 'running'].includes(entry.state))
+        .sort((left, right) => (right.endedAt ?? '').localeCompare(left.endedAt ?? '')),
+      /** 对应 SQL：全部终态行按 `endedAt` 倒序取窗口。 */
+      terminal: (offset: number, limit: number) => [...entries.values()].filter(entry => !['queued', 'starting', 'running'].includes(entry.state))
+        .sort((left, right) => (right.endedAt ?? '').localeCompare(left.endedAt ?? '')).slice(offset, offset + limit),
+      /** 对应 SQL：`SELECT COUNT(*) FROM queue`。 */
+      count: () => entries.size,
       maxSeq: () => Math.max(0, ...[...entries.values()].map(entry => entry.seq)),
       remove: (project: string) => { for (const [id, entry] of entries) if (entry.project === project) entries.delete(id) },
       prune: () => 0,
@@ -468,4 +486,40 @@ it('队列写入 SQLite，重新打开后顺序与状态不变', () => {
   } finally {
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+it('快照对终态条目分页：超窗给出 more，翻页拿到其余终态', async () => {
+  const h = setup({ a: project('a'), b: project('b') })
+  h.driver.tasks = [task('a1', 'A 一'), task('a2', 'A 二')]
+  await h.scheduler.poll('a')
+  h.driver.tasks = [task('b1', 'B 一')]
+  await h.scheduler.poll('b')
+  h.scheduler.pump()
+  // a1 与 b1 各占一个项目并行执行，a2 因项目 a 串行保持排队；终态化两条运行中的条目：
+  // 剩下 1 条排队（活动）+ 2 条终态。
+  for (const entry of [...h.entries.values()].filter(item => item.state === 'running')) {
+    h.tickets.get(entry.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+    h.scheduler.observe(entry.ticketId!)
+  }
+  const page = h.scheduler.snapshot(0, 1)
+  expect(page.items.filter(item => !['queued', 'starting', 'running'].includes(item.state))).toHaveLength(1)
+  expect(page.more).toBe(true)
+  expect(page.total).toBe(3)
+  const next = h.scheduler.snapshot(1, 1)
+  expect(next.items.filter(item => !['queued', 'starting', 'running'].includes(item.state))).toHaveLength(1)
+  expect(next.more).toBe(false)
+})
+
+it('快照窗口不裁剪活动条目', async () => {
+  const h = setup({ a: project('a'), b: project('b'), c: project('c') }, 3)
+  for (const [id, tasks] of [['a', [task('a1', 'A 一')]], ['b', [task('b1', 'B 一')]], ['c', [task('c1', 'C 一')]]] as const) {
+    h.driver.tasks = [...tasks]
+    await h.scheduler.poll(id)
+  }
+  h.scheduler.pump()
+  // limit=0 时终态窗口为空，但 3 条活动条目仍然全量返回，不产生 more。
+  const page = h.scheduler.snapshot(0, 0)
+  expect(page.items).toHaveLength(3)
+  expect(page.items.every(item => item.state === 'running')).toBe(true)
+  expect(page.more).toBe(false)
 })

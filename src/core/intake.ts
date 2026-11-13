@@ -2,8 +2,9 @@
 import { key } from './ids.ts'
 import { isoTime, liveTicket, threadKey } from './model.ts'
 import type { Ticket, Trigger } from './model.ts'
-import { EnginePart, type EngineOptions } from './part.ts'
+import { EnginePart, touchThread, type EngineOptions, type Requeues } from './part.ts'
 import type { Tickets } from './tickets.ts'
+import type { Inputs } from './inputs.ts'
 
 export type ReceiveResult = 'stored' | 'duplicate' | 'filtered'
 
@@ -14,7 +15,9 @@ export type ReceiveResult = 'stored' | 'duplicate' | 'filtered'
  * Engine 把触发器接收工作委托给该部分。
  */
 export class Intake extends EnginePart {
-  constructor(options: EngineOptions, private readonly tickets: Tickets) { super(options) }
+  constructor(options: EngineOptions, private readonly tickets: Tickets, private readonly inputs: Inputs, private readonly requeues: Requeues) {
+    super(options)
+  }
 
   receive(received: Trigger): ReceiveResult {
     // 把来源时间戳（例如 GitHub 的整秒时间）规范化为标准 ISO 形式。
@@ -32,8 +35,7 @@ export class Intake extends EnginePart {
     // 记录到达的工单以及是否仅通过上下文线程到达（工单自身的线程会使 `context` 为 false）。
     const reached = new Map<string, { ticket: Ticket; context: boolean }>()
     for (const ref of trigger.threads) {
-      const thread = this.thread(ref)
-      if (!thread.lastAt || trigger.at > thread.lastAt) thread.lastAt = trigger.at
+      const thread = touchThread(this.repo, ref, trigger.at, at)
       thread.correlated = [...new Set([...thread.correlated, ...keys.filter(other => other !== thread.key)])]
       for (const ticketId of thread.subscriptions) {
         const ticket = this.repo.tickets.get(ticketId)
@@ -47,7 +49,7 @@ export class Intake extends EnginePart {
       this.repo.threads.save(thread)
     }
     for (const [ticketId, { ticket, context: followed }] of reached) {
-      this.tickets.addInput(ticket, { id: key('input', ticketId, 'trigger', trigger.id), kind: 'trigger', triggerId: trigger.id, at,
+      this.inputs.addInput(ticket, { id: key('input', ticketId, 'trigger', trigger.id), kind: 'trigger', triggerId: trigger.id, at,
         ...trigger.human ? { human: true } : {}, ...followed ? { context: true } : {} })
     }
     const fanout = [...reached.keys()], context = fanout.filter(id => reached.get(id)!.context)
@@ -55,7 +57,7 @@ export class Intake extends EnginePart {
     this.repo.triggers.saveDisposition(trigger.id, disposition)
     // 没有工单决定的人的消息（例如只到达了被人停止的工单、或为上下文而关注该线程的工单的消息），
     // 以及所有机器人的消息，都进入评估。
-    if (!this.owners(trigger).length) this.queueForEval(trigger)
+    if (!this.owners(trigger).length) this.requeues.queueForEval(trigger)
     for (const ticketId of fanout) this.tickets.wake(ticketId)
     this.emit('trigger.received', { triggerId: trigger.id, threads: trigger.threads.map(threadKey) })
     return 'stored'

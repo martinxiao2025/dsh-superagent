@@ -1,9 +1,9 @@
 /** 本地化、原因格式化、消息标记清理，以及相对时间戳辅助工具。 */
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { DshSuperagentKey } from './locales.ts'
-import type { Localized } from '../sources/kind.ts'
+import type { Localized } from '../fields.ts'
 import type { SetupProblem, SourceCheck } from '../setup.ts'
-import type { Health } from '../sources/host.ts'
+import type { Health } from '../infra/health.ts'
 import { reasonText, type Reason } from '../core/reasons.ts'
 
 export type T = Translate<DshSuperagentKey>
@@ -12,7 +12,10 @@ export const localized = (t: T, text: Localized | string | undefined): string =>
   typeof text === 'string' ? text : text ? text[t('lang') === 'en' ? 'en' : 'zh'] : ''
 export const actorName = (t: T, actor: { name?: Localized } | undefined): string => actor?.name ? localized(t, actor.name)
   : t('automatedNotice')
-export function valueLabel(t: T, group: string, key: string | undefined): string {
+/** 字典中实际存在的「组.键」命名空间；`valueLabel` 的组参数据此编译期穷举，拼错的组名直接编译报错。 */
+type LabelGroup = { [K in DshSuperagentKey]: K extends `${infer G}.${string}` ? G : never }[DshSuperagentKey]
+/** 组内取值的措辞；键是运行时数据，缺键时回退显示键本身（可枚举前缀的覆盖已由 locales.ts 的编译期守卫保证）。 */
+export function valueLabel<G extends LabelGroup>(t: T, group: G, key: string | undefined): string {
   if (!key) return ''
   const name = `${group}.${key}` as DshSuperagentKey
   const text = t(name)

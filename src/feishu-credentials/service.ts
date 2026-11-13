@@ -2,6 +2,7 @@
 import { SecretVault, fingerprint, mask, type SecretMaterial } from '../secrets/vault.ts'
 import { credentialCheck, type CredentialCheck } from '../secrets/check.ts'
 import { CredentialService } from '../secrets/credential-service.ts'
+import { feishuFailureCode } from '../feishu-transport.ts'
 import { FeishuCredentialInputSchema, FeishuCredentialSchema, type FeishuCredential, type FeishuCredentialInput,
   type FeishuCredentialView } from './kind.ts'
 
@@ -24,14 +25,10 @@ export interface FeishuCredentialsOptions {
   now?: () => string
 }
 
-/** 把探测错误归入面板可本地化的失败原因。 */
+/** 把探测错误归入面板可本地化的失败原因；语义判定由传输层的分类表单点维护。 */
 export function classifyFeishuError(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error)
-  if (/99991663|99991672|permission|forbidden|\b403\b|unauthorized|\b401\b/i.test(text)) return 'feishuCredentialForbidden'
-  if (/99991400|rate limit/i.test(text)) return 'feishuCredentialRateLimited'
-  if (/fetch failed|ENOTFOUND|ECONNREFUSED|ECONNRESET|timed out|network|EAI_AGAIN/i.test(text)) return 'feishuCredentialUnreachable'
-  if (/not found|does not exist|\b404\b|131002/i.test(text)) return 'feishuCredentialSpaceMissing'
-  return 'feishuCredentialProbeFailed'
+  return feishuFailureCode(error, { forbidden: 'feishuCredentialForbidden', rateLimited: 'feishuCredentialRateLimited',
+    unreachable: 'feishuCredentialUnreachable', missing: 'feishuCredentialSpaceMissing', fallback: 'feishuCredentialProbeFailed' })
 }
 
 /** 应用密钥是飞书域唯一的材料字段；空值不落盘。 */

@@ -24,12 +24,12 @@ export function basisFacts(basis: MandateBasis, rule: Snapshot['rule']): { facts
   // 已导入的依据已在 `authority` 中记录其后续来源。
   if (basis.via === 'followup' && !basis.authority) facts.push({ name: 'followup' })
   if (basis.via === 'admission') facts.push({ name: 'admission', value: basis.cell })
-  const observation = basis.via === 'admission' || basis.via === 'listed' || basis.via === 'bot' ? basis.observation : undefined
+  const observation = basis.via === 'admission' || basis.via === 'bot' ? basis.observation : undefined
   // 列表中的机器人消息无论在哪里接收都属于推断出的候选，因此仅从 `observation` 中展示接受模式。
   if (observation && basis.via !== 'bot') facts.push({ name: 'observation' })
   if (observation?.mode) facts.push({ name: 'mode', value: observation.mode })
   if (basis.rules?.length) facts.push({ name: 'rules', value: basis.rules.map(rule) })
-  const authority = basis.via === 'followup' || basis.via === 'listed' ? basis.authority : undefined
+  const authority = basis.via === 'followup' ? basis.authority : undefined
   if (authority) facts.push({ name: 'legacyAuthority', value: authority })
   return { facts, legacy: authority !== undefined }
 }
