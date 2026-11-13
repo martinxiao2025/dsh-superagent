@@ -24,7 +24,8 @@ import { resetState as resetStateFiles, type ResetReport } from './reset.ts'
 import type { AdminMount } from './admin-mount.ts'
 import type { StateLock } from './startup.ts'
 import type { SetupProblem } from '../setup.ts'
-import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
+import { DshExecutor, sourceTrigger } from '../executor/dsh.ts'
+import { workerSessionId } from '../executor/format.ts'
 import { ticketCard } from './cards.ts'
 import { MasterAssessor } from './assessment.ts'
 import { KV } from '../kv.ts'
@@ -119,138 +120,223 @@ export class Runtime extends Service implements SourceHost {
   private quiet = 0
   constructor(ctx: Context, readonly machine: Machine, restart: () => void, boot?: RuntimeBoot) {
     super(ctx, 'orchestrator')
-    const runtime = this
     this.boot = boot
     this.restartPlugin = restart
-    const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message, category: 'runtime' }); this.stopped.abort() }
-    if (boot) {
-      // 锁由插件入口在管理路由挂载之后取得；这里只接收释放函数并补登记抢占处理。
-      this.releaseLock = boot.lock.release
-      boot.lock.onCompromised(compromised)
-    } else {
-      // 在打开数据库之前锁定状态目录，使其他进程无法并发迁移或写入。
-      mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
-      const release = lockSync(machine.stateDir, { stale: 30_000, onCompromised: compromised })
-      this.releaseLock = async () => { release() }
-    }
+    this.bindLock()
+    // 阶段按固定顺序执行，后面的阶段读取前面阶段赋上的字段；任何一步失败都由这里统一释放数据库与状态锁。
     let opened: Store | undefined
     try {
-      const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
-      const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
-      const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart,
-        feishuWiki: credential => this.wikiOf(credential), feishuIm: credential => this.imOf(credential),
-        gitCredential: id => this.gitCredentials.metaOf(id), gitAuth: id => this.gitCredentials.authOf(id),
-        commands: repoId => this.commands.scope(repoId) })
-      const deployed = () => setup.configured()
-        ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
-      const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')
-      const prompts = this.prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
-      const masterId = this.masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
-      store.set(KV.runtime.masterId, masterId)
-      const commands = this.commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
-      // 凭据记录与项目引用相互独立：项目只保存记录 ID，材料永远不进入设置快照。
-      const vault = this.vault = new SecretVault(machine.stateDir)
-      const projects = () => store.settings().projects
-      this.gitCredentials = new GitCredentials({ credentials: store.gitCredentials, vault, projects, probe: gitProbe(commands, vault) })
-      this.feishuCredentials = new FeishuCredentials({ credentials: store.feishuCredentials, vault,
-        references: () => feishuCredentialReferences(store.settings()), probe: feishuProbe(commands) })
-      /** 凭据的调用方式：CLI 身份用可执行文件，应用身份用 appId 与密钥；材料只在这里短暂读取。 */
-      const feishuApi = (credential: string): { cli: string } | { appId: string; secret: string } | undefined => {
-        const record = store.feishuCredentials.get(credential)
-        if (!record) return undefined
-        if (record.mode === 'cli') return { cli: record.cli.trim() || 'lark' }
-        const secret = this.feishuCredentials.material(credential)?.appSecret
-        return record.appId && secret ? { appId: record.appId, secret } : undefined
-      }
-      /** CLI 身份调用：以机器人身份、JSON 输出，失败时把业务码并进消息。 */
-      const larkCall = (cli: string) => async (args: string[]): Promise<unknown> => {
-        const output = await commands.run(cli, [...args, '--as', 'bot', '--format', 'json'], machine.stateDir)
-        const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
-        if (!result.ok) throw new Error(`${result.error?.message ?? 'Feishu command failed'}${result.error?.code ? ` (${result.error.code})` : ''}`)
-        return result.data
-      }
-      // 凭据材料只在读取知识库或群消息时短暂进入内存；两种能力共用同一份凭据解析。
-      this.feishuWikiReader = async credential => {
-        const api = feishuApi(credential)
-        if (!api) return undefined
-        return 'cli' in api ? larkWikiApi(larkCall(api.cli)) : httpWikiApi(api.appId, api.secret, this.lifetime)
-      }
-      this.feishuImReader = async credential => {
-        const api = feishuApi(credential)
-        if (!api) return undefined
-        return 'cli' in api ? larkImApi(larkCall(api.cli)) : httpImApi(api.appId, api.secret, this.lifetime)
-      }
-      const board = this.board
-      const effects = this.effects = new Effects(store, board)
-      const sources = this.sources = new SourceRegistry(() => store.settings(), board, kind => {
-        // 当来源插件动态加载时，在启动完成后同步一次来源成员列表。
-        if (kind.policy?.sync) void this.ready?.then(() => this.settings.syncable().includes(kind.kind) ? this.settings.sync(kind.kind) : undefined)
-          .catch(() => { /* sync() 会把失败记录到健康状态中。 */ })
-        return () => {}
-      })
-      const links: LinkHost = { store, links: this.sourceLinks, commands, sources, lifetime: this.lifetime }
-      const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
-      const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
-      const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts, commands, masterId, context: ctx,
-        promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
-        feishuPageSize: source => feishuSettings(sources, source).readPageSize, sourceLink: link }
-      const sessions = this.sessions = new Sessions({ context: ctx, store, prompts, effects, health: board.claim('models'), masterId,
-        lifetime: this.lifetime,
-        closing: () => this.closing(), environment,
-        tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
-      const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
-      const stopTicket: EngineForSettings['stopTicket'] = (id, reason) => this.engine.stopTicket(id, reason)
-      this.settings = new Settings({ store, sources, engine: { policyChanged, stopTicket }, health: board, context: ctx, lifetime: this.lifetime, sessions,
-        sourceHost: this, setup, requestPass: () => { this.passes.request() } })
-      this.executor = new DshExecutor({ context: ctx, get engine() { return runtime.engine }, store, effects, commands, health: board.claim('worker'), machine,
-        lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
-        repliedTo: trigger => repliedTo({ store, sources }, trigger) })
-      this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
-        settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => sources.threadContext(trigger),
-        deliver: (id, text) => sessions.prompt(masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
-      const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused() })
-      const { assessor, executor } = this
-      const policy = () => settingsPolicy(store.settings(), sources)
-      const engine = this.engine = new Engine({ repo: store, scope: sources, policy, assessor, executor,
-        outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
-          // 仅向主会话通知并非由其自身发起的领域事件。
-          const notice = this.quiet ? undefined : eventNotice(event, id => store.tickets.get(id))
-          if (notice) sessions.notify(...notice)
-          // 到达未结束工单的人的消息属于该工单；主会话会在同一事务中得知，
-          // 对于已结束工单则在恢复后得知，除非是主会话自己将消息路由到那里。
-          const followed = !this.quiet && (event.type === 'trigger.received' || event.type === 'ticket.resumed' || event.type === 'trigger.followup')
-          const followup = followed ? followupNotice(store, sources, event.data.triggerId) : undefined
-          if (followup) sessions.relay(followup.id, followup.text)
-          // 项目调度按工单终态更新队列；失败重排与回写在调度器内完成。
-          if (event.type === 'ticket.ended') this.scheduler.observe(event.data.ticketId)
-        } })
-      // 调度与工作区回收共用健康看板：错误按 `schedule` / `workspace` 分类暴露给面板。
-      const scheduleHealth = board.claim('schedule', { state: 'starting', detail: '', category: 'schedule' })
-      this.scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
-        engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
-        executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
-        effects, commands, stateDir: machine.stateDir, lifetime: this.lifetime, feishuWiki: credential => this.wikiOf(credential),
-        feishuIm: credential => this.imOf(credential), gitAuth: id => this.gitCredentials.authOf(id),
-        health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
-      // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
-      effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
-      // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
-      const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
-      const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
-      const passes = this.passes = new Passes({ engine: { receive: trigger => engine.receive(trigger), evaluateDue }, effects,
-        health: this.runtimeHealth, lifetime: this.lifetime, configured: () => setup.configured(), closing: () => this.closing() })
-      this.sourceDeps = { store, engine, outbox, commands, sources, stateDir: machine.stateDir, get ready() { return runtime.ready },
-        get deployment() { return setup.deployment }, configured: () => setup.configured(),
-        get sourceProblems() { return setup.sourceProblems }, receive: trigger => passes.receive(trigger) }
-      this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
-        requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
-        quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
+      // ① 存储与基座：数据库、部署解析（Setup）、提示词、主会话 ID 与命令入口。
+      const storage = this.openStorage()
+      opened = this.store = storage.store
+      this.setup = storage.setup
+      this.prompts = storage.prompts
+      this.masterId = storage.masterId
+      this.commands = storage.commands
+      // ② 凭据：加密存储、Git/飞书两域服务，以及按凭据现取的读取能力（材料不进设置快照）。
+      const credentials = this.buildCredentials()
+      this.vault = credentials.vault
+      this.gitCredentials = credentials.gitCredentials
+      this.feishuCredentials = credentials.feishuCredentials
+      this.feishuWikiReader = credentials.feishuWikiReader
+      this.feishuImReader = credentials.feishuImReader
+      // ③ 来源与视图基座：效果队列与来源注册表，以及后续阶段共用的链接解析、工单环境与只读资源。
+      const base = this.buildSources()
+      this.effects = base.effects
+      this.sources = base.sources
+      // ④ 会话与设置：会话注册有序 relay/notice 副作用，设置做来源策略同步，执行器挂效果处理器，都必须晚于 ③。
+      const rooms = this.buildSessions(base.environment, base.link)
+      this.sessions = rooms.sessions
+      this.settings = rooms.settings
+      this.executor = rooms.executor
+      // ⑤ 领域与调度：引擎的事件回调引用会话与调度器，writeback 处理器引用调度器，必须晚于 ③④。
+      const domain = this.buildDomain(base.link, base.links)
+      this.assessor = domain.assessor
+      this.outbox = domain.outbox
+      this.engine = domain.engine
+      this.scheduler = domain.scheduler
+      this.passes = domain.passes
+      // ⑥ 来源上下文与工具宿主：读取上述全部协作者。
+      this.sourceDeps = this.buildSourceDeps()
+      this.toolHost = this.bindTools(base.resources)
       this.ready = this.initialize()
     } catch (error) {
       // 如果初始化失败，释放数据库和状态锁，以便进程内重启可以重新获取它们。
       try { opened?.close() } finally { void this.releaseLock?.().catch(() => { /* 释放失败只影响下次启动的等待时长。 */ }) }
       throw error
     }
+  }
+
+  /** 接管状态目录锁：插件入口已取得时补登记抢占处理；独立运行（测试）时先锁再开库。 */
+  private bindLock(): void {
+    const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message, category: 'runtime' }); this.stopped.abort() }
+    if (this.boot) {
+      // 锁由插件入口在管理路由挂载之后取得；这里只接收释放函数并补登记抢占处理。
+      this.releaseLock = this.boot.lock.release
+      this.boot.lock.onCompromised(compromised)
+    } else {
+      // 在打开数据库之前锁定状态目录，使其他进程无法并发迁移或写入。
+      mkdirSync(this.machine.stateDir, { recursive: true, mode: 0o700 })
+      const release = lockSync(this.machine.stateDir, { stale: 30_000, onCompromised: compromised })
+      this.releaseLock = async () => { release() }
+    }
+  }
+
+  /** 打开数据库并构造初始化基座：Setup、版本化提示词、主会话 ID 与命令入口。必须晚于 `bindLock`。 */
+  private openStorage(): { store: Store; setup: Setup; prompts: Prompts; masterId: string; commands: Commands } {
+    const { ctx, machine } = this
+    const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
+    const store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
+    const setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart: this.restartPlugin,
+      feishuWiki: credential => this.wikiOf(credential), feishuIm: credential => this.imOf(credential),
+      gitCredential: id => this.gitCredentials.metaOf(id), gitAuth: id => this.gitCredentials.authOf(id),
+      commands: repoId => this.commands.scope(repoId) })
+    const deployed = () => setup.configured()
+      ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
+    const feishu = () => setup.configured() && !!firstSource(setup.deployment, 'feishu')
+    const prompts = new Prompts(store, () => machine.promptMaxChars.get(), deployed, feishu)
+    const masterId = store.get(KV.runtime.masterId) ?? `orchestrator-${key(machine.stateDir)}`
+    store.set(KV.runtime.masterId, masterId)
+    const commands = new Commands(() => setup.deployment, setup.commandEnvironment, this.lifetime)
+    return { store, setup, prompts, masterId, commands }
+  }
+
+  /** 构造加密存储与两域凭据服务，以及按凭据现取的飞书知识库/群消息读取能力。必须晚于 `openStorage`。 */
+  private buildCredentials(): { vault: SecretVault; gitCredentials: GitCredentials; feishuCredentials: FeishuCredentials;
+    feishuWikiReader: FeishuWikiReader; feishuImReader: FeishuImReader } {
+    const { store, setup, commands, machine } = this
+    // 凭据记录与项目引用相互独立：项目只保存记录 ID，材料永远不进入设置快照。
+    const vault = new SecretVault(machine.stateDir)
+    const projects = () => store.settings().projects
+    const gitCredentials = new GitCredentials({ credentials: store.gitCredentials, vault, projects, probe: gitProbe(commands, vault) })
+    const feishuCredentials = new FeishuCredentials({ credentials: store.feishuCredentials, vault,
+      references: () => feishuCredentialReferences(store.settings()), probe: feishuProbe(commands) })
+    /** 凭据的调用方式：CLI 身份用可执行文件，应用身份用 appId 与密钥；材料只在这里短暂读取。 */
+    const feishuApi = (credential: string): { cli: string } | { appId: string; secret: string } | undefined => {
+      const record = store.feishuCredentials.get(credential)
+      if (!record) return undefined
+      if (record.mode === 'cli') return { cli: record.cli.trim() || 'lark' }
+      const secret = feishuCredentials.material(credential)?.appSecret
+      return record.appId && secret ? { appId: record.appId, secret } : undefined
+    }
+    /** CLI 身份调用：以机器人身份、JSON 输出，失败时把业务码并进消息。 */
+    const larkCall = (cli: string) => async (args: string[]): Promise<unknown> => {
+      const output = await commands.run(cli, [...args, '--as', 'bot', '--format', 'json'], machine.stateDir)
+      const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
+      if (!result.ok) throw new Error(`${result.error?.message ?? 'Feishu command failed'}${result.error?.code ? ` (${result.error.code})` : ''}`)
+      return result.data
+    }
+    // 凭据材料只在读取知识库或群消息时短暂进入内存；两种能力共用同一份凭据解析。
+    const feishuWikiReader: FeishuWikiReader = async credential => {
+      const api = feishuApi(credential)
+      if (!api) return undefined
+      return 'cli' in api ? larkWikiApi(larkCall(api.cli)) : httpWikiApi(api.appId, api.secret, this.lifetime)
+    }
+    const feishuImReader: FeishuImReader = async credential => {
+      const api = feishuApi(credential)
+      if (!api) return undefined
+      return 'cli' in api ? larkImApi(larkCall(api.cli)) : httpImApi(api.appId, api.secret, this.lifetime)
+    }
+    return { vault, gitCredentials, feishuCredentials, feishuWikiReader, feishuImReader }
+  }
+
+  /** 构造效果队列与来源注册表，以及后续阶段共用的链接解析、工单环境与只读资源。必须晚于 `buildCredentials`。 */
+  private buildSources() {
+    const { store, board } = this
+    const effects = new Effects(store, board)
+    const sources = new SourceRegistry(() => store.settings(), board, kind => {
+      // 当来源插件动态加载时，在启动完成后同步一次来源成员列表。
+      if (kind.policy?.sync) void this.ready?.then(() => this.settings.syncable().includes(kind.kind) ? this.settings.sync(kind.kind) : undefined)
+        .catch(() => { /* sync() 会把失败记录到健康状态中。 */ })
+      return () => {}
+    })
+    const links: LinkHost = { store, links: this.sourceLinks, commands: this.commands, sources, lifetime: this.lifetime }
+    const link = (trigger: Trigger, signal?: AbortSignal) => sourceLink(links, trigger, signal)
+    const environment = (ticket: Ticket) => this.ticketEnvironment(ticket)
+    const resources: ResourceHost = { store, pages: new TextCache(4_000_000), prompts: this.prompts, commands: this.commands,
+      masterId: this.masterId, context: this.ctx,
+      promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
+      feishuPageSize: source => feishuSettings(sources, source).readPageSize, sourceLink: link }
+    return { effects, sources, links, link, environment, resources }
+  }
+
+  /** 构造会话管理器、设置服务与执行器；执行器经惰性 getter 回读稍后装配的引擎。必须晚于 `buildSources`。 */
+  private buildSessions(environment: (ticket: Ticket) => Variable[], link: (trigger: Trigger, signal?: AbortSignal) => Promise<{ source_url?: string; source_url_read?: string }>) {
+    const runtime = this
+    const sessions = new Sessions({ context: this.ctx, store: this.store, prompts: this.prompts, effects: this.effects,
+      health: this.board.claim('models'), masterId: this.masterId, lifetime: this.lifetime,
+      closing: () => this.closing(), environment,
+      tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
+    const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
+    const stopTicket: EngineForSettings['stopTicket'] = (id, reason) => this.engine.stopTicket(id, reason)
+    const settings = new Settings({ store: this.store, sources: this.sources, engine: { policyChanged, stopTicket }, health: this.board,
+      context: this.ctx, lifetime: this.lifetime, sessions, sourceHost: this, setup: this.setup,
+      requestPass: () => { this.passes.request() } })
+    const executor = new DshExecutor({ context: this.ctx, get engine() { return runtime.engine }, store: this.store, effects: this.effects,
+      commands: this.commands, health: this.board.claim('worker'), machine: this.machine,
+      lifetime: this.lifetime, sessions, closing: () => this.closing(), paused: () => this.paused(), environment, sourceLink: link,
+      repliedTo: trigger => repliedTo({ store: this.store, sources: this.sources }, trigger) })
+    return { sessions, settings, executor }
+  }
+
+  /** 构造评估器、出站发件箱、引擎、项目调度器与编排轮次；引擎回调把领域事件转给主会话与调度器。必须晚于 `buildSessions`。 */
+  private buildDomain(link: (trigger: Trigger, signal?: AbortSignal) => Promise<{ source_url?: string; source_url_read?: string }>, links: LinkHost) {
+    const runtime = this
+    const { store, board } = this
+    const assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands: this.commands,
+      get deployment() { return runtime.setup.deployment }, effects: this.effects,
+      settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => this.sources.threadContext(trigger),
+      deliver: (id, text) => this.sessions.prompt(this.masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
+    const outbox = new Outbox({ store, effects: this.effects, sources: this.sources, commands: this.commands, paused: () => this.paused() })
+    const executor = this.executor
+    const policy = () => settingsPolicy(store.settings(), this.sources)
+    const engine = new Engine({ repo: store, scope: this.sources, policy, assessor, executor,
+      outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
+        // 仅向主会话通知并非由其自身发起的领域事件。
+        const notice = this.quiet ? undefined : eventNotice(event, id => store.tickets.get(id))
+        if (notice) this.sessions.notify(...notice)
+        // 到达未结束工单的人的消息属于该工单；主会话会在同一事务中得知，
+        // 对于已结束工单则在恢复后得知，除非是主会话自己将消息路由到那里。
+        const followed = !this.quiet && (event.type === 'trigger.received' || event.type === 'ticket.resumed' || event.type === 'trigger.followup')
+        const followup = followed ? followupNotice(store, this.sources, event.data.triggerId) : undefined
+        if (followup) this.sessions.relay(followup.id, followup.text)
+        // 项目调度按工单终态更新队列；失败重排与回写在调度器内完成。
+        if (event.type === 'ticket.ended') this.scheduler.observe(event.data.ticketId)
+      } })
+    // 调度与工作区回收共用健康看板：错误按 `schedule` / `workspace` 分类暴露给面板。
+    const scheduleHealth = board.claim('schedule', { state: 'starting', detail: '', category: 'schedule' })
+    const scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
+      engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
+      executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
+      effects: this.effects, commands: this.commands, stateDir: this.machine.stateDir, lifetime: this.lifetime,
+      feishuWiki: credential => this.wikiOf(credential),
+      feishuIm: credential => this.imOf(credential), gitAuth: id => this.gitCredentials.authOf(id),
+      health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
+    // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
+    this.effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
+    // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
+    const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
+    const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
+    const passes = new Passes({ engine: { receive: trigger => engine.receive(trigger), evaluateDue }, effects: this.effects,
+      health: this.runtimeHealth, lifetime: this.lifetime, configured: () => this.setup.configured(), closing: () => this.closing() })
+    return { assessor, outbox, engine, scheduler, passes }
+  }
+
+  /** 每来源记录的作用域上下文读取引擎、发件箱与命令入口；惰性字段等待启动完成。必须晚于 `buildDomain`。 */
+  private buildSourceDeps(): SourceContextDeps {
+    const runtime = this
+    return { store: this.store, engine: this.engine, outbox: this.outbox, commands: this.commands, sources: this.sources,
+      stateDir: this.machine.stateDir, get ready() { return runtime.ready },
+      get deployment() { return runtime.setup.deployment }, configured: () => this.setup.configured(),
+      get sourceProblems() { return runtime.setup.sourceProblems }, receive: trigger => this.passes.receive(trigger) }
+  }
+
+  /** 主会话与执行器会话的工具宿主；`quietly` 抑制自触发领域事件的通知。必须晚于 `buildDomain`。 */
+  private bindTools(resources: ResourceHost): MainToolsHost & ExecutorToolsHost {
+    return { context: this.ctx, engine: this.engine, store: this.store, prompts: this.prompts, sessions: this.sessions,
+      settings: this.settings, assessor: this.assessor, resources,
+      requestPass: () => { this.passes.request() }, sendReplies: () => this.outbox.sent(),
+      quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
   }
   get health(): Readonly<Record<string, Health>> { return this.board.all }
   /** dsh-superagent 停止或失去状态目录锁时触发中止，取消正在运行的读取和子进程。 */

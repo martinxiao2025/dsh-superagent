@@ -1,13 +1,9 @@
 /** 任务来源驱动注册表：面板下拉、逐字段预检与运行时读取都从这里取得驱动。 */
-import { LIMITS } from '../limits.ts'
-import type { SourceCheck } from '../setup.ts'
+import { checkFailed, verifyFields, type SourceCheck } from '../setup.ts'
 import { excelTaskSource } from './excel.ts'
 import { feishuImTaskSource } from './feishu-im.ts'
 import { feishuWikiTaskSource } from './feishu-wiki.ts'
-import {
-  checkFailed, checkPassed,
-  type TaskSourceDriver, type TaskSourceRecord, type TaskSourceVerifyDeps,
-} from './kind.ts'
+import type { TaskSourceDriver, TaskSourceRecord, TaskSourceVerifyDeps } from './kind.ts'
 
 /** 内置驱动；新增来源只需在这里登记，面板下拉与预检自动出现。 */
 export const TASK_SOURCE_DRIVERS: readonly TaskSourceDriver[] = [excelTaskSource, feishuImTaskSource, feishuWikiTaskSource]
@@ -18,20 +14,6 @@ export interface TaskSourceVerifyMeta {
   name?: string
   /** 记录 ID 是否已被占用；旧记录编辑时可返回 false。 */
   taken?(id: string): boolean
-}
-
-const checkName = (name: string): SourceCheck => {
-  const value = name.trim()
-  if (!value) return checkFailed('name', 'sourceNameRequired')
-  if (value.length > LIMITS.sourceName) return checkFailed('name', 'sourceNameTooLong', { limit: String(LIMITS.sourceName) })
-  if (/[\u0000-\u001f\u007f]/.test(value)) return checkFailed('name', 'sourceNameInvalid')
-  return checkPassed('name', 'sourceNameOk', { name: value })
-}
-const checkId = (id: string, taken?: (id: string) => boolean): SourceCheck => {
-  if (!id) return checkPassed('id', 'sourceIdAuto')
-  if (!/^[a-z][a-z0-9-]*$/.test(id)) return checkFailed('id', 'sourceIdInvalid', { id })
-  if (taken?.(id)) return checkFailed('id', 'sourceIdTaken', { id })
-  return checkPassed('id', 'sourceIdOk', { id })
 }
 
 /** 驱动注册表；测试可以传入额外驱动验证「注册即可接入」。 */
@@ -55,27 +37,18 @@ export class TaskSourceRegistry {
   async verify(kind: string, config: unknown, field: string, meta: TaskSourceVerifyMeta,
     deps: TaskSourceVerifyDeps): Promise<SourceCheck[]> {
     const driver = this.kind(kind)
-    if (!driver) return [checkFailed(field === 'all' ? 'kind' : field, 'sourceKindUnknown', { kind })]
-    if (field === 'name') return [checkName(meta.name ?? '')]
-    if (field === 'id') return [checkId(meta.id ?? '', meta.taken)]
-    if (field === 'kind') return [checkPassed('kind', 'sourceKindOk', { kind })]
-    const parsed = driver.schema.safeParse(config ?? {})
-    const invalid = (): SourceCheck[] => [checkFailed(field === 'all' ? 'kind' : field, 'sourceConfigInvalid', {
-      detail: parsed.success ? '' : parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ') })]
-    if (field !== 'all') {
-      if (!parsed.success) return invalid()
-      if (!driver.fields.some(item => item.key === field)) return [checkFailed(field, 'checkUnsupported', { field })]
-      return driver.verify(parsed.data, field, deps)
-    }
-    // 名称必填优先于来源配置：名称缺失时不应先暴露配置格式问题。
-    const checks: SourceCheck[] = [checkName(meta.name ?? '')]
-    if (meta.id !== undefined) checks.push(checkId(meta.id, meta.taken))
-    checks.push(checkPassed('kind', 'sourceKindOk', { kind }))
-    if (!parsed.success) return [...checks, ...invalid()]
-    for (const item of driver.fields.filter(entry => !entry.advanced)) {
-      checks.push(...await driver.verify(parsed.data, item.key, deps))
-    }
-    return checks
+    return verifyFields({
+      kind, field, config,
+      schema: driver?.schema,
+      allFields: driver ? driver.fields.filter(entry => !entry.advanced).map(entry => entry.key) : [],
+      // 未在驱动字段中声明的字段直接判不支持，不进入驱动预检。
+      check: async (name, data) => driver!.fields.some(item => item.key === name)
+        ? driver!.verify(data, name, deps)
+        : [checkFailed(name, 'checkUnsupported', { field: name })],
+      meta: { name: meta.name, id: meta.id, taken: meta.taken },
+      // 名称、登记信息与类型通过结果先于配置检查出现，包括配置无效时。
+      identityFirst: true,
+    })
   }
 }
 

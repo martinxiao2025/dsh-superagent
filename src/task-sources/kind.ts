@@ -6,8 +6,8 @@ import type { RawTask } from './tasks.ts'
 import type { FeishuWikiApi } from './feishu-api.ts'
 import type { FeishuImApi } from './feishu-im-api.ts'
 import type { WriteTarget } from './writeback.ts'
-import type { SourceCheck } from '../setup.ts'
 import type { FieldSpec, Localized } from '../sources/kind.ts'
+import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
 
 /** 驱动注册名：小写字母开头，允许数字与连字符。内置 `excel`、`feishu-im` 与 `feishu-wiki`。 */
 export const TaskSourceKindSchema = z.string().trim().regex(/^[a-z][a-z0-9-]*$/, '任务来源类型')
@@ -97,12 +97,6 @@ export interface TaskSourceWriteContext {
 /** 推送上下文：与回写共用工作副本与命令入口。 */
 export type TaskSourcePushContext = TaskSourceWriteContext
 
-/** 预检结果构造：通过。 */
-export const checkPassed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck =>
-  ({ field, ok: true, scope: 'check', code, values })
-/** 预检结果构造：失败。 */
-export const checkFailed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck =>
-  ({ field, ok: false, scope: 'check', code, values })
 /** 把异常压成可读文本，用于预检结果的 `output`。 */
 export const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 /** 把代码仓库异常映射为字段级结果；未知异常按同步失败处理。 */

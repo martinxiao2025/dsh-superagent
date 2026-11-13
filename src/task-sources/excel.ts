@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, extname, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
-import type { SourceCheck } from '../setup.ts'
+import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
 import { commitWorkCopy } from '../code-repos/work.ts'
 import { readStandardTable } from './table.ts'
 import { STANDARD_COLUMNS, STANDARD_TASK_FIELDS, TaskFormatError, parseStandardTasks, standardStatus } from './excel-format.ts'
@@ -15,7 +15,7 @@ import { taskTemplate } from './excel-template.ts'
 import { TaskListError, type RawTask } from './tasks.ts'
 import { writeTaskStatusAt } from './writeback.ts'
 import {
-  checkFailed, checkPassed, errorText, repoCheck, TaskRepoError,
+  errorText, repoCheck, TaskRepoError,
   type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps, type TaskSourceWriteContext,
 } from './kind.ts'
 

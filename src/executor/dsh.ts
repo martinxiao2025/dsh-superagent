@@ -4,8 +4,8 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mkdir, rmdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { key, latestAssignment, latestReport, liveTicket, runningAssignment, threadKey, waitsForPerson } from '../core/index.ts'
-import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
+import { latestAssignment, latestReport, liveTicket, runningAssignment, waitsForPerson } from '../core/index.ts'
+import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Executor, Ticket, TicketInput, Trigger }
   from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
@@ -18,16 +18,13 @@ import type { Store } from '../app/store.ts'
 import { Later, type Effects } from '../app/effects.ts'
 import { executionRoot, projectDirectory, ticketDirectoryName, type Variable } from '../app/execution-environment.ts'
 import type { Sessions } from '../app/sessions.ts'
-import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
+import { batchLine, batchOf, capped, inputMessage, inputResource, RETRIED, ticketOfSession, triggerMessage, workerSessionId,
+  WorktreeNameSchema } from './format.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { cancelled, collectJob, killJobs, runningJobs, stopBackground, stopSubagents, until, untilQuiet } from './background.ts'
 
 const now = (): string => new Date().toISOString()
-/** 返回工单的工作单元会话 ID（`worker-<ticketId>`）。 */
-export const workerSessionId = (ticketId: string): string => `worker-${ticketId}`
-/** 从工作单元会话 ID（`worker-<ticketId>`）返回工单 ID；非工作单元会话返回 undefined。 */
-export const ticketOfSession = (sessionId: string): string | undefined => sessionId.startsWith('worker-') ? sessionId.slice('worker-'.length) : undefined
 /** 工作区准备命令的最大运行时长。 */
 const PREPARE_TIMEOUT_MS = 10 * 60_000
 /** 启动或工作单元回合的最大瞬时重试次数，以及恢复回合前的初始退避时长。 */
@@ -93,15 +90,6 @@ export interface ExecutorHost {
 export const sourceTrigger = (host: { store: Pick<Store, 'triggers'> }, ticket: Ticket): Trigger | undefined =>
   host.store.triggers.get(ticket.origin.triggerId)
 
-/**
- * 返回工作单元在请求之外的额外系统提示词授权说明：对于按规则主动承接的工作（`strength === 'inferred'`），
- * 把授权限制为规则范围内的少量内部改动；显式请求返回 `''`。
- */
-export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string {
-  return mandate.strength === 'inferred' ? 'This ticket has limited proactive authorization. Independently verify that it is a small change '
-    + 'internal to one module within the accepted rule scope. If it requires public-interface or behavior changes, new interaction, product '
-    + 'decisions or clarification, stop and report dropped; do not expand scope.' : ''
-}
 /** 构建新接受工单的执行元数据：工单短名（用于分支）、项目名与工单子目录，以及任务分配文本。 */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
   stateDir: string, trigger?: Trigger): Execution {
@@ -122,59 +110,8 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
   const directory = join(executionRoot(settings, stateDir), folder, ticketDirectoryName(ticket.id))
   return { name, project: identity, directory, assignment }
 }
-/** 工作单元消息中内联任务分配和触发器文本的字符上限；更长的文本通过其资源读取。 */
-const ASSIGNMENT_CHARS = 1500, TRIGGER_CHARS = 600
-/** 返回最多 `limit` 个字符的 `text`，或返回带截断预览、总字符数和读取全文资源路径的对象。 */
-const capped = (text: string, limit: number, read: string) =>
-  text.length <= limit ? { text } : { text: `${text.slice(0, limit)}…`, chars: text.length, read }
-/**
- * 格式化用于投递给工作单元的触发器：作者、线程、时间戳、最多 `TRIGGER_CHARS` 个字符的文本、来源消息链接、
- * 可选的路由备注，以及工作单元尚未见过的被回复消息预览。
- */
-export function triggerMessage(trigger: Trigger, link: { source_url?: string; source_url_read?: string }, note?: string, repliesTo?: Trigger) {
-  return { trigger_id: trigger.id, from: trigger.actor.id, thread: threadKey(trigger.threads[0]!), at: trigger.at,
-    ...capped(trigger.text, TRIGGER_CHARS, `trigger/${trigger.id}`), ...link, ...(note ? { routing_note: note } : {}),
-    ...(repliesTo ? { replies_to: { trigger_id: repliesTo.id, preview: repliesTo.text.replace(/\s+/g, ' ').slice(0, 160) } } : {}) }
-}
-/** 格式化工单接受批次中的同批触发器：作者、时间戳、160 字符预览和读取资源路径。 */
-export const batchLine = (trigger: Trigger) => ({ trigger_id: trigger.id, from: trigger.actor.id, at: trigger.at,
-  preview: trigger.text.replace(/\s+/g, ' ').slice(0, 160), read: `trigger/${trigger.id}` })
-/** 返回工单来源批次中的其他触发器（排除主 `origin.triggerId`），按时间从旧到新排列。 */
-export const batchOf = (host: { store: Pick<Store, 'triggers'> }, ticket: Ticket): Trigger[] => ticket.origin.triggerIds
-  .filter(id => id !== ticket.origin.triggerId).flatMap(id => host.store.triggers.get(id) ?? [])
-const RESUMED = 'This ticket ended earlier and the message that follows, on its thread, resumed it under the same mandate. If it asks for '
-  + 'more within the original scope, inspect the worktree, git history and PR state and continue; if it asks for work beyond that scope or '
-  + 'for another ticket, hand it back with orchestrator_trigger_handback and report dropped; if it needs nothing, such as thanks, '
-  + 'report dropped without a message. Report ready when the follow-up is done. Do not repeat completed work.'
-const RETRIED = 'A person retried this ticket. Continue the assignment from the current worktree, git history and PR state.'
-/** 格式化策略变更输入供工作单元使用；在 `effect` 出现之前记录的输入回退为一条通用通知。 */
-function policyMessage(effect?: PolicyEffect): string {
-  if (!effect) return 'Policy change: the access or admission rules changed. Check that the remaining work stays within the assignment.'
-  return ['Policy change:',
-    ...(effect.rules ?? []).map(rule => rule.change === 'disabled'
-      ? `Rule ${rule.name} (${rule.id}), which this ticket was accepted under, no longer applies: finish only a change within it, or report dropped.`
-      : `Rule ${rule.name} (${rule.id}), which this ticket was accepted under, changed. Keep the remaining work within it as it reads now: ${rule.instruction}`),
-    ...effect.proactive === false ? ['Work inferred from a rule is no longer accepted, as the accept mode is no longer auto: finish only '
-      + 'what is in progress within the assignment, or report dropped, and take on nothing new.'] : [],
-    ...effect.requesterAllowed === false ? [`The sender this ticket is for, ${effect.requester ? `${effect.requester.id} on ${effect.requester.source}` : 'who '
-      + 'asked for it'}, may no longer start work here: finish the assignment within its scope, and take no new requests from them on it.`] : []].join('\n')
-}
-/** 工作单元会话读取工单输入全文所使用的资源路径。 */
-export const inputResource = (ticketId: string, inputId: string): string => `ticket/${ticketId}/input/${key(inputId)}`
-/**
- * 格式化用于投递给工作单元的工单输入：通过 `trigger` 渲染的 `trigger`（缺失时按其 ID 和读取路径）、
- * `policy-changed` 通知、`resumed` 通知、编排器的 `note`，或按原文的 `text` 输入。
- * 对遗留的 `reopen` 输入返回 `undefined`，它们只是历史数据，因为 schema 11 迁移已把待处理的 reopen 输入转换为文本输入。
- */
-export function inputMessage(input: TicketInput, trigger?: object): string | undefined {
-  // 标记经由仅上下文订阅到达的触发器，让工作单元知道它们并非针对该工单。
-  if (input.kind === 'trigger') return JSON.stringify({ ...trigger ?? { trigger_id: input.triggerId, read: `trigger/${input.triggerId}` },
-    ...input.context ? { context: true } : {} })
-  if (input.kind === 'policy-changed') return policyMessage(input.effect)
-  if (input.kind === 'resumed') return RESUMED
-  if (input.kind === 'note') return `Note from the orchestrator, for context only: ${input.text}`
-  return input.kind === 'text' ? input.text : undefined
-}
+/** 工作单元消息中内联任务分配文本的字符上限；更长的文本通过其资源读取。 */
+const ASSIGNMENT_CHARS = 1500
 /**
  * 依据配置的并发上限跟踪活动中的和正在启动的工作单元会话：工单在其工作单元的回合运行时、
  * 在回合结束后其 shell 作业或子智能体仍运行时，以及在启动或唤醒该工作单元时占用一个槽位。

@@ -314,6 +314,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/task-sources/excel-format.ts` | 010 标准任务格式：`tasks` 表头契约、状态与优先级枚举、行级校验、版本门禁与完成/失败状态映射 |
 | `src/task-sources/excel-template.ts` | 标准工作簿模板生成：`tasks` 表头 + `_meta`（版本与示例），面板下载入口 |
 | `src/secrets/vault.ts` | 凭据加密存储与掩码：AES-256-GCM、按区域（Git / 飞书）分目录、指纹与 `••••` 末四位提示 |
+| `src/secrets/credential-service.ts` | 两个凭据域共享的服务骨架：材料先落盘再写元数据、修订乐观并发、引用拒绝删除；域差异（分区、错误码、记录形状）由 Git/飞书服务注入 |
 | `src/secrets/check.ts` | 凭据预检结果 `CredentialCheck` 与构造函数，供两个凭据页共用 |
 | `src/secrets/id.ts` | 凭据记录 ID：按名称生成小写连字符 ID |
 | `src/git-credentials/kind.ts`、`service.ts`、`probe.ts` | Git 凭据：独立记录、独立路由与身份校验；私钥或令牌只进加密存储，项目只存引用 |
@@ -383,7 +384,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/views/settings.ts` | 设置页面的视图：每个块及其修订号、每个来源的设置及其 kind 的表单，以及执行环境 |
 | `src/app/views/projects.ts` | 项目运行视图：项目配置、该项目在队列中的任务，以及全局 worker 占用 |
 | `src/app/views/overview.ts` | 概览：需要人处理的工单、问题、过去一天的流动以及执行器负载 |
-| `src/executor/dsh.ts` | DshExecutor、`WorkerSlots`、`ticketExecution`、`inputMessage` 和 `mandateInstructions` |
+| `src/executor/format.ts` | 面向模型的工单文本格式化（只依赖领域内核）：工作单元会话 ID、`triggerMessage`、`inputMessage`、`mandateInstructions`、`WorktreeNameSchema` 与同批触发器卡片 |
+| `src/executor/dsh.ts` | DshExecutor、`WorkerSlots`、`ticketExecution`：每工单一个会话与工作区的启动、投递、并发槽位与恢复 |
 | `src/executor/background.ts` | DeepSeek Harness 中执行器的后台工作、其会话拥有的 shell 任务（`ctx.jobs`）及其子代理（`ctx.subagents`）：`runningJobs`、`untilQuiet`、`killJobs`、`collectJobs`、`stopSubagents`、`stopBackground`、`until`，以及 `cancelled`（其子代理停止时取消了回合的执行器） |
 | `src/infra/commands.ts` | `Commands`，CLI 传输：`run`；`api` 和 `pages`，限制在已配置仓库并经过校验；`glab`、`gitlabApi` 和 `gitlabPages`，限制在已配置的 GitLab 项目并经过校验；以机器人身份运行的 `lark`；`git`。`CliError` 携带命令输出报告的错误码，例如 GitHub 或 GitLab 的 HTTP 状态；不打印任何内容的命令以结束方式失败，绝不带出其参数；`validItems` 跳过并计数列表中的格式错误项 |
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |

@@ -1,7 +1,7 @@
 /** 格式化通过副作用队列投递给主会话的后台通知和引导转发。 */
 import { randomUUID } from 'node:crypto'
 import { followupOwners, key, liveTicket, type DomainEvent, type Ticket, type WorkerReport } from '../core/index.ts'
-import { triggerMessage } from '../executor/dsh.ts'
+import { triggerMessage } from '../executor/format.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
 import { repliedTo } from './links.ts'
 import type { Store } from './store.ts'

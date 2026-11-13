@@ -4,9 +4,9 @@ import { isAbsolute } from 'node:path'
 import { UserError } from '../core/index.ts'
 import { SecretVault, fingerprint, mask, type SecretMaterial } from '../secrets/vault.ts'
 import { credentialCheck, type CredentialCheck } from '../secrets/check.ts'
+import { CredentialService } from '../secrets/credential-service.ts'
 import { GitCredentialInputSchema, GitCredentialSchema, type GitCredential, type GitCredentialInput,
   type GitCredentialView } from './kind.ts'
-import { credentialId } from '../secrets/id.ts'
 import type { GitAuth } from '../code-repos/sync.ts'
 
 /** 记录层只依赖最小读写接口，便于用内存实现测试。 */
@@ -45,77 +45,75 @@ export function classifyProbeError(error: unknown): string {
   if (/not found|does not exist|\b404\b/i.test(text)) return 'gitCredentialRepositoryMissing'
   return 'gitCredentialProbeFailed'
 }
+/** 把输入转成材料；`keyPath` 在这里读取，之后的展示与探测都只用加密材料。 */
+function materialOfInput(input: Partial<GitCredentialInput>): SecretMaterial {
+  const material: SecretMaterial = {}
+  if (input.kind === undefined || input.kind === 'ssh') {
+    const pasted = input.privateKey ?? ''
+    const path = input.keyPath?.trim() ?? ''
+    if (pasted.trim()) material.privateKey = normalizePrivateKey(pasted)
+    else if (path) {
+      if (!isAbsolute(path)) throw new UserError('gitCredentialKeyPath', { path })
+      if (!existsSync(path)) throw new UserError('gitCredentialKeyPathMissing', { path })
+      material.privateKey = normalizePrivateKey(readFileSync(path, 'utf8'))
+    }
+    if (input.passphrase) material.passphrase = input.passphrase
+  }
+  if (input.token) material.token = input.token.trim()
+  return material
+}
+/** 提交里出现任一材料字段就视为替换材料。 */
+function hasMaterial(input: Partial<GitCredentialInput>): boolean {
+  return input.privateKey !== undefined || input.keyPath !== undefined || input.token !== undefined || input.passphrase !== undefined
+}
+/** ssh 必须有私钥，https 必须有令牌。 */
+function complete(kind: 'ssh' | 'https', material: SecretMaterial): boolean {
+  return kind === 'ssh' ? Boolean(material.privateKey) : Boolean(material.token)
+}
+function hint(kind: 'ssh' | 'https', material: SecretMaterial): string {
+  if (kind === 'ssh') return KEY_PATTERN.test(material.privateKey ?? '') ? 'private key' : ''
+  return mask(material.token ?? '')
+}
+function redact(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).replace(/\/\/[^/@\s]+@/g, '//***@')
+}
 
 /** Git 凭据服务：元数据写入 SQLite，材料写入加密存储；校验端点与飞书凭据各自独立。 */
-export class GitCredentials {
-  private readonly now: () => string
+export class GitCredentials extends CredentialService<GitCredential, GitCredentialInput, GitCredentialView> {
   constructor(private readonly options: GitCredentialsOptions) {
-    this.now = options.now ?? (() => new Date().toISOString())
+    super({
+      area: 'git',
+      records: options.credentials,
+      vault: options.vault,
+      codes: { exists: 'gitCredentialExists', notInstalled: 'gitCredentialNotInstalled',
+        material: 'gitCredentialMaterial', inUse: 'gitCredentialInUse' },
+      references: () => Object.values(options.projects()).flatMap(project => project.gitCredential ? [project.gitCredential] : []),
+      parseInput: input => GitCredentialInputSchema.parse(input),
+      parsePartial: input => GitCredentialInputSchema.partial().parse(input),
+      materialOf: materialOfInput,
+      replaces: hasMaterial,
+      complete: (record, secret) => complete(record.kind, secret),
+      createRecord: (id, input, at) => GitCredentialSchema.parse({ id, name: input.name, kind: input.kind, provider: input.provider,
+        username: input.username ?? '', note: input.note ?? '', origin: input.keyPath ? 'file' : 'pasted',
+        keyPath: input.keyPath ?? '', revision: 1, updatedAt: at, lastVerifiedAt: '' }),
+      mergeRecord: (current, input, at) => GitCredentialSchema.parse({ ...current, name: input.name, kind: input.kind,
+        provider: input.provider, username: input.username ?? current.username, note: input.note ?? current.note,
+        origin: input.keyPath ? 'file' : hasMaterial(input) ? 'pasted' : current.origin, keyPath: input.keyPath ?? current.keyPath,
+        revision: current.revision + 1, updatedAt: at }),
+      rotateRecord: (current, input, at) => GitCredentialSchema.parse({ ...current, revision: current.revision + 1, updatedAt: at,
+        origin: input.keyPath ? 'file' : 'pasted', keyPath: input.keyPath ?? current.keyPath }),
+      viewOf: (record, secret, readable) => {
+        const configured = readable && complete(record.kind, secret)
+        const text = record.kind === 'ssh' ? secret.privateKey ?? '' : secret.token ?? ''
+        return { id: record.id, name: record.name, kind: record.kind, provider: record.provider, username: record.username,
+          note: record.note, origin: record.origin, keyPath: record.keyPath, revision: record.revision,
+          updatedAt: record.updatedAt, lastVerifiedAt: record.lastVerifiedAt, configured,
+          fingerprint: text ? fingerprint(text) : '', hint: readable ? hint(record.kind, secret) : '' }
+      },
+      now: options.now,
+    })
   }
 
-  /** 全部凭据视图，按记录 ID 排序。 */
-  list(): GitCredentialView[] {
-    return this.options.credentials.list().sort((a, b) => a.id.localeCompare(b.id)).map(record => this.view(record))
-  }
-  /** 单条凭据视图；不存在时抛 404。 */
-  get(id: string): GitCredentialView {
-    return this.view(this.record(id))
-  }
-  /** 创建凭据：材料先落盘再写元数据，任一步失败都不留下半条记录。 */
-  create(input: unknown, id?: string): { id: string; revision: number } {
-    const parsed = GitCredentialInputSchema.parse(input)
-    const recordId = id ?? this.unique(credentialId(parsed.name))
-    if (this.options.credentials.get(recordId)) throw new UserError('gitCredentialExists', { credential: recordId })
-    const material = this.material(parsed)
-    if (!this.complete(parsed.kind, material)) throw new UserError('gitCredentialMaterial')
-    const record = GitCredentialSchema.parse({ id: recordId, name: parsed.name, kind: parsed.kind, provider: parsed.provider,
-      username: parsed.username ?? '', note: parsed.note ?? '', origin: parsed.keyPath ? 'file' : 'pasted',
-      keyPath: parsed.keyPath ?? '', revision: 1, updatedAt: this.now(), lastVerifiedAt: '' })
-    this.options.vault.save('git', recordId, material)
-    try { this.options.credentials.save(record) } catch (error) {
-      this.options.vault.remove('git', recordId)
-      throw error
-    }
-    return { id: recordId, revision: record.revision }
-  }
-  /** 更新元数据；提交了材料字段时一并替换材料。 */
-  update(id: string, input: unknown, revision: number): { revision: number } {
-    const current = this.record(id)
-    if (current.revision !== revision) throw new UserError('credentialRevisionStale')
-    const parsed = GitCredentialInputSchema.parse(input)
-    const replaced = this.hasMaterial(parsed)
-    const material = replaced ? this.material(parsed) : this.options.vault.read('git', id) ?? {}
-    const kind = parsed.kind
-    if (!this.complete(kind, material)) throw new UserError('gitCredentialMaterial')
-    const record = GitCredentialSchema.parse({ ...current, name: parsed.name, kind, provider: parsed.provider,
-      username: parsed.username ?? current.username, note: parsed.note ?? current.note,
-      origin: parsed.keyPath ? 'file' : replaced ? 'pasted' : current.origin, keyPath: parsed.keyPath ?? current.keyPath,
-      revision: current.revision + 1, updatedAt: this.now() })
-    if (replaced) this.options.vault.save('git', id, material)
-    this.options.credentials.save(record)
-    return { revision: record.revision }
-  }
-  /** 只替换材料，元数据与认证方式保持不变；引用方应重新校验。 */
-  rotate(id: string, material: unknown): { revision: number } {
-    const current = this.record(id)
-    const input = GitCredentialInputSchema.partial().parse(material ?? {})
-    const parsed = this.material(input)
-    if (!this.complete(current.kind, parsed)) throw new UserError('gitCredentialMaterial')
-    this.options.vault.save('git', id, parsed)
-    const record = GitCredentialSchema.parse({ ...current, revision: current.revision + 1, updatedAt: this.now(),
-      origin: input.keyPath ? 'file' : 'pasted', keyPath: input.keyPath ?? current.keyPath })
-    this.options.credentials.save(record)
-    return { revision: record.revision }
-  }
-  /** 删除凭据；仍被项目引用时拒绝。 */
-  remove(id: string): { removed: true } {
-    this.record(id)
-    const used = Object.values(this.options.projects()).filter(project => project.gitCredential === id).length
-    if (used) throw new UserError('gitCredentialInUse', { credential: id, count: String(used) })
-    this.options.credentials.remove(id)
-    this.options.vault.remove('git', id)
-    return { removed: true }
-  }
   /** 只给出认证方式与账号名，供解析项目仓库时使用；不接触材料。 */
   metaOf(id: string): { kind: 'ssh' | 'https'; username: string } | undefined {
     const record = this.options.credentials.get(id)
@@ -127,7 +125,7 @@ export class GitCredentials {
     if (!record) return undefined
     let material: SecretMaterial
     try { material = this.options.vault.read('git', id) ?? {} } catch { return undefined }
-    if (!this.complete(record.kind, material)) return undefined
+    if (!complete(record.kind, material)) return undefined
     return { kind: record.kind, material: { username: record.username || 'x-access-token',
       token: material.token ?? '', privateKey: material.privateKey ?? '' } }
   }
@@ -144,10 +142,10 @@ export class GitCredentials {
     } else {
       const parsed = GitCredentialInputSchema.partial().parse(input.input ?? {})
       kind = parsed.kind ?? 'ssh'
-      material = this.material(parsed)
+      material = materialOfInput(parsed)
     }
-    if (!this.complete(kind, material)) return [credentialCheck('material', false, 'gitCredentialMaterialMissing')]
-    checks.push(credentialCheck('material', true, 'gitCredentialMaterialOk', { hint: this.hint(kind, material) }))
+    if (!complete(kind, material)) return [credentialCheck('material', false, 'gitCredentialMaterialMissing')]
+    checks.push(credentialCheck('material', true, 'gitCredentialMaterialOk', { hint: hint(kind, material) }))
     if (kind === 'ssh' && !KEY_PATTERN.test(material.privateKey ?? '')) {
       checks.push(credentialCheck('key', false, 'gitCredentialKeyInvalid'))
       return checks
@@ -165,62 +163,8 @@ export class GitCredentials {
         ? credentialCheck('repository', true, 'gitCredentialRemoteOk', { branches: String(result.branches) })
         : credentialCheck('repository', true, 'gitCredentialRepositoryEmpty'))
     } catch (error) {
-      checks.push(credentialCheck('repository', false, classifyProbeError(error), { error: this.redact(error) }))
+      checks.push(credentialCheck('repository', false, classifyProbeError(error), { error: redact(error) }))
     }
     return checks
-  }
-
-  private redact(error: unknown): string {
-    return (error instanceof Error ? error.message : String(error)).replace(/\/\/[^/@\s]+@/g, '//***@')
-  }
-  private record(id: string): GitCredential {
-    const record = this.options.credentials.get(id)
-    if (!record) throw new UserError('gitCredentialNotInstalled', { credential: id })
-    return record
-  }
-  private unique(base: string): string {
-    let candidate = base, suffix = 2
-    while (this.options.credentials.get(candidate)) candidate = `${base}-${suffix++}`
-    return candidate
-  }
-  /** 提交里出现任一材料字段就视为替换材料。 */
-  private hasMaterial(input: Partial<GitCredentialInput>): boolean {
-    return input.privateKey !== undefined || input.keyPath !== undefined || input.token !== undefined || input.passphrase !== undefined
-  }
-  /** 把输入转成材料；`keyPath` 在这里读取，之后的展示与探测都只用加密材料。 */
-  private material(input: Partial<GitCredentialInput>): SecretMaterial {
-    const material: SecretMaterial = {}
-    if (input.kind === undefined || input.kind === 'ssh') {
-      const pasted = input.privateKey ?? ''
-      const path = input.keyPath?.trim() ?? ''
-      if (pasted.trim()) material.privateKey = normalizePrivateKey(pasted)
-      else if (path) {
-        if (!isAbsolute(path)) throw new UserError('gitCredentialKeyPath', { path })
-        if (!existsSync(path)) throw new UserError('gitCredentialKeyPathMissing', { path })
-        material.privateKey = normalizePrivateKey(readFileSync(path, 'utf8'))
-      }
-      if (input.passphrase) material.passphrase = input.passphrase
-    }
-    if (input.token) material.token = input.token.trim()
-    return material
-  }
-  private complete(kind: 'ssh' | 'https', material: SecretMaterial): boolean {
-    return kind === 'ssh' ? Boolean(material.privateKey) : Boolean(material.token)
-  }
-  private hint(kind: 'ssh' | 'https', material: SecretMaterial): string {
-    if (kind === 'ssh') return KEY_PATTERN.test(material.privateKey ?? '') ? 'private key' : ''
-    return mask(material.token ?? '')
-  }
-  private view(record: GitCredential): GitCredentialView {
-    let material: SecretMaterial = {}
-    let readable = true
-    try { material = this.options.vault.read('git', record.id) ?? {} }
-    catch { readable = false }
-    const configured = readable && this.complete(record.kind, material)
-    const secret = record.kind === 'ssh' ? material.privateKey ?? '' : material.token ?? ''
-    return { id: record.id, name: record.name, kind: record.kind, provider: record.provider, username: record.username,
-      note: record.note, origin: record.origin, keyPath: record.keyPath, revision: record.revision,
-      updatedAt: record.updatedAt, lastVerifiedAt: record.lastVerifiedAt, configured,
-      fingerprint: secret ? fingerprint(secret) : '', hint: readable ? this.hint(record.kind, material) : '' }
   }
 }

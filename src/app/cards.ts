@@ -1,7 +1,7 @@
 /** 面向模型的触发器、工单、线程和决策的紧凑且有界投影；完整文本仍保留在可读资源中。 */
 import { latestReport, reasonText, threadKey, ticketStage, type Decision, type Mandate, type Thread, type Ticket, type TicketInput,
   type Trigger, type TriggerDisposition } from '../core/index.ts'
-import { batchLine, inputResource } from '../executor/dsh.ts'
+import { batchLine, inputResource } from '../executor/format.ts'
 
 /** 折叠空白并截断文本以生成展示预览，同时为模型读者保留代码、尖括号和链接的完整形式。 */
 export function preview(text: string): string { return text.replace(/\s+/g, ' ').slice(0, 160) }

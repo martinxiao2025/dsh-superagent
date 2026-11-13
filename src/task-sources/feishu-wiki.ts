@@ -3,11 +3,11 @@
  * 首批只读，不实现回写。
  */
 import { z } from 'zod'
-import type { SourceCheck } from '../setup.ts'
+import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
 import { FeishuApiError, type FeishuWikiApi } from './feishu-api.ts'
 import { issuesText, readWikiTasks } from './feishu-wiki-read.ts'
 import {
-  checkFailed, checkPassed, DEFAULT_TASK_FIELDS, errorText, taskColumnShape, taskColumnsOf,
+  DEFAULT_TASK_FIELDS, errorText, taskColumnShape, taskColumnsOf,
   type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps,
 } from './kind.ts'
 

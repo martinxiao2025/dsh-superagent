@@ -1,10 +1,9 @@
 /** 飞书凭据的增删改查、轮换与身份校验；应用密钥只经过加密存储层。 */
-import { UserError } from '../core/index.ts'
 import { SecretVault, fingerprint, mask, type SecretMaterial } from '../secrets/vault.ts'
 import { credentialCheck, type CredentialCheck } from '../secrets/check.ts'
+import { CredentialService } from '../secrets/credential-service.ts'
 import { FeishuCredentialInputSchema, FeishuCredentialSchema, type FeishuCredential, type FeishuCredentialInput,
   type FeishuCredentialView } from './kind.ts'
-import { credentialId } from '../secrets/id.ts'
 
 /** 记录层只依赖最小读写接口，便于用内存实现测试。 */
 export interface FeishuCredentialRepository {
@@ -35,68 +34,49 @@ export function classifyFeishuError(error: unknown): string {
   return 'feishuCredentialProbeFailed'
 }
 
+/** 应用密钥是飞书域唯一的材料字段；空值不落盘。 */
+const materialOf = (input: Partial<FeishuCredentialInput>): SecretMaterial => {
+  const material: SecretMaterial = {}
+  if (input.appSecret) material.appSecret = input.appSecret.trim()
+  return material
+}
+/** 应用模式必须有 App ID 与密钥；CLI 模式必须给出可执行文件。 */
+const complete = (record: Pick<FeishuCredential, 'mode' | 'appId' | 'cli'>, material: SecretMaterial): boolean =>
+  record.mode === 'app' ? Boolean(record.appId && material.appSecret) : Boolean(record.cli)
+
 /** 飞书凭据服务：元数据写入 SQLite，应用密钥写入加密存储；与 Git 凭据互不复用路由或材料。 */
-export class FeishuCredentials {
-  private readonly now: () => string
+export class FeishuCredentials extends CredentialService<FeishuCredential, FeishuCredentialInput, FeishuCredentialView> {
   constructor(private readonly options: FeishuCredentialsOptions) {
-    this.now = options.now ?? (() => new Date().toISOString())
+    super({
+      area: 'feishu',
+      records: options.credentials,
+      vault: options.vault,
+      codes: { exists: 'feishuCredentialExists', notInstalled: 'feishuCredentialNotInstalled',
+        material: 'feishuCredentialMaterial', inUse: 'feishuCredentialInUse' },
+      references: () => options.references(),
+      parseInput: input => FeishuCredentialInputSchema.parse(input),
+      parsePartial: input => FeishuCredentialInputSchema.partial().parse(input),
+      materialOf,
+      replaces: input => input.appSecret !== undefined,
+      complete,
+      createRecord: (id, input, at) => FeishuCredentialSchema.parse({ id, name: input.name, mode: input.mode,
+        appId: input.appId ?? '', cli: input.cli ?? '', note: input.note ?? '', revision: 1, updatedAt: at, lastVerifiedAt: '' }),
+      mergeRecord: (current, input, at) => FeishuCredentialSchema.parse({ ...current, name: input.name, mode: input.mode,
+        appId: input.appId ?? current.appId, cli: input.cli ?? current.cli, note: input.note ?? current.note,
+        revision: current.revision + 1, updatedAt: at }),
+      rotateRecord: (current, input, at) => FeishuCredentialSchema.parse({ ...current, appId: input.appId ?? current.appId,
+        cli: input.cli ?? current.cli, revision: current.revision + 1, updatedAt: at }),
+      viewOf: (record, material, readable) => {
+        const configured = readable && complete(record, material)
+        return { id: record.id, name: record.name, mode: record.mode, appId: record.appId, cli: record.cli, note: record.note,
+          revision: record.revision, updatedAt: record.updatedAt, lastVerifiedAt: record.lastVerifiedAt, configured,
+          fingerprint: record.mode === 'app' && material.appSecret ? fingerprint(material.appSecret) : '',
+          hint: record.mode === 'app' && readable ? mask(material.appSecret ?? '') : '' }
+      },
+      now: options.now,
+    })
   }
 
-  list(): FeishuCredentialView[] {
-    return this.options.credentials.list().sort((a, b) => a.id.localeCompare(b.id)).map(record => this.view(record))
-  }
-  get(id: string): FeishuCredentialView { return this.view(this.record(id)) }
-  /** 创建凭据：材料先落盘再写元数据。 */
-  create(input: unknown, id?: string): { id: string; revision: number } {
-    const parsed = FeishuCredentialInputSchema.parse(input)
-    const recordId = id ?? this.unique(credentialId(parsed.name))
-    if (this.options.credentials.get(recordId)) throw new UserError('feishuCredentialExists', { credential: recordId })
-    const material = this.materialOf(parsed)
-    this.requireComplete(parsed.mode, parsed.appId ?? '', parsed.cli ?? '', material)
-    const record = FeishuCredentialSchema.parse({ id: recordId, name: parsed.name, mode: parsed.mode, appId: parsed.appId ?? '',
-      cli: parsed.cli ?? '', note: parsed.note ?? '', revision: 1, updatedAt: this.now(), lastVerifiedAt: '' })
-    if (Object.keys(material).length) this.options.vault.save('feishu', recordId, material)
-    try { this.options.credentials.save(record) } catch (error) {
-      this.options.vault.remove('feishu', recordId)
-      throw error
-    }
-    return { id: recordId, revision: record.revision }
-  }
-  /** 更新元数据；提交了应用密钥时一并替换材料。 */
-  update(id: string, input: unknown, revision: number): { revision: number } {
-    const current = this.record(id)
-    if (current.revision !== revision) throw new UserError('credentialRevisionStale')
-    const parsed = FeishuCredentialInputSchema.parse(input)
-    const replaced = parsed.appSecret !== undefined
-    const material = replaced ? this.materialOf(parsed) : this.options.vault.read('feishu', id) ?? {}
-    this.requireComplete(parsed.mode, parsed.appId ?? current.appId, parsed.cli ?? current.cli, material)
-    const record = FeishuCredentialSchema.parse({ ...current, name: parsed.name, mode: parsed.mode, appId: parsed.appId ?? current.appId,
-      cli: parsed.cli ?? current.cli, note: parsed.note ?? current.note, revision: current.revision + 1, updatedAt: this.now() })
-    if (replaced) this.options.vault.save('feishu', id, material)
-    this.options.credentials.save(record)
-    return { revision: record.revision }
-  }
-  /** 只替换应用密钥。 */
-  rotate(id: string, material: unknown): { revision: number } {
-    const current = this.record(id)
-    const input = FeishuCredentialInputSchema.partial().parse(material ?? {})
-    const parsed = this.materialOf(input)
-    this.requireComplete(current.mode, input.appId ?? current.appId, input.cli ?? current.cli, parsed)
-    this.options.vault.save('feishu', id, parsed)
-    const record = FeishuCredentialSchema.parse({ ...current, appId: input.appId ?? current.appId, cli: input.cli ?? current.cli,
-      revision: current.revision + 1, updatedAt: this.now() })
-    this.options.credentials.save(record)
-    return { revision: record.revision }
-  }
-  /** 删除凭据；仍被任务来源引用时拒绝。 */
-  remove(id: string): { removed: true } {
-    this.record(id)
-    const used = this.options.references().filter(reference => reference === id).length
-    if (used) throw new UserError('feishuCredentialInUse', { credential: id, count: String(used) })
-    this.options.credentials.remove(id)
-    this.options.vault.remove('feishu', id)
-    return { removed: true }
-  }
   /** 供知识库读取使用：材料缺失或不可解密时返回 undefined，不抛给调用方。 */
   material(id: string): SecretMaterial | undefined {
     try { return this.options.vault.read('feishu', id) } catch { return undefined }
@@ -119,7 +99,7 @@ export class FeishuCredentials {
       mode = parsed.mode ?? 'app'
       appId = parsed.appId ?? ''
       cli = parsed.cli ?? ''
-      material = this.materialOf(parsed)
+      material = materialOf(parsed)
     }
     const missing = mode === 'app' ? !appId || !material.appSecret : !cli
     if (missing) return [credentialCheck('identity', false, 'feishuCredentialMaterialMissing')]
@@ -138,36 +118,4 @@ export class FeishuCredentials {
     }
     return checks
   }
-
-  private record(id: string): FeishuCredential {
-    const record = this.options.credentials.get(id)
-    if (!record) throw new UserError('feishuCredentialNotInstalled', { credential: id })
-    return record
-  }
-  private unique(base: string): string {
-    let candidate = base, suffix = 2
-    while (this.options.credentials.get(candidate)) candidate = `${base}-${suffix++}`
-    return candidate
-  }
-  private materialOf(input: Partial<FeishuCredentialInput>): SecretMaterial {
-    const material: SecretMaterial = {}
-    if (input.appSecret) material.appSecret = input.appSecret.trim()
-    return material
-  }
-  /** 应用模式必须有 App ID 与密钥；CLI 模式必须给出可执行文件。 */
-  private requireComplete(mode: 'app' | 'cli', appId: string, cli: string, material: SecretMaterial): void {
-    if (mode === 'app' ? !appId || !material.appSecret : !cli) throw new UserError('feishuCredentialMaterial')
-  }
-  private view(record: FeishuCredential): FeishuCredentialView {
-    let material: SecretMaterial = {}
-    let readable = true
-    try { material = this.options.vault.read('feishu', record.id) ?? {} }
-    catch { readable = false }
-    const configured = readable && (record.mode === 'app' ? Boolean(record.appId && material.appSecret) : Boolean(record.cli))
-    return { id: record.id, name: record.name, mode: record.mode, appId: record.appId, cli: record.cli, note: record.note,
-      revision: record.revision, updatedAt: record.updatedAt, lastVerifiedAt: record.lastVerifiedAt, configured,
-      fingerprint: record.mode === 'app' && material.appSecret ? fingerprint(material.appSecret) : '',
-      hint: record.mode === 'app' && readable ? mask(material.appSecret ?? '') : '' }
-  }
 }
-

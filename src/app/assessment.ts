@@ -11,12 +11,11 @@ import { admissionContext } from '../sources/admission-context.ts'
 import { readRepositoryPath } from '../code-repos/read.ts'
 import type { TriggerContext } from '../sources/kind.ts'
 import { relatedTickets } from './cards.ts'
+import { WorktreeNameSchema } from '../executor/format.ts'
 import { textPage } from './context.ts'
 import { AcknowledgementSchema } from './tools/tool.ts'
 import type { Effects } from './effects.ts'
 
-/** 简短的小写 kebab-case 英文工单工作树名称的模式（1–4 个单词，最多 32 个字符）。 */
-export const WorktreeNameSchema = z.string().max(32).regex(/^[a-z]+(?:-[a-z0-9]+){0,3}$/, 'Use 1–4 short English words in lowercase kebab-case, at most 32 characters').describe('Meaningful short English ticket name, e.g. fix-plan-color. Translate Chinese titles into English; no Chinese, pinyin or generic ticket names. 1–4 lowercase words in kebab-case, at most 32 characters.')
 /** 主会话主动式候选评估决策的模式（`orchestrator_eval_decide`）。 */
 export const AssessmentSchema = z.object({
   decision: z.enum(['accept', 'ignore', 'unavailable']),

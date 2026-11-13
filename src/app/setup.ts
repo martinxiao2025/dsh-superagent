@@ -2,6 +2,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import type { z } from 'zod'
 import { UserError } from '../core/index.ts'
 import {
   SETUP_FIELDS, checkGithubAccount, checkGithubRepository, checkGitlabAccount, checkGitlabProject, hostOf,
@@ -16,14 +17,13 @@ import { codeRepoType } from '../code-repos/types.ts'
 import { repositoryOfRemote } from '../code-repos/kind.ts'
 import { taskSources, type TaskSourceVerifyMeta } from '../task-sources/index.ts'
 import { TaskRepoError } from '../task-sources/kind.ts'
-import { LIMITS } from '../limits.ts'
 import { projectRepoId, type ProjectRepo } from '../projects/kind.ts'
 import type { FeishuWikiApi } from '../task-sources/feishu-api.ts'
 import type { FeishuImApi } from '../task-sources/feishu-im-api.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import type { SourceInstance } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
-import { SetupError, type SetupProblem, type SourceCheck } from '../setup.ts'
+import { checkFailed, checkPassed, verifyFields, SetupError, type SetupProblem, type SourceCheck } from '../setup.ts'
 
 export interface SetupHost {
   readonly context: Context
@@ -57,8 +57,6 @@ const setupMaterial = (settings: Settings) => JSON.stringify({
       (SETUP_FIELDS[project.codeRepo.kind] ?? []).map(key => project.codeRepo.config[key] ?? ''), project.gitCredential]),
 })
 export const setupChanged = (before: Settings | undefined, after: Settings): boolean => !before || setupMaterial(before) !== setupMaterial(after)
-const checkPassed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck => ({ field, ok: true, scope: 'check', code, values })
-const checkFailed = (field: string, code: string, values: Record<string, string> = {}): SourceCheck => ({ field, ok: false, scope: 'check', code, values })
 /**
  * 按候选配置与 Git 凭据解析仓库远端：凭据决定认证方式；未绑定时沿用配置里的 auth 与 SSH key，
  * 与项目保存后的解析保持同一套规则。
@@ -80,19 +78,6 @@ const checkThrown = (field: string, error: unknown): SourceCheck => error instan
   : checkFailed(field, 'checkFailed', { output: error instanceof Error ? error.message : String(error) })
 /** 新增来源表单的字段级检查顺序；消息来源目前只有飞书。 */
 const checkFields = (kind: string): string[] => kind === 'feishu' ? ['instanceUrl', 'cli'] : []
-const checkName = (name: string): SourceCheck => {
-  const value = name.trim()
-  if (!value) return checkFailed('name', 'sourceNameRequired')
-  if (value.length > LIMITS.sourceName) return checkFailed('name', 'sourceNameTooLong', { limit: String(LIMITS.sourceName) })
-  if (/[\u0000-\u001f\u007f]/.test(value)) return checkFailed('name', 'sourceNameInvalid')
-  return checkPassed('name', 'sourceNameOk', { name: value })
-}
-const checkId = (id: string, sources: { record(id: string): unknown }): SourceCheck => {
-  if (!id) return checkPassed('id', 'sourceIdAuto')
-  if (!/^[a-z][a-z0-9-]*$/.test(id)) return checkFailed('id', 'sourceIdInvalid', { id })
-  if (sources.record(id)) return checkFailed('id', 'sourceIdTaken', { id })
-  return checkPassed('id', 'sourceIdOk', { id })
-}
 
 /**
  * 逐条来源记录探测 CLI，然后写入并应用执行器进程使用的隔离 git 和 shim 环境。
@@ -158,28 +143,14 @@ export class Setup {
    */
   async checkSource(kind: string, config: unknown, field: string, sources: SourceRegistry,
     meta: { id?: string; name?: string } = {}): Promise<SourceCheck[]> {
-    const spec = sources.kindByName(kind)
-    if (!spec) return [checkFailed(field === 'all' ? 'kind' : field, 'sourceKindUnknown', { kind })]
-    if (field === 'name') return [checkName(meta.name ?? '')]
-    if (field === 'id') return [checkId(meta.id ?? '', sources)]
-    const parsed = spec.schema.safeParse(config ?? {})
-    if (!parsed.success) {
-      return [checkFailed(field === 'all' ? 'kind' : field, 'sourceConfigInvalid', {
-        detail: parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ') })]
-    }
-    if (field === 'kind') return [checkPassed('kind', 'sourceKindOk', { kind })]
-    const data = parsed.data as Record<string, unknown>
-    const fields = field === 'all'
-      ? ['name', ...(meta.id === undefined ? [] : ['id']), ...checkFields(kind)]
-      : [field]
     const probe = this.probe()
-    const checks: SourceCheck[] = []
-    for (const name of fields) {
-      if (name === 'name') { checks.push(checkName(meta.name ?? '')); continue }
-      if (name === 'id') { checks.push(checkId(meta.id ?? '', sources)); continue }
-      checks.push(await this.checkField(kind, name, data, probe))
-    }
-    return checks
+    return verifyFields({
+      kind, field, config,
+      schema: sources.kindByName(kind)?.schema,
+      allFields: checkFields(kind),
+      check: async (name, data) => [await this.checkField(kind, name, data, probe)],
+      meta: { name: meta.name, id: meta.id, taken: id => !!sources.record(id) },
+    })
   }
   /**
    * 任务来源的字段级预检：由驱动真实读取清单或文档，但这里不写设置、不重启。
@@ -228,22 +199,16 @@ export class Setup {
   async checkCodeRepo(kind: string, config: unknown, field: string,
     meta: { gitCredential?: string } = {}): Promise<SourceCheck[]> {
     const type = codeRepoType(kind)
-    if (!type) return [checkFailed(field === 'all' ? 'kind' : field, 'sourceKindUnknown', { kind })]
-    const parsed = type.schema.safeParse(config ?? {})
-    if (!parsed.success) {
-      return [checkFailed(field === 'all' ? 'kind' : field, 'sourceConfigInvalid', {
-        detail: parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ') })]
-    }
-    if (field === 'kind') return [checkPassed('kind', 'sourceKindOk', { kind })]
-    const data = parsed.data as Record<string, unknown>
-    const injected = meta.gitCredential ? ['gitCredential'] : []
-    const fields = field === 'all'
-      ? [...type.checkFields.filter(name => name !== 'auth' && name !== 'sshKey'), ...injected]
-      : [field]
+    const gitCredential = meta.gitCredential ?? ''
     const probe = this.probe()
-    const checks: SourceCheck[] = []
-    for (const name of fields) checks.push(await this.checkCodeRepoField(kind, name, data, probe, meta.gitCredential))
-    return checks
+    return verifyFields({
+      kind, field, config,
+      // github 与 gitlab 的配置 schema 形状不同；字段检查按记录字段字典进行（与旧实现的 `as Record` 同口径）。
+      schema: type?.schema as z.ZodType<Record<string, unknown>> | undefined,
+      allFields: type ? [...type.checkFields.filter(name => name !== 'auth' && name !== 'sshKey'),
+        ...(gitCredential ? ['gitCredential'] : [])] : [],
+      check: async (name, data) => [await this.checkCodeRepoField(kind, name, data, probe, gitCredential)],
+    })
   }
   /** 单个代码仓库字段：有 Git 凭据时真实探测远端，否则沿用 SSH key 或 gh/glab 检查。 */
   private async checkCodeRepoField(kind: string, field: string, config: Record<string, unknown>, probe: Probe,

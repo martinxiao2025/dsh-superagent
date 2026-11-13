@@ -3,11 +3,11 @@
  * 只读、不回写；消息编号稳定，执行成功且内容未变的消息不会被重复执行。
  */
 import { z } from 'zod'
-import type { SourceCheck } from '../setup.ts'
+import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
 import { FeishuApiError } from './feishu-api.ts'
 import type { FeishuImApi } from './feishu-im-api.ts'
 import {
-  checkFailed, checkPassed, DEFAULT_TASK_FIELDS, errorText,
+  DEFAULT_TASK_FIELDS, errorText,
   type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps,
 } from './kind.ts'
 
