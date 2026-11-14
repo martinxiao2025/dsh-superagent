@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### 调度可靠性批次（2026-11-14）
+
+- **轮询并发**：一轮检查内的项目轮询改为有界并发池（并发 4），慢项目（大仓库首次 clone）不再阻塞其他项目的轮询与建单；单项目失败不中断同批。单项目串行与互斥语义不变（忙项目推迟、scan/tick 共用执行链）。
+- **到期抖动**：下次轮询时间按间隔 ±10% 抖动，避免全部项目在同一时刻集中打远端；启动 `nextPoll` 同样带抖动。
+- **git 超时拆分**：部署配置新增 `gitTimeoutMs`（默认 600s，独立于 CLI 的 `commandTimeoutMs` 90s）；项目新增 `execution.gitTimeoutSeconds` 覆盖（0=沿用全局），大仓库首次 clone 按项目放宽。
+- **项目级 prepare**：项目新增 `execution.prepare`，在项目仓库检出到工单目录后、会话启动前运行（典型用途安装项目依赖）；全局 `executor.prepare` 只对无仓库工单兜底，避免多项目共享缓存互相污染。面板向导与编辑表单同步暴露 `prepare` 与 `gitTimeoutSeconds`。
+- 修复 `worker-sources.spec.ts` 对含空条目的本机 PATH 逐字比较导致的环境性失败。
+
+### 存储与结构（2026-11-14）
+
+- **DDL 漂移检测加固**：生成列定义比对改为规范化（折叠空白、去双引号）后的子串匹配；删除漂移列时先清理所有引用它的索引（如 `queue_unique_active`），不再受 SQLite 重建时 DDL 格式扰动影响。
+- **settleOutcome 提取**：「工单终态 → 队列结算」映射收敛为纯函数 `settleOutcome`（返回动作数据），recover/observe/settle 共用唯一出口。
+- **http.ts 三拆**：按职责拆为 `http/routes.ts`（路由表与视图组装、`HttpHost`）、`http/schemas.ts`（zod 请求校验）、`http/server.ts`（同源/错误映射/挂载）与 `http/error.ts`（`RouteError` 叶子，断开 routes↔server 环）。
+- **依赖分层收口**：`hostOf` 下沉 `infra/host.ts`，infra 对 deployment 只剩类型依赖；executor 不再值级依赖 app 展示层（报告转发正文改由 `executor/format.ts` 的 `workerReportText` 内联最小投影）；新增 `code-repos/port.ts` 统一同步/读取/提交出口。
+- **静态架构守卫**（`tests/architecture.spec.ts`，零新依赖）：core 零外部依赖、infra 不依赖业务域、deployment↔infra 无值级环、executor 不依赖 app 展示层、code-repos 消费方经由 port——CI 持续锁定 011 §1 的脚本口径。
+
+### 日常备份（2026-11-14）
+
+- 管理 API 新增 `POST admin/backup`：对运行中的 SQLite 执行 `VACUUM INTO`，写出一致性快照（WAL 已合并，单文件可直接打开校验）。
+- 服务脚本新增 `backup` 子命令：服务运行中走快照；停止时冷复制整个状态目录（含 `secrets/`，从 profile patch 自动检测 `stateDir`）；`--keep N`（默认 14）自动清理旧备份。
+- 文档：006 新增「日常备份」节（含恢复步骤与 secrets 边界说明），009 §9.2 新增「版本 ↔ schema ↔ 迁移」对照表。
+
 ### 单元测试 Windows 兼容与简化（2026-11-13）
 
 - 修复 `deployment.spec.ts` / `environment.spec.ts` 在 Windows 上因符号链接权限失败的用例：普通符号链接

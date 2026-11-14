@@ -473,6 +473,15 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 
 **失败处理**：任一步失败保留备份并回滚到重置前（先改名到临时目录再删），不出现「表已清空但目录还在」的中间态。
 
+**版本 ↔ schema ↔ 迁移对照**（随每次 schema 变更更新此表与 CHANGELOG）：
+
+| 包版本 | schema | 打开策略 |
+| --- | --- | --- |
+| 0.1.x | 10–13 | 迁移链逐版升级（该策略已废弃） |
+| 0.2.0 起 | 14 | 硬门禁：只打开当前版本；其他版本一律拒绝并提示 `reset`（先备份）。升级跨 schema 版本 = 备份 → reset → 从空基线重建 |
+
+日常备份（升级前快照）见 [006 部署 · 日常备份](006-deployment.md)。
+
 ### 9.3 重置后重建示例
 
 - `demo-tree`：新建项目 → 选 GitHub 仓库 `martinxiao2025/DemoTree`、分支 `main` → 新建 Git 凭据（SSH 路径材料）并测试通过 → 任务来源选 Excel `docs/backlog.csv` → 保存后保持停用。

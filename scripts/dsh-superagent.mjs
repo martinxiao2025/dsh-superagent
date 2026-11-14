@@ -306,6 +306,74 @@ async function reset(options) {
   return 0
 }
 
+/** 备份根目录：与 reset/clean 共用 `~/dsh-superagent-backup`。 */
+const backupRootOf = () => join(homedir(), 'dsh-superagent-backup')
+
+/**
+ * 通过管理 API 在运行中的 SQLite 上执行 `VACUUM INTO`，得到一致性快照；
+ * 返回服务端写入的快照文件路径。
+ */
+async function vacuumSnapshot(url, target) {
+  return await post(url, '/admin/backup', { target }, 120_000)
+}
+
+/** 服务停止时的冷备份：复制整个状态目录到备份根下的时间戳目录。 */
+async function coldBackup(stateDir, now) {
+  const target = join(backupRootOf(), `cold-${now.toISOString().replace(/[:.]/g, '-')}`)
+  cpSync(stateDir, target, { recursive: true, force: true })
+  return target
+}
+
+/** 删除备份根下超出 `keep` 份数的旧备份目录（按名称排序，最旧先删）。 */
+function pruneBackups(keep, prefix = '') {
+  if (!(keep > 0)) return []
+  const root = backupRootOf()
+  const removed = []
+  let entries = []
+  try { entries = readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory())
+    .filter(entry => !prefix || entry.name.startsWith(prefix)).map(entry => entry.name).sort() } catch { return removed }
+  for (const name of entries.slice(0, Math.max(0, entries.length - keep))) {
+    rmSync(join(root, name), { recursive: true, force: true })
+    removed.push(name)
+  }
+  return removed
+}
+
+/**
+ * 日常备份：服务运行中时经由管理 API 做 SQLite `VACUUM INTO` 一致性快照；
+ * 服务停止时冷复制状态目录（`--state-dir` 显式给出，或从 profile patch 自动检测）。
+ * `--keep N` 保留备份根下最近 N 份备份目录，默认 14；0 表示不清理。
+ */
+async function backup(options) {
+  const now = new Date()
+  const pids = processes(options.profile)
+  let snapshot
+  if (pids.length && await state(options.url)) {
+    const report = await vacuumSnapshot(options.url, join(backupRootOf(),
+      `snapshot-${now.toISOString().replace(/[:.]/g, '-')}.sqlite`))
+    snapshot = report.snapshot
+    console.log('Vacuumed a consistent SQLite snapshot while the service is running.')
+  } else {
+    const stateDir = options.stateDir || detectStateDir(options) || (options.stateDirExplicit ? options.stateDir : '')
+    if (!stateDir) throw new Error('The service is not running; pass --state-dir to back up an offline state directory.')
+    if (lockHeld(stateDir)) throw new Error(`The state directory at ${stateDir} may be locked by a running instance; stop the service or use its management API.`)
+    snapshot = await coldBackup(stateDir, now)
+  }
+  const pruned = pruneBackups(options.keep)
+  console.log(JSON.stringify({ at: now.toISOString(), snapshot, keptBackups: options.keep, pruned }, null, 2))
+  return 0
+}
+
+/** 从 profile patch 块读取状态目录；offline 备份无法从运行服务得知它。 */
+function detectStateDir(options) {
+  if (options.stateDirExplicit) return options.stateDir
+  const patch = join((options.dshHome || process.env.DSH_HOME || join(homedir(), '.dsh')), 'profiles', options.profile, 'cordis.patch.yml')
+  try {
+    const { blocks } = withoutPluginBlocks(readFileSync(patch, 'utf8'))
+    return stateDirOf(blocks)
+  } catch { return undefined }
+}
+
 /** 日志文件名的本地时间戳，格式为 `YYYYMMDD-HHMMSS`。 */
 function localStamp() {
   const now = new Date()
@@ -523,12 +591,13 @@ function parse(argv) {
     profile: process.env.DSH_SUPERAGENT_PROFILE || 'superagent',
     url: process.env.DSH_SUPERAGENT_URL || 'http://127.0.0.1:3082',
     timeout: 60, stopTimeout: 300, respectStop: false, yes: false,
-    dshHome: '', stateDir: '', backup: true, lockWait: 240, profileExplicit: false,
+    dshHome: '', stateDir: '', stateDirExplicit: false, backup: true, lockWait: 240, profileExplicit: false, keep: 14,
   }
-  const usage = 'usage: dsh-superagent {start,stop,restart,status,reset,clean} [--profile NAME] [--url URL] [--yes]\n'
-    + '       dsh-superagent clean [--dsh-home DIR] [--state-dir DIR] [--no-backup] [--lock-wait SECONDS] --yes'
+  const usage = 'usage: dsh-superagent {start,stop,restart,status,reset,clean,backup} [--profile NAME] [--url URL] [--yes]\n'
+    + '       dsh-superagent clean [--dsh-home DIR] [--state-dir DIR] [--no-backup] [--lock-wait SECONDS] --yes\n'
+    + '       dsh-superagent backup [--state-dir DIR] [--keep N]   (running service: consistent SQLite snapshot; stopped: cold copy)'
   const fail = message => { console.error(message); console.error(usage); process.exit(2) }
-  const actions = ['start', 'stop', 'restart', 'status', 'reset', 'clean']
+  const actions = ['start', 'stop', 'restart', 'status', 'reset', 'clean', 'backup']
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index]
     const value = name => argument.startsWith(name + '=') ? argument.slice(name.length + 1) : argv[++index]
@@ -538,8 +607,9 @@ function parse(argv) {
     else if (argument === '--profile' || argument.startsWith('--profile=')) { options.profile = value('--profile'); options.profileExplicit = true }
     else if (argument === '--url' || argument.startsWith('--url=')) options.url = value('--url')
     else if (argument === '--dsh-home' || argument.startsWith('--dsh-home=')) options.dshHome = value('--dsh-home')
-    else if (argument === '--state-dir' || argument.startsWith('--state-dir=')) options.stateDir = value('--state-dir')
+    else if (argument === '--state-dir' || argument.startsWith('--state-dir=')) { options.stateDir = value('--state-dir'); options.stateDirExplicit = true }
     else if (argument === '--lock-wait' || argument.startsWith('--lock-wait=')) options.lockWait = Number(value('--lock-wait'))
+    else if (argument === '--keep' || argument.startsWith('--keep=')) options.keep = Number(value('--keep'))
     else if (argument === '--timeout' || argument.startsWith('--timeout=')) options.timeout = Number(value('--timeout'))
     else if (argument === '--stop-timeout' || argument.startsWith('--stop-timeout=')) options.stopTimeout = Number(value('--stop-timeout'))
     else if (argument === '--help' || argument === '-h') { console.log(usage); process.exit(0) }
@@ -550,6 +620,7 @@ function parse(argv) {
   if (!options.action) fail('the following arguments are required: action')
   if (!(options.timeout > 0) || !(options.stopTimeout > 0)) fail('--timeout and --stop-timeout must be positive')
   if (!(options.lockWait > 0)) fail('--lock-wait must be positive')
+  if (!(options.keep >= 0)) fail('--keep must not be negative')
   if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(options.profile)) fail('--profile must be a DSH profile name')
   return options
 }
@@ -573,6 +644,7 @@ async function main() {
     if (options.action === 'status') return await status(options)
     if (options.action === 'reset') return await reset(options)
     if (options.action === 'clean') return await clean(options)
+    if (options.action === 'backup') return await backup(options)
     if (options.action === 'stop' || options.action === 'restart') {
       // 只有停止会让自动恢复保持关闭；停止超时的重启会使其保持开启。
       await stop(options, options.action === 'stop')

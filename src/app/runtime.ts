@@ -451,6 +451,11 @@ export class Runtime extends Service implements SourceHost {
       checkTaskSource: (kind, config, field, meta) => setup.checkTaskSource(kind, config, field, meta),
       feishuImChats: async credential => (await this.feishuImReader?.(credential))?.chats() ?? [],
       requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
+      backupDatabase: target => {
+        // VACUUM INTO 在读事务中生成一致性快照，运行中的 WAL 库也能安全备份；目标必须是绝对路径（路由层校验）。
+        this.store.db.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
+        return { snapshot: target }
+      },
       reset: () => runtime.reset() }
   }
   /** 回收过期的工单执行目录，并把结果写入 `workspace` 健康条目；与运行中任务互斥由工单结束时间保证。 */

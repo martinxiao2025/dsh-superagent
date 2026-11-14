@@ -235,6 +235,17 @@ it('caches parsed settings per revision: saves are visible at once and a rolled 
   store.close()
 })
 
+it('vacuums a consistent snapshot into an absolute path, and the snapshot reopens with the same rows', () => {
+  const store = new Store(join(directory, 'orchestrator.sqlite'))
+  store.set(KV.runtime.masterId, 'm')
+  const target = join(directory, 'snapshot.sqlite')
+  store.db.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
+  store.close()
+  const snapshot = new Store(target)
+  expect(snapshot.get(KV.runtime.masterId)).toBe('m')
+  snapshot.close()
+})
+
 it('replaces a working-set column an earlier build defined otherwise, and drops one this version no longer has', () => {
   const path = join(directory, 'orchestrator.sqlite')
   const db = new DatabaseSync(path)

@@ -652,6 +652,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     ? { at: '2026-11-11T00:00:00.000Z', stateDir: '/srv/dsh-superagent/state', backup: '/backup/2026-11-11T00-00-00-000Z',
       removed: ['orchestrator.sqlite'], kept: [] }
     : refuse(400, 'Invalid request body') },
+  'POST admin/backup': { body: true, answer: ({ body: request }) => ({ snapshot: String(request.target ?? '') }) },
   'GET models': { answer: () => ({ default: { provider: 'host', model: 'default' }, routableProviders: [], failures: [],
     groups: [{ id: 'worker-provider', name: 'Worker provider', models: [{ id: 'worker-model', name: 'Worker model',
       reasoning: { efforts: [{ id: 'high', name: 'High' }] } }] }] }) },

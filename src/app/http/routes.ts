@@ -1,4 +1,6 @@
 /** 管理 API 的路由表：每条路由把 HTTP 请求翻译成对 `HttpHost` 的调用，并把结果组装成面板视图。 */
+import { isAbsolute } from 'node:path'
+import { z } from 'zod'
 import { type Api, type ApiResponse, type RouteParams } from '../api.ts'
 import { sourceSkills } from '../context.ts'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
@@ -101,6 +103,8 @@ export interface HttpHost {
   models(): Promise<ModelCatalog>
   /** 备份并清空状态目录后重启；仅由要求显式确认的管理入口调用。 */
   reset(): Promise<ResetReport>
+  /** 在运行中的 SQLite 上执行 `VACUUM INTO`，把一致性快照写入 `target`（绝对路径）；日常备份用。 */
+  backupDatabase(target: string): { snapshot: string }
 }
 
 export function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }: Machine) {
@@ -311,6 +315,11 @@ export function routes(runtime: HttpHost, listen: () => { host: string; port: nu
     'POST admin/reset': async ({ body }) => {
       ResetRequest.parse(await body())
       return runtime.reset()
+    },
+    // 日常备份：在运行中的数据库上执行 VACUUM INTO 得到一致性快照；目标必须是绝对路径。
+    'POST admin/backup': async ({ body }) => {
+      const request = z.object({ target: z.string().trim().refine(path => isAbsolute(path), 'An absolute path') }).parse(await body())
+      return runtime.backupDatabase(request.target)
     },
     'GET models': () => runtime.models(),
     'GET prompts': ({ query }) => { const { revision, offset } = PromptsQuery.parse(query); return promptsView(runtime, revision, offset) },

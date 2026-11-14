@@ -279,6 +279,7 @@ API 保存具有面板的权限。与通过主会话工具进行的保存不同�
 | `GET prompts`、`PUT prompts`，带 `{"config", "baseRevision"}` | 读取提示词配置：`current`（含 `revision` 和 `config`）、`defaults`、`sections`（团队段落，按会话读取顺序）、`skillName`（团队技能名称的模式）、`builtin`（团队技能不能使用的名称）和 `skillPrefix`（会话加载技能名称时使用的前缀）。或保存它：新的 `revision` |
 | `POST tickets/<id>/retry`、`POST tickets/<id>/stop` | 重试或停止工单，与面板操作相同 |
 | `POST admin/reset`，带 `{"confirm": "RESET"}` | 破坏性重置：先备份 `stateDir` 再清空（见 009 §9.2）；请求体必须显式带确认词 |
+| `POST admin/backup`，带 `{"target": "<绝对路径>.sqlite"}` | 日常备份：在运行中的数据库上执行 `VACUUM INTO`，把一致性快照写入目标文件；返回 `{ "snapshot": … }` |
 
 健康条目按职责分组：
 
@@ -335,6 +336,19 @@ curl -s -X POST -H 'x-orchestrator-request: 1' -H 'content-type: application/jso
 - **消息工单**：在已配置的飞书群里 @ 机器人（发件人需在允许名单上）。在一个轮询间隔内，概览应显示一个工单；智能体会确认请求，在自己的会话与目录中工作，并在原话题中交付。
 - **项目任务**：按向导建一个项目（Git 凭据 → 仓库 → Excel 任务清单 → 执行与调度），把清单里一行 `status` 置为 `todo`。到下一个轮询点，项目详情的队列应出现该任务；智能体领取执行后，清单中的状态会被回写为完成或失败（回写保留原文件的 BOM 与换行风格）。
 
+## 日常备份
+
+`scripts/dsh-superagent.mjs backup` 备份状态目录，供升级前快照与例行备份使用：
+
+```sh
+scripts/dsh-superagent.mjs backup [--profile NAME] [--url URL] [--state-dir DIR] [--keep N]
+```
+
+- **服务运行中**（管理 API 可达）：对 SQLite 执行 `VACUUM INTO`，把一致性快照写入 `~/dsh-superagent-backup/snapshot-<时间戳>.sqlite`。快照是单个 `.sqlite` 文件（WAL 已合并），可在任意 SQLite 工具中直接打开校验。注意：快照只含数据库；`secrets/`（凭据材料）不在其中，泄露风险与主密钥共存，请按站点安全策略另行保护整个 `stateDir`。
+- **服务停止**：冷复制整个状态目录到 `~/dsh-superagent-backup/cold-<时间戳>/`（含 `secrets/`、`repos/` 与工作副本）。状态目录从 profile patch 自动检测，或用 `--state-dir` 显式给出；目录仍被活实例持锁时拒绝备份。
+- **保留窗口**：`--keep N`（默认 14）保留备份根下最近 N 份备份目录，更旧的自动删除；`--keep 0` 表示不清理。
+- **恢复**：停止服务后，把快照文件放回 `<stateDir>/orchestrator.sqlite`（删除旁边的 `-wal`/`-shm`），或把冷备份目录内容逐字复制回 `stateDir`。被较新 schema 打开过的数据库无法被旧版本打开，恢复必须使用升级前所做的备份。
+
 ## 卸载与清理
 
 `scripts/dsh-superagent.mjs clean` 从 DSH 配置文件移除插件并删除其全部状态与工件，先备份后删除：
@@ -354,7 +368,7 @@ scripts/dsh-superagent.mjs clean --yes [--profile NAME] [--dsh-home DIR] [--stat
 ## 升级
 
 1. 等到没有执行器正处在回合中间。
-2. 备份 `<stateDir>/orchestrator.sqlite`。
+2. 备份 `<stateDir>/orchestrator.sqlite`（服务运行中可用 `scripts/dsh-superagent.mjs backup`，见「日常备份」）。
 3. 运行 `git pull && pnpm install && pnpm build`。
 4. 运行 `scripts/dsh-superagent.mjs restart` 并检查其状态。
 

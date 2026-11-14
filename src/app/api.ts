@@ -102,6 +102,7 @@ export interface Api {
   'POST policy-sync/:id': { response: { policy: unknown } }
   'POST setup/check': { response: { restarting: true } }
   'POST admin/reset': { body: { confirm: 'RESET' }; response: ResetReport }
+  'POST admin/backup': { body: { target: string }; response: { snapshot: string } }
   'GET models': { response: ModelCatalog }
   'GET prompts': { query?: { revision?: number; offset?: number }; response: PromptsView }
   'PUT prompts': { body: { config: PromptConfig; baseRevision: number }; response: { revision: number; context_delivery: Delivery } }
