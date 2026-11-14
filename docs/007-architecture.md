@@ -462,7 +462,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 | 测试 | 覆盖内容 |
 | --- | --- |
-| `tests/core-engine.spec.ts` | 内存仓库上的领域规则：接收、评估、扇出、恢复与停止、被中断的派工、暂停、策略变更、报告与结果、关联、回复、失败的投递和被忽略的问题 |
+| `tests/engine-eval.spec.ts`、`tests/engine-reports.spec.ts`、`tests/engine-reviews.spec.ts`、`tests/engine-reads.spec.ts`、`tests/fixtures/engine.ts` | 内存仓库上的领域规则（共享引擎夹具）：接收与评估、订阅扇出与跟进、恢复停止与交回、报告与结果、按主题复核的读取判定 |
 | `tests/stage.spec.ts` | 逐行覆盖工单阶段 |
 | `tests/policy.spec.ts` | 来源范围、准入层、准入表、授权重新校验、策略版本、设置迁移和评估结果 |
 | `tests/registry.spec.ts` | `SourceRegistry`：记录、校验、策略部分、渠道和线程上下文 |
