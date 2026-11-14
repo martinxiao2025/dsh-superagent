@@ -34,6 +34,11 @@
 
 - 工单分发脚本对 `git-credential` 不再走「唯一来源」兜底：凭据材料只对已登记的工单/工作副本目录（或显式指定来源的准备命令）发放；未登记目录里的 git 拿不到任何凭据，即使只配置了一个来源。`gh`/`glab`/`lark-cli` 保留唯一来源兜底（主会话合法使用）。
 
+### 测试拆分与集成用例（2026-11-14）
+
+- **runtime.spec 拆分**（011 §9.2 第 9 项收尾）：1639 行巨石按主题拆为 `runtime-tickets` / `runtime-sources` / `runtime-sessions` / `runtime-infra` 四个 spec + `fixtures/runtime-host.ts` 共享夹具（活引用 getter 工厂）；83 例逐字保留，零行为变化。
+- **调度器与真实引擎集成用例**（`scheduler-runtime.spec.ts`）：内存任务来源驱动 + 真实 Runtime/Store/Effects，覆盖轮询入队 → 建单 → worker 首条消息 → 报告完成 → 队列结算与驱动回写、失败退避产生新工单、停用项目保留排队项。`TaskSourceRegistry` 新增 `register` 支持测试注入驱动。
+
 ### 单元测试 Windows 兼容与简化（2026-11-13）
 
 - 修复 `deployment.spec.ts` / `environment.spec.ts` 在 Windows 上因符号链接权限失败的用例：普通符号链接
