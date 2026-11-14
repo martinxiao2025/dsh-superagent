@@ -1,7 +1,7 @@
 /** Web 面板与宿主路由之间的纯类型管理 API 契约；面板导入它时不会打包宿主代码。 */
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { PromptConfig, Prompts } from './prompts.ts'
-import type { HealthView, PromptsView, StateView, TicketPageView } from './http.ts'
+import type { HealthView, PromptsView, StateView, TicketPageView } from './http/routes.ts'
 import type { HistoryView } from './settings-history.ts'
 import type { OverviewView } from './views/overview.ts'
 import type { ProjectTasksView } from './views/projects.ts'

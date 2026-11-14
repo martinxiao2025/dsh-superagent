@@ -1,6 +1,7 @@
 /** 管理 API 的挂载点：在运行时创建之前就挂上 `/orchestrator/api`，初始化失败时不再退化成空体 404。 */
 import type { Context } from '@deepseek-ai/cordis'
-import { registerHttp, type HttpHost } from './http.ts'
+import { registerHttp } from './http/server.ts'
+import type { HttpHost } from './http/routes.ts'
 import type { StartupPhase, StartupStatus } from './startup.ts'
 
 /**

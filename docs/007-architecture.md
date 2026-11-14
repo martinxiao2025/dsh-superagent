@@ -385,7 +385,10 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/tools/tool.ts` | `Tool` 类型、`readTool`、两个角色的 `orchestrator_read` 以及 `AcknowledgementSchema` |
 | `src/app/tools/main.ts` | 主会话的工具 |
 | `src/app/tools/executor.ts` | 执行器会话的工具 |
-| `src/app/http.ts` | `/orchestrator/api` 路由：同源检查、请求限制，以及每种失败类型对应一个状态码 |
+| `src/app/http/routes.ts` | `/orchestrator/api` 路由表与视图组装：`HttpHost`（HTTP 层唯一能力面）、`stateView` 等面板视图的类型出口 |
+| `src/app/http/schemas.ts` | 每条路由的 zod 请求校验 schema，与 `Api` 类型契约一一对应 |
+| `src/app/http/server.ts` | 传输层：同源校验、请求体读取、路由匹配、错误到状态码的映射，以及 `registerHttp` 挂载（初始化失败时以启动阶段回答 503） |
+| `src/app/http/error.ts` | `RouteError`：面向客户端的 400/404，独立叶子模块避免 routes ↔ server 模块环 |
 | `src/app/api.ts` | `Api`，每个路由及其参数、查询、请求体和响应，以及列表过滤条件；它只导入类型，因此面板可以打包它 |
 | `src/app/views/text.ts` | 视图文本的两种形式：`preview`（单行纯文本）和 `markdown`（不含 HTML）；`plain` 和 `readable` |
 | `src/app/views/records.ts` | 视图共享的行：触发器、工单、线程、决定和渠道链接，以及 `ownersOf`（跟进的所有者，按一次请求读取时的形式） |

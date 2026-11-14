@@ -110,7 +110,7 @@
 ### P1-4 停用与删除没有闭环，错误与下一次轮询不可见
 
 - **问题**：`poll`/`dispatch` 会因 `enabled` 拒绝，但停用后排队条目永久停留且无任何操作入口；`DELETE projects/:id` 不停止运行中的工单，也不清理队列条目，删除后条目变成没有归属的孤儿（`dispatch` 永远返回 false）。`scheduler.errors` 与 `nextPollAt` 不进入任何接口。
-- **证据**：[scheduler.ts:83](../src/app/scheduler.ts#L83)、[scheduler.ts:250](../src/app/scheduler.ts#L250)；[settings.ts](../src/app/settings.ts) `removeProject`；[http.ts:253](../src/app/http.ts#L253)、[http.ts:263](../src/app/http.ts#L263) 仅有查询与删除项目；[scheduler.ts:42](../src/app/scheduler.ts#L42) 错误只在内存。
+- **证据**：[scheduler.ts:83](../src/app/scheduler.ts#L83)、[scheduler.ts:250](../src/app/scheduler.ts#L250)；[settings.ts](../src/app/settings.ts) `removeProject`；[http.ts:253](../src/app/http/server.ts#L253)、[http.ts:263](../src/app/http/server.ts#L263) 仅有查询与删除项目；[scheduler.ts:42](../src/app/scheduler.ts#L42) 错误只在内存。
 - **影响**：用户以为「停用=暂停」，实际队列越积越多且无法清空；删项目后残留条目可能让后续排查完全失去线索；「为什么没跑」只能翻日志。
 - **建议**：按 009 §4.3 定案落地：停用保留 `queued` + 详情页显示「排队 N / 运行 M」+ 独立动作「停止当前任务」「清空排队」；删除项目流程改为「停止运行工单 → 取消/归档队列条目 → 删除记录」同一事务；`GET queue` 与 `GET projects/:id/tasks` 增加 `lastError/nextPollAt/lastWriteback`；补 `POST queue/:id/retry|cancel`。
 - **工作量**：2–3 人日。

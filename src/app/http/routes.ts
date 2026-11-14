@@ -1,43 +1,41 @@
-/** 仅限回环地址的管理 HTTP 路由，对 Web 面板强制同源校验。 */
-import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { IncomingMessage, ServerResponse } from 'node:http'
-import { z } from 'zod'
-import { THREAD_FILTERS, TICKET_FILTERS, type Api, type ApiResponse, type RouteParams } from './api.ts'
-import { sourceSkills } from './context.ts'
+/** 管理 API 的路由表：每条路由把 HTTP 请求翻译成对 `HttpHost` 的调用，并把结果组装成面板视图。 */
+import { type Api, type ApiResponse, type RouteParams } from '../api.ts'
+import { sourceSkills } from '../context.ts'
 import type { ModelCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
-import { PromptConflict, SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts }
-  from './prompts.ts'
-import { policyVersion } from '../policy.ts'
-import { LIMITS } from '../limits.ts'
-import { SettingsConflict, type Settings } from './settings.ts'
-import { SetupError, type SetupProblem, type SourceCheck } from '../setup.ts'
-import { UserError, type EngineForPeople, type Ticket } from '../core/index.ts'
-import { firstSource, type Deployment, type Machine } from '../deployment.ts'
-import type { DshExecutor } from '../executor/dsh.ts'
-import type { Health } from '../infra/health.ts'
-import type { SourceRegistry } from '../sources/registry.ts'
-import type { Sessions } from './sessions.ts'
-import type { Store } from './store.ts'
-import type { TextCache } from './cache.ts'
-import type { LinkTarget, ViewHost } from './views/records.ts'
-import type { Variable } from './execution-environment.ts'
-import { policyHistory } from './settings-history.ts'
-import { overview } from './views/overview.ts'
-import { projectTasksView } from './views/projects.ts'
-import { settingsView } from './views/settings.ts'
-import { sourceHealth, sourceState, sourcesStatus, type SetupState } from './views/sources.ts'
-import { decisionList, search, threadDetail, threadList } from './views/threads.ts'
-import { executorLoad, ticketDetail, ticketList } from './views/tickets.ts'
-import type { StartupStatus } from './startup.ts'
-import type { QueuePage } from './scheduler.ts'
-import type { QueueSnapshot } from '../queue/model.ts'
-import type { ResetReport } from './reset.ts'
-import type { GitCredentials } from '../git-credentials/service.ts'
-import type { FeishuCredentials } from '../feishu-credentials/service.ts'
-import { GitCredentialInputSchema } from '../git-credentials/kind.ts'
-import { FeishuCredentialInputSchema } from '../feishu-credentials/kind.ts'
-import { TASK_TEMPLATE_FILENAME, taskTemplate } from '../task-sources/excel-template.ts'
+import { SKILL_NAME, SKILL_PREFIX, TEAM_SECTIONS, builtInBase, builtInParts, defaultPrompts, savePrompts, type Prompts } from '../prompts.ts'
+import { policyVersion } from '../../policy.ts'
+import { type Settings } from '../settings.ts'
+import { type SetupProblem, type SourceCheck } from '../../setup.ts'
+import { type EngineForPeople, type Ticket } from '../../core/index.ts'
+import { firstSource, type Deployment, type Machine } from '../../deployment.ts'
+import type { DshExecutor } from '../../executor/dsh.ts'
+import type { Health } from '../../infra/health.ts'
+import type { SourceRegistry } from '../../sources/registry.ts'
+import type { Sessions } from '../sessions.ts'
+import type { Store } from '../store.ts'
+import type { TextCache } from '../cache.ts'
+import type { LinkTarget, ViewHost } from '../views/records.ts'
+import type { Variable } from '../execution-environment.ts'
+import { policyHistory } from '../settings-history.ts'
+import { overview } from '../views/overview.ts'
+import { projectTasksView } from '../views/projects.ts'
+import { settingsView } from '../views/settings.ts'
+import { sourceHealth, sourceState, sourcesStatus, type SetupState } from '../views/sources.ts'
+import { decisionList, search, threadDetail, threadList } from '../views/threads.ts'
+import { executorLoad, ticketDetail, ticketList } from '../views/tickets.ts'
+import type { StartupStatus } from '../startup.ts'
+import type { QueuePage } from '../scheduler.ts'
+import type { QueueSnapshot } from '../../queue/model.ts'
+import type { ResetReport } from '../reset.ts'
+import type { GitCredentials } from '../../git-credentials/service.ts'
+import type { FeishuCredentials } from '../../feishu-credentials/service.ts'
+import { TASK_TEMPLATE_FILENAME, taskTemplate } from '../../task-sources/excel-template.ts'
+import { ProjectTasksQuery, PromptsQuery, QueueQuery, TicketsQuery, ThreadsQuery, ThreadQuery, DecisionsQuery,
+  SettingsBlockSchema, SaveRequest, CreateProjectRequest, CreateSourceRequest, VerifySourceRequest, VerifyCodeRepoRequest,
+  VerifyTaskSourceRequest, CreateGitCredentialRequest, UpdateGitCredentialRequest, RotateGitCredentialRequest,
+  VerifyGitCredentialRequest, CreateFeishuCredentialRequest, UpdateFeishuCredentialRequest, RotateFeishuCredentialRequest,
+  VerifyFeishuCredentialRequest, FeishuImChatsRequest, PauseRequest, SavePromptsRequest, ResetRequest } from './schemas.ts'
+import { RouteError } from './error.ts'
 
 export interface HttpHost {
   readonly store: Store
@@ -104,45 +102,8 @@ export interface HttpHost {
   /** 备份并清空状态目录后重启；仅由要求显式确认的管理入口调用。 */
   reset(): Promise<ResetReport>
 }
-/**
- * 表示管理路由解析或查找期间抛出的面向客户端的 400 或 404 错误。
- * 当请求体格式错误或目标记录缺失时，路由处理器会抛出它，registerHttp 会在 HTTP 响应中序列化其状态码和消息。
- */
-class RouteError extends Error { constructor(readonly status: 400 | 404, message: string) { super(message) } }
-async function readBody(req: IncomingMessage, maxBytes = 128 * 1024): Promise<unknown> {
-  let size = 0; const chunks: Buffer[] = []
-  for await (const chunk of req) {
-    const bytes = Buffer.from(chunk); size += bytes.length
-    if (size > maxBytes) throw new RouteError(400, `Request exceeds ${maxBytes} bytes`)
-    chunks.push(bytes)
-  }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown }
-  catch { throw new RouteError(400, 'The request body is not JSON') }
-}
-function json(res: ServerResponse, status: number, value: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(JSON.stringify(value))
-}
-export function sameOrigin(req: Pick<IncomingMessage, 'headers'>, port: number): boolean {
-  const host = req.headers.host
-  // 回环地址包含 IPv4、localhost 与 IPv6 回环；端口必须是管理接口实际监听的端口。
-  if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}` && host !== `[::1]:${port}`) return false
-  return req.headers['x-orchestrator-request'] === '1' && (req.headers.origin === undefined || req.headers.origin === `http://${host}`)
-}
-/** 将错误映射为 HTTP 状态码和结构化载荷，面板会按界面语言对其进行本地化。 */
-function failure(error: unknown): [number, Record<string, unknown>] {
-  if (error instanceof z.ZodError) {
-    const issues = error.issues.map(issue => ({ path: issue.path.join('.'), message: issue.message }))
-    return [400, { error: `Invalid settings: ${issues.map(issue => issue.path).join(', ')}`, issues }]
-  }
-  if (error instanceof SetupError) return [400, { error: error.message, setup: error.problem }]
-  if (error instanceof RouteError) return [error.status, { error: error.message }]
-  if (error instanceof UserError) return [/InUse$/.test(error.code) ? 409 : error.missing ? 404 : 400,
-    { error: error.message, code: error.code, values: error.values }]
-  if (error instanceof SettingsConflict || error instanceof PromptConflict) return [409, { error: error.message }]
-  return [500, { error: error instanceof Error ? error.message : String(error) }]
-}
 
-function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }: Machine) {
+export function machineView({ stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs }: Machine) {
   return { stateDir, promptMaxChars: promptMaxChars.get(), admissionContextMaxPages: admissionContextMaxPages.get(),
     admissionContextTimeoutMs: admissionContextTimeoutMs.get() }
 }
@@ -169,27 +130,6 @@ const views = (runtime: HttpHost): ViewHost => ({ store: runtime.store, sources:
 const setupState = (runtime: HttpHost): SetupState => ({ deployment: runtime.configured() ? runtime.deployment : undefined,
   problem: runtime.setupProblem, sourceProblems: runtime.sourceProblems })
 export type StateView = ReturnType<typeof stateView>
-/** 管理接口的实际监听地址；健康探针据此报告入口。 */
-export interface Listen { host: string; port: number }
-/** 构建 `/orchestrator/api/health` 探针视图：就绪阶段、监听地址与每条来源记录的状态摘要。 */
-export function healthView(runtime: HttpHost, listen: Listen, startup?: () => StartupStatus) {
-  const setup = setupState(runtime)
-  const ok = runtime.configured() && !runtime.setupProblem
-  return {
-    ok, stage: ok ? 'ready' as const : 'setup' as const, configured: runtime.configured(),
-    paused: runtime.store.settings().paused, problem: runtime.setupProblem ?? null, listen,
-    // 启动阶段只在插件入口挂载管理路由时提供；独立运行时（测试）省略这两个字段。
-    ...startup === undefined ? {} : { phase: startup().phase, detail: startup().detail },
-    machine: { stateDir: runtime.machine.stateDir },
-    // 逐记录给出健康摘要；未安装类型按 `missing`，禁用记录按 `off`。
-    sources: runtime.sources.instances().map(instance => {
-      const { health, id } = sourceHealth(runtime.sources, instance, runtime.health)
-      return { id, kind: instance.kind, enabled: instance.enabled, installed: instance.installed,
-        state: sourceState(instance, health, setup), health }
-    }),
-  }
-}
-export type HealthView = ReturnType<typeof healthView>
 /** 构建工单详情视图；在等待初始化期间 `environment` 为空，因为它需要已解析的部署。 */
 function ticketPage(runtime: HttpHost, id: string) {
   const detail = ticketDetail(views(runtime), id), ticket = runtime.store.tickets.get(id)
@@ -209,48 +149,12 @@ function promptsView(runtime: HttpHost, revision: number | undefined, offset: nu
 }
 export type PromptsView = ReturnType<typeof promptsView>
 
-interface Input<K extends keyof Api> {
+export interface Input<K extends keyof Api> {
   params: RouteParams<K>; query: Record<string, string>; body: (maxBytes?: number) => Promise<unknown>
 }
-type Routes = { [K in keyof Api]: (input: Input<K>) => ApiResponse<K> | Promise<ApiResponse<K>> }
-const offset = z.coerce.number().int().nonnegative().catch(0)
-const limit = (fallback: number, max: number) => z.coerce.number().int().positive().catch(fallback).transform(value => Math.min(max, value))
-const TicketsQuery = z.object({ state: z.enum(TICKET_FILTERS).catch('open'), offset, limit: limit(20, 1000) })
-const ThreadsQuery = z.object({ filter: z.enum(THREAD_FILTERS).catch('subscribed'), offset, limit: limit(20, 1000) })
-const QueueQuery = z.object({ offset, limit: limit(200, 1000) })
-const ProjectTasksQuery = z.object({ offset, limit: limit(50, 1000) })
-const ThreadQuery = z.object({ limit: limit(50, 100), before: z.string().optional(), around: z.string().optional() })
-const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.literal('24h').optional().catch(undefined), offset,
-  limit: limit(30, 200) })
-const count = z.coerce.number().int().nonnegative()
-const PromptsQuery = z.object({ revision: count.optional(), offset: count.default(0) })
-const RecordBlock = z.templateLiteral([z.enum(['source', 'project']), ':', z.string().regex(/^[a-z][a-z0-9-]*$/)])
-const SettingsBlockSchema = z.union([z.enum(['policy', 'eval', 'executor']), RecordBlock])
-const SaveRequest = z.object({ value: z.unknown(), revision: z.number().int().nonnegative() })
-const ResourceId = z.string().regex(/^[a-z][a-z0-9-]*$/)
-const CreateProjectRequest = z.object({ id: ResourceId.optional() }).passthrough()
-const CreateSourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
-  name: z.string().trim().min(1).max(LIMITS.sourceName), config: z.unknown().optional() })
-const VerifySourceRequest = z.object({ kind: ResourceId, id: ResourceId.optional(),
-  name: z.string().trim().max(LIMITS.sourceName).optional(), config: z.unknown().optional(), field: z.string().max(40).optional() })
-const ProjectRepoSchema = z.object({ kind: z.enum(['github', 'gitlab']), config: z.record(z.string(), z.unknown()).default({}) })
-const VerifyCodeRepoRequest = z.object({ kind: z.enum(['github', 'gitlab']), config: z.unknown().optional(),
-  field: z.string().max(40).optional(), gitCredential: z.string().trim().max(60).optional() })
-const VerifyTaskSourceRequest = z.object({ kind: z.string().regex(/^[a-z][a-z0-9-]*$/), config: z.unknown().optional(),
-  field: z.string().max(40).optional(), projectId: ResourceId.optional(), repo: ProjectRepoSchema.optional(),
-  gitCredential: z.string().trim().max(60).optional(), feishuCredential: z.string().trim().max(60).optional() })
-const CreateGitCredentialRequest = z.object({ id: ResourceId.optional(), value: GitCredentialInputSchema })
-const UpdateGitCredentialRequest = z.object({ value: GitCredentialInputSchema, revision: z.number().int().nonnegative() })
-const RotateGitCredentialRequest = GitCredentialInputSchema.partial()
-const VerifyGitCredentialRequest = z.object({ id: ResourceId.optional(), value: GitCredentialInputSchema.partial().optional(),
-  repository: z.string().trim().max(2000).optional() })
-const CreateFeishuCredentialRequest = z.object({ id: ResourceId.optional(), value: FeishuCredentialInputSchema })
-const UpdateFeishuCredentialRequest = z.object({ value: FeishuCredentialInputSchema, revision: z.number().int().nonnegative() })
-const RotateFeishuCredentialRequest = FeishuCredentialInputSchema.partial()
-const VerifyFeishuCredentialRequest = z.object({ id: ResourceId.optional(), value: FeishuCredentialInputSchema.partial().optional(),
-  spaceId: z.string().trim().max(80).optional() })
+export type Routes = { [K in keyof Api]: (input: Input<K>) => ApiResponse<K> | Promise<ApiResponse<K>> }
 
-function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupStatus): Routes {
+export function routes(runtime: HttpHost, listen: () => { host: string; port: number }, startup: () => StartupStatus): Routes {
   const { store } = runtime
   const ticket = (id: string) => { if (!store.tickets.get(id)) throw new RouteError(404, 'Ticket not found'); return id }
   const promptBody = (input: { body: (maxBytes?: number) => Promise<unknown> }) => input.body(4 * runtime.machine.promptMaxChars.get() + 4096)
@@ -345,7 +249,7 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     },
     // 飞书群消息任务来源的群 ID 选择：按凭据真实列出机器人已加入的群。
     'POST feishu-im/chats': async ({ body }) => {
-      const request = z.object({ credential: z.string().trim().max(60) }).parse(await body())
+      const request = FeishuImChatsRequest.parse(await body())
       return { chats: await runtime.feishuImChats(request.credential) }
     },
     'DELETE feishu-credentials/:id': ({ params }) => runtime.feishuCredentials.remove(params.id),
@@ -390,7 +294,7 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'GET tickets/:id': ({ params }) => ticketPage(runtime, params.id),
     'POST tickets/:id/retry': ({ params }) => { const id = ticket(params.id); runtime.engine.retryTicket(id); return { retried: true } },
     'POST tickets/:id/stop': ({ params }) => { const id = ticket(params.id); runtime.engine.stopTicket(id); return { stopped: true } },
-    'POST executor/pause': async ({ body }) => runtime.settings.pause(z.object({ paused: z.boolean() }).parse(await body()).paused, 'panel'),
+    'POST executor/pause': async ({ body }) => runtime.settings.pause(PauseRequest.parse(await body()).paused, 'panel'),
     'PUT settings/:block': async ({ params, body }) => {
       const block = SettingsBlockSchema.parse(params.block)
       const [family, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, '']
@@ -405,75 +309,35 @@ function routes(runtime: HttpHost, listen: () => Listen, startup: () => StartupS
     'POST setup/check': () => { runtime.checkSetup(); return { restarting: true } },
     // 重置是破坏性操作：请求体必须显式包含确认词，且在停止运行时之后才删除状态目录。
     'POST admin/reset': async ({ body }) => {
-      z.object({ confirm: z.literal('RESET') }).parse(await body())
+      ResetRequest.parse(await body())
       return runtime.reset()
     },
     'GET models': () => runtime.models(),
     'GET prompts': ({ query }) => { const { revision, offset } = PromptsQuery.parse(query); return promptsView(runtime, revision, offset) },
     'PUT prompts': async input => {
-      const request = z.object({ config: z.unknown(), baseRevision: z.number().int().nonnegative() }).parse(await promptBody(input))
+      const request = SavePromptsRequest.parse(await promptBody(input))
       return savePrompts(runtime, request.config, request.baseRevision, 'panel')
     },
     'POST prompts/preview': async input => runtime.prompts.preview(await promptBody(input)),
   }
 }
-function decoded(segment: string): string {
-  try { return decodeURIComponent(segment) } catch { throw new RouteError(400, 'A path segment has a malformed escape') }
-}
-function match(table: Routes, method: string, segments: string[]) {
-  for (const [route, run] of Object.entries(table)) {
-    const [verb, path] = route.split(' ') as [string, string]
-    const pattern = path.split('/')
-    const fits = pattern.length === segments.length && pattern.every((part, index) => part.startsWith(':') || part === segments[index])
-    if (verb !== method || !fits) continue
-    const params: Record<string, string> = {}
-    pattern.forEach((part, index) => { if (part.startsWith(':')) params[part.slice(1)] = decoded(segments[index]!) })
-    return { run: run as (input: Input<keyof Api>) => unknown, params }
+
+/** 构建管理面板健康探针视图：就绪阶段、监听地址与每条来源记录的状态摘要。 */
+export function healthView(runtime: HttpHost, listen: { host: string; port: number }, startup?: () => StartupStatus) {
+  const setup = setupState(runtime)
+  const ok = runtime.configured() && !runtime.setupProblem
+  return {
+    ok, stage: ok ? 'ready' as const : 'setup' as const, configured: runtime.configured(),
+    paused: runtime.store.settings().paused, problem: runtime.setupProblem ?? null, listen,
+    // 启动阶段只在插件入口挂载管理路由时提供；独立运行时（测试）省略这两个字段。
+    ...startup === undefined ? {} : { phase: startup().phase, detail: startup().detail },
+    machine: { stateDir: runtime.machine.stateDir },
+    // 逐记录给出健康摘要；未安装类型按 `missing`，禁用记录按 `off`。
+    sources: runtime.sources.instances().map(instance => {
+      const { health, id } = sourceHealth(runtime.sources, instance, runtime.health)
+      return { id, kind: instance.kind, enabled: instance.enabled, installed: instance.installed,
+        state: sourceState(instance, health, setup), health }
+    }),
   }
-  return undefined
 }
-/**
- * 挂载管理 API。第一种形式供 `Runtime` 自挂载（测试与独立运行时）；第二种形式供插件入口
- * 在运行时创建之前先挂载，并在初始化失败时用启动状态回答健康探针与 503 诊断。
- */
-export function registerHttp(ctx: Context, runtime: HttpHost): () => void
-export function registerHttp(ctx: Context, resolve: () => HttpHost | undefined, status: () => StartupStatus): () => void
-export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | undefined), status?: () => StartupStatus): () => void {
-  const resolve = typeof source === 'function' ? source : () => source
-  const state = status ?? ((): StartupStatus => ({ phase: 'ready', detail: '', stateDir: resolve()?.machine.stateDir ?? '' }))
-  // 端口在请求时读取：插件初始化阶段 Web 服务器可能尚未监听。
-  const listen = (): Listen => ({ host: ctx.webServer.host, port: ctx.webServer.port })
-  // 运行时只创建一次；缓存它的路由表，避免每个请求重建。
-  let cached: { runtime: HttpHost; table: Routes } | undefined
-  const tableFor = (runtime: HttpHost): Routes => {
-    if (cached?.runtime !== runtime) cached = { runtime, table: routes(runtime, listen, state) }
-    return cached.table
-  }
-  const dispose = ctx.webServer.register({ kind: 'prefix', path: '/orchestrator/api', handler: async (req, res) => {
-    const url = new URL(req.url ?? '/', 'http://localhost')
-    if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
-    const method = req.method ?? 'GET'
-    // 前缀按路径边界匹配 `/orchestrator/api`，其余 `/orchestrator/*` 交给宿主的页面路由。
-    const path = url.pathname.slice('/orchestrator/api'.length).replace(/^\//, '')
-    const runtime = resolve()
-    if (!runtime) {
-      const { phase, detail, error, stateDir } = state()
-      // 运行时尚未创建或初始化失败：健康探针返回 200，其余接口以 503 说明阶段，而不是空体 404。
-      if (method === 'GET' && path === 'health') {
-        json(res, 200, { ok: false, stage: phase, phase, detail, error: error ?? null, configured: false, paused: false,
-          problem: null, listen: listen(), machine: { stateDir }, sources: [] })
-        return
-      }
-      json(res, 503, { error: detail || 'dsh-superagent is not ready', code: 'startupPending', phase, detail, stateDir })
-      return
-    }
-    try {
-      await runtime.ready
-      const route = match(tableFor(runtime), method, path.split('/'))
-      if (!route) throw new RouteError(404, 'Unknown operation')
-      const query = Object.fromEntries(url.searchParams)
-      json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
-    } catch (error) { json(res, ...failure(error)) }
-  } })
-  return () => { dispose() }
-}
+export type HealthView = ReturnType<typeof healthView>
