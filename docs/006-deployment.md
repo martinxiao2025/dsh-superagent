@@ -148,7 +148,7 @@ dsh plugin --profile superagent add /path/to/dsh-superagent-0.2.0.tgz
 
 ## 开发与调试
 
-官方文档（[第一个插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)、[打包与安装](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)、Cordis 教程[组合与热重载](https://deepseek-harness.github.io/deepseek-harness/develop/cordis-tutorial/06-composition-and-hmr)）没有内置「调试模式」开关；官方调试面是 **Web UI + `--patch` 开发覆盖层**。**开发迭代一律优先用推荐回路**；备选方法只在推荐回路不适用的特定场景使用。
+官方文档（[第一个插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)、[打包与安装](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）没有内置「调试模式」开关；官方调试面是 **Web UI + `--patch` 开发覆盖层**。回路只有两条：单测（`pnpm check`）与实机（下文推荐回路），开发迭代一律先单测后实机；备选方法只在推荐回路覆盖不了的场景使用。
 
 ### 推荐回路：Web UI 可视化调试（默认选择）
 
@@ -158,37 +158,31 @@ dsh plugin --profile superagent add /path/to/dsh-superagent-0.2.0.tgz
 pnpm dev
 ```
 
-[scripts/dev-web.mjs](../scripts/dev-web.mjs) 会构建、从包层 `cordis.patch.yml` 生成自包含覆盖层（`.artifacts/dev.cordis.patch.yml`——预设逐字复制，升级包层后无需手工同步）、启动 `dsh web` 并等插件就绪后打印面板 URL。dsh CLI 的解析顺序是 `--dsh` 参数 > `DSH_CLI` 环境变量 > PATH（桌面版自带 CLI 位于 `<安装目录>\resources\runtime\cli\bin\dsh.cmd`）；`--no-build` 跳过构建，`--port` 换端口，Ctrl+C 结束实例。
-
-脚本启动的 `dsh web` 使用脚本生成的覆盖层 `.artifacts/dev.cordis.patch.yml`：
-
-```sh
-dsh web --patch .artifacts/dev.cordis.patch.yml --no-open
-```
+[scripts/dev-web.mjs](../scripts/dev-web.mjs) 会构建、从包层 `cordis.patch.yml` 生成自包含覆盖层（`.artifacts/dev.cordis.patch.yml`——主插件按检出绝对路径加载，worker/router 预设逐字复制，升级包层后无需手工同步）、启动 `dsh web` 并等插件就绪后打印面板 URL。dsh CLI 的解析顺序是 `--dsh` 参数 > `DSH_CLI` 环境变量 > PATH（桌面版自带 CLI 位于 `<安装目录>\resources\runtime\cli\bin\dsh.cmd`）；`--no-build` 跳过构建，`--port` 换端口，Ctrl+C 结束实例。
 
 - 面板（概览/项目/触发/评估/执行/设置）就是可视化调试面；改完代码 `pnpm build` 后重启即可生效。
 - 开发实例的 `stateDir` 隔离在检出内的 `.dsh-dev-state`，不与桌面版实例争生产状态目录的锁，可长期与生产并行。
-- 覆盖层由脚本从包层 `cordis.patch.yml` 动态生成（主插件按检出绝对路径加载 + worker/router 预设复制），升级预设后无需手工同步。
 - 排查插件为什么没加载/没生效：`dsh --profile web --dump-config --patch .artifacts/dev.cordis.patch.yml` 看合成后的层。
 - 实测陷阱（覆盖层设计已避开）：把插件以 `link:` 装进 web profile 会让运行时的需求校验崩溃（`undefined.startsWith`，peer 不随 link 解析）；tgz 安装在 Windows 上因跨盘符号链接权限失败（EPERM）；覆盖层只写主插件不写预设会在主会话组合时报 `Unknown agent preset`。
 
 ### 备选：桌面版重挂载回路
 
-需要在**真实 profile**（真实凭据、真实仓库）上验证时使用：`pnpm build` 后重新执行安装命令，插件管理器会重挂载新产物（实测）：
+需要在**真实 profile**（真实凭据、真实仓库）上验证时使用：`pnpm build` 后重新执行安装命令，插件管理器会重挂载新产物：
 
 ```sh
 dsh plugin --profile <名称> add link:<本检出的绝对路径>
 ```
 
-也可用应用的插件管理器界面重载。注意宿主对 patch 文件的变更有约 30–90 秒延迟（0.2.2-rc.1 实测），且**条目消失会被插件管理器正式化为卸载**（自动改写 profile 的 `package.json`，见「卸载与清理」）——不要用删条目来试探重载。
+也可用应用的插件管理器界面（**Plugins** > **Add plugin**）装载本地目录。注意宿主对 patch 文件的变更有约 30–90 秒延迟，且**条目消失会被插件管理器正式化为卸载**（自动改写 profile 的 `package.json`，见「卸载与清理」）——不要用删条目来试探重载。
 
-### 备选：HMR 热重载插件（版本线匹配时）
+### 直连实测（管理 API）
 
-官方 `@deepseek-ai/dsh-hmr` 监视 `root` 目录，插件文件变化即卸载旧实例（effect 回卷）并加载新版本；源码级热重载要求 tsx 运行时。**版本线必须与运行时匹配**：dsh-hmr 0.1.6-alpha.2 要求 0.1.6-alpha 线的 `dsh-app-boot`/`dsh-cmdline`，在 dsh 0.2.2-rc.1 上启动被拒绝，除非 `dsh plugin allow-version` 显式豁免（官方警告可能导致崩溃或数据丢失，日常使用的 profile 不建议豁免）。
+针对运行中的实例做只读检查时直连管理 API：端口读状态目录 `startup.json` 的 `listen.port`（插件重挂载会换端口，每次请求前重读），接口只监听回环地址且要求 `x-orchestrator-request: 1` 请求头。[tests/fixtures/direct-connect.ts](../tests/fixtures/direct-connect.ts) 的 `DirectConnect` 客户端封装了端口发现、请求头、等待就绪与证据落盘，临时实测脚本直接复用它（Node 用 `--experimental-transform-types` 运行 .ts）；其行为由 `tests/direct-connect.spec.ts` 覆盖。实测脚本按需放在工作目录，不入库。
 
-### 备选：`dsh-debug-mode`（第三方，未采用）
+### 已评估、未采用的调试工具
 
-社区插件 [svcgv/dsh-debug-mode](https://github.com/svcgv/dsh-debug-mode) 提供 Normal/Plan/Debug 模式切换、浏览器埋点（带行号的 probe 事件）与后端 CDP/DAP 断点。分析结论：非官方、实验阶段（浏览器会话内埋点尚未闭环、Python 后端的停止/恢复流程未实现）、需要相邻的 harness 检出与含 API key 的 `config.ini`，插件目录还标注了兼容性存疑。运行时诊断需求由本插件自带的启动诊断（`startup.json`、`GET health` 的 `phase/detail`）与 `--dump-config` 覆盖，故不引入。
+- `@deepseek-ai/dsh-hmr`（官方热重载）：版本线必须与运行时匹配，在当前 dsh 0.2.x 上启动被拒绝；`dsh plugin allow-version` 豁免官方警告可能崩溃或丢失数据，不值得为省一次 `pnpm build` 引入。
+- `dsh-debug-mode`（社区）：非官方且实验阶段，其诊断能力已由插件自带的启动诊断（`startup.json` 的 `phase/detail`、`GET health`）与 `--dump-config` 覆盖。
 
 ## 启动与停止
 

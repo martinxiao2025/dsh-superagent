@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### 开发调试清理（2026-11-14）
+
+- **巨石测试拆分收尾**（011 §9.2 第 9 项最后一项）：`core-engine.spec.ts`（1614 行 / 113 例）按主题
+  拆为 `engine-eval`（评估与扇出、恢复停止、交回与上下文线程，54 例）/ `engine-reports`（报告与结果、
+  票据命令，25 例）/ `engine-reviews`（跨版本评估与缺口复核，17 例）/ `engine-reads`（worker 读取判定
+  复核，17 例）四个 spec + `fixtures/engine.ts` 共享引擎夹具（内存仓库、桩执行器/评估器、受控时钟）；
+  用例逐字保留，零行为变化。
+- **删除调试取证目录与工作文档**：`verification/`（10 个日期目录的实测脚本、JSON/JPG 证据与 README）
+  与 `.trae/documents/`（7 份 U4–U7 工作文档）整体移出仓库；其中被单测引用的统一直连 SDK 迁为
+  [tests/fixtures/direct-connect.ts](tests/fixtures/direct-connect.ts)，`tests/direct-connect.spec.ts`
+  改从新位置导入。实测脚本按需放在工作目录、不入库；实测结论保留在 CHANGELOG 各版本节。
+- **006「开发与调试」按 DSH 插件开发规范简化**：明确回路只有单测（`pnpm check`）与实机两条、
+  先单测后实机；收敛「HMR 热重载」「dsh-debug-mode」两节为「已评估、未采用」；删除已失效的
+  Cordis HMR 教程链接与重复的 `dsh web` 命令展示；新增「直连实测（管理 API）」节，指向
+  `tests/fixtures/direct-connect.ts` 作为临时实测脚本的复用客户端。
+- 009/011 对 `verification/` 目录的引用改为指向 CHANGELOG 各版本节的实测结论；007 测试表同步拆分后的
+  engine spec 行。
+
 ### 调度可靠性批次（2026-11-14）
 
 - **轮询并发**：一轮检查内的项目轮询改为有界并发池（并发 4），慢项目（大仓库首次 clone）不再阻塞其他项目的轮询与建单；单项目失败不中断同批。单项目串行与互斥语义不变（忙项目推迟、scan/tick 共用执行链）。
@@ -49,7 +67,7 @@
 
 ### 统一直连 SDK 与直连实测（2026-11-13）
 
-- 新增 [verification/direct-connect.ts](verification/direct-connect.ts)：把散落在各 verification 脚本里的
+- 新增统一直连 SDK（现居 [tests/fixtures/direct-connect.ts](tests/fixtures/direct-connect.ts)）：把散落在各实测脚本里的
   「端口发现 + `x-orchestrator-request` 客户端 + 等待就绪 + 证据落盘」收敛为一个被复用模块
   （`DirectConnect`），端口每次请求前重新读取 `startup.json`，正确跟随插件重挂载导致的端口漂移。
 - 重构 `run-live` / `run-wizard` / `run-delete` / `run-cleanup` 复用该 SDK，删除约 150 行重复代码；
@@ -57,8 +75,7 @@
   重载、后者为无依赖的捆绑版服务脚本，不引入 ts 依赖）。
 - 新增 [tests/direct-connect.spec.ts](tests/direct-connect.spec.ts)（8 例）：端口解析、缺端口报错、
   请求头/JSON 体、非 2xx 错误映射、健康失败兜底、`waitReady` 端口漂移跟随、断言/证据辅助。
-- 新增 [verification/2026-11-13-direct-connect](verification/2026-11-13-direct-connect/)：用统一 SDK 直连真实
-  桌面版实测端口发现、健康/状态、只读端点、`waitReady`、只读 DELETE 404 安全与同源门禁
+- 直连真实桌面版实测端口发现、健康/状态、只读端点、`waitReady`、只读 DELETE 404 安全与同源门禁
   （缺请求头与 Host 不符均被 403 拒）；实测打印 `DIRECT_CONNECT_LIVE_OK`，证据入 `result.json`。
 - 交付物：统一直连 SDK、SDK 单测、直连实测脚本与证据、重构后的验证脚本、本更新日志。
 

@@ -253,7 +253,7 @@
 ## 9. 复核状态与剩余任务清单（2026-11-12）
 
 评审产出后经过数轮实施，全部 P0 与大部分 P1 已关闭，并以桌面版 DeepSeek Harness 的真实端到端
-实测为验收（仓库内 `verification/2026-11-11-wizard/README.md`，
+实测为验收（实测结论见 CHANGELOG 的 0.2.0 节，
 `WIZARD_LIVE_OK` / `DELETE_LIVE_OK`；离线重置脚本 `reset-state.ts` 处理旧版设置的不可迁移启动失败）。
 009 的结论性修订见其第 13 节「实施状态」。**本节是当前的权威剩余清单。**
 

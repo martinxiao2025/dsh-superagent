@@ -1,7 +1,7 @@
-/** 统一直连 SDK：直连桌面版 DeepSeek Harness 上已加载的本插件（管理 HTTP API）。 */
+/** 统一直连 SDK：直连 DeepSeek Harness 上已加载的本插件（管理 HTTP API）。 */
 /**
- * 把此前散落在每个 verification 脚本里的「端口发现 + x-orchestrator-request 客户端 + 等待就绪 + 证据落盘」
- * 收敛成一个被复用的模块。直连前提（与 docs/006-deployment.md 一致）：
+ * 把「端口发现 + x-orchestrator-request 客户端 + 等待就绪 + 证据落盘」收敛成一个被复用的模块，
+ * 供 `tests/direct-connect.spec.ts` 与人工实测脚本共用。直连前提（与 docs/006-deployment.md 一致）：
  * - 管理接口只监听回环地址，请求必须带 `x-orchestrator-request: 1`；
  * - 监听端口来自 `stateDir/startup.json` 的 `listen.port`，插件重挂载会换端口，因此每次请求前都重新读取。
  */

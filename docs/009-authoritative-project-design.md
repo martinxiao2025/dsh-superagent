@@ -538,7 +538,7 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 
 ## 13. 实施状态（2026-11-12）
 
-以桌面版 DeepSeek Harness 的真实端到端实测为验收依据（`verification/2026-11-11-wizard/`，
+以桌面版 DeepSeek Harness 的真实端到端实测为验收依据（实测结论见 CHANGELOG 的 0.2.0 节，
 `WIZARD_LIVE_OK` / `DELETE_LIVE_OK`）；本节记录与正文结论的偏差与新定案，正文未提及处以本节为准。
 
 ### 13.1 已定案（原待拍板项）

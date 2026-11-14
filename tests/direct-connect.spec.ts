@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DirectConnect, check, save } from '../verification/direct-connect.ts'
+import { DirectConnect, check, save } from './fixtures/direct-connect.ts'
 
 /** 伪造一个返回指定状态的 fetch，并记录发出的请求。 */
 function fakeFetch(plan: { status: number; body?: unknown }[]) {
