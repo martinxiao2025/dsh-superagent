@@ -4,7 +4,7 @@ import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { Deployment, ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment.ts'
-import { hostOf } from '../deployment.ts'
+import { hostOf } from './host.ts'
 import { redact } from './text.ts'
 
 const exec = promisify(execFile)

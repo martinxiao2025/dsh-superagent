@@ -1,7 +1,7 @@
 /** Git 凭据的默认探测：SSH 用临时私钥，HTTPS 用只在本次调用生效的请求头。 */
 import { rmSync } from 'node:fs'
 import type { Commands } from '../infra/commands.ts'
-import { sshCommandOf } from '../code-repos/sync.ts'
+import { sshCommandOf } from '../code-repos/port.ts'
 import type { SecretVault } from '../secrets/vault.ts'
 import type { GitProbe } from './service.ts'
 

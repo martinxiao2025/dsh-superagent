@@ -70,3 +70,22 @@ export function inputMessage(input: TicketInput, trigger?: object): string | und
   if (input.kind === 'note') return `Note from the orchestrator, for context only: ${input.text}`
   return input.kind === 'text' ? input.text : undefined
 }
+
+/** 工作单元报告转发内联的工单投影：只取主会话需要的字段，不依赖展示层（app/cards）。 */
+function reportTicket(ticket: Ticket) {
+  return { ticket_id: ticket.id, title: ticket.title, state: ticket.ended?.outcome ?? 'working',
+    preview: (ticket.assignments.at(-1)?.report?.summary ?? '').replace(/\s+/g, ' ').slice(0, 160) }
+}
+/** 600 字符之上的摘要截断并附总字符数。 */
+const reportSummary = (text: string) => text.length > 600 ? { summary: text.slice(0, 600), chars: text.length } : { summary: text }
+/**
+ * 把工作单元报告转发的正文格式化为主会话消息文本；执行器侧（dsh/idle）的失败与静默收尾转发使用。
+ * 与 `app/notices.ts` 的 `resultRelay` 共享同一载荷形状（`kind: 'worker_report'`），只是工单投影由本模块内联，
+ * 使 executor 不再值级依赖 app 的展示层；id 由此处的键推导，保证同一事件幂等。
+ */
+export function workerReportText(ticket: Ticket, state: string, text: string, replyTo?: string): string {
+  const id = key('worker-result', ticket.id, ticket.updatedAt, text)
+  const report = { kind: 'worker_report', ticket: reportTicket(ticket), trigger_id: ticket.origin.triggerId, state,
+    ...replyTo ? { answer_to: replyTo } : {}, ...reportSummary(text), read: `ticket/${ticket.id}/result` }
+  return JSON.stringify(report)
+}

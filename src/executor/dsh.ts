@@ -1,7 +1,7 @@
 /** DSH 执行器：为每个工单管理一个持久的工作单元会话和工作区目录。 */
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { runningAssignment, type AssessmentOutcome, type Assignment, type EngineForExecutor, type Executor,
+import { key, runningAssignment, type AssessmentOutcome, type Assignment, type EngineForExecutor, type Executor,
   type Ticket, type Trigger } from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
@@ -9,8 +9,7 @@ import { Later, type Effects } from '../app/effects.ts'
 import type { Store } from '../app/store.ts'
 import type { Variable } from '../app/execution-environment.ts'
 import type { Sessions } from '../app/sessions.ts'
-import { resultRelay } from '../app/notices.ts'
-import { triggerMessage, workerSessionId } from './format.ts'
+import { triggerMessage, workerSessionId, workerReportText } from './format.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { until } from './background.ts'
 // 启动、投递、生命周期与空闲收尾的实现拆分在同目录的四个模块中；本类保留门面、
@@ -305,7 +304,8 @@ export class DshExecutor implements Executor {
   private failed(ticketId: string, summary: string): void {
     this.host.store.atomic(() => {
       const updated = this.host.engine.report(ticketId, { state: 'failed', summary })
-      this.relay(resultRelay(updated, 'failed', summary))
+      this.relay({ id: `report:${key('worker-result', updated.id, updated.updatedAt, summary)}`,
+        text: workerReportText(updated, 'failed', summary) })
     })
   }
   private relay({ id, text }: { id: string; text: string }): void { this.host.sessions.relay(id, text) }

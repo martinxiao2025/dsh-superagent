@@ -295,7 +295,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/index.ts` | 主插件入口：读取机器设置，先挂载管理路由并取得状态目录锁，再启动 Runtime；初始化失败时记录启动阶段并保持路由挂载 |
 | `src/app/startup.ts` | 启动记录与状态目录锁：`recordStartup` 写 `startup.json` 并轮转 `startup.prev.json`，`startupError` 折叠异常，`acquireStateLock` 在锁竞争时等待重试 |
 | `src/app/admin-mount.ts` | `AdminMount`：Runtime 创建之前挂载 `/orchestrator/api`，初始化失败时用启动状态回答健康探针与 503 |
-| `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveGithubSource`、`resolveGitlabSource` 和 `resolveFeishuSource` 按记录解析仓库、项目和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出各类型安装读取的字段。代码不指名任何人、账号或组织 |
+| `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveGithubSource`、`resolveGitlabSource` 和 `resolveFeishuSource` 按记录解析仓库、项目和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出各类型安装读取的字段。代码不指名任何人、账号或组织。`hostOf` 由 `infra/host.ts` 具名再导出 |
 | `src/setup.ts` | 安装问题：`SetupError`，带错误码、修复它的位置，以及日志、主会话和面板共享的英文文本 |
 | `src/policy.ts` | 策略聚合出口：设置架构、评估校验与门禁的三层实现经此处具名再导出，保持宿主与测试的导入路径不变 |
 | `src/settings/schema.ts` | 设置 schema 叶子层：评估规则、来源策略、评估与执行器配置、来源记录以及完整设置快照的类型 |
@@ -304,6 +304,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/projects/kind.ts` | `ProjectSchema`：项目名称、启停、一对一的 `codeRepo` / `taskSource` 引用、执行目录与分支、调度、重试和任务状态口径 |
 | `src/code-repos/kind.ts` | `CodeRepoRecordSchema` 与 `CodeRepoKindSchema`：代码仓库记录的类型、名称、启停与配置，以及代码仓库类型描述 `CodeRepoType` |
 | `src/code-repos/types.ts` | 代码仓库类型清单 `CODE_REPO_TYPES` 与按 `kind` 查找的 `codeRepoType`，供预检和面板共用 |
+| `src/code-repos/port.ts` | 代码仓库的统一端口：同步入口、工作副本路径与提交、文件读取与远端探测的单一出口；`app` 与 `task-sources` 经由它取用，不再直接 import `sync.ts`/`work.ts`/`read.ts` |
 | `src/code-repos/work.ts` | 代码仓库工作副本：按记录 ID 固定目录，首次 clone、后续同步，以及把回写的单个文件提交为干净工作树 |
 | `src/code-repos/workspace.ts` | 工单执行工作区：从轮询工作副本创建独立 git worktree，重试时复用，准备失败时移除 |
 | `src/code-repos/sync.ts` | 代码仓库同步：按记录的认证方式（HTTPS 或 SSH）与自定义远端解析地址、注册目录凭据、初始化/快进合并并返回提交；空仓库返回 `empty` 而不是失败，错误与日志中的凭据会被脱敏 |
@@ -398,14 +399,15 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/views/settings.ts` | 设置页面的视图：每个块及其修订号、每个来源的设置及其 kind 的表单，以及执行环境 |
 | `src/app/views/projects.ts` | 项目运行视图：项目配置、该项目在队列中的任务，以及全局 worker 占用 |
 | `src/app/views/overview.ts` | 概览：需要人处理的工单、问题、过去一天的流动以及执行器负载 |
-| `src/executor/format.ts` | 面向模型的工单文本格式化（只依赖领域内核）：工作单元会话 ID、`triggerMessage`、`inputMessage`、`mandateInstructions`、`WorktreeNameSchema` 与同批触发器卡片 |
+| `src/executor/format.ts` | 面向模型的工单文本格式化（只依赖领域内核）：工作单元会话 ID、`triggerMessage`、`inputMessage`、`mandateInstructions`、`WorktreeNameSchema`、同批触发器卡片与 `workerReportText`（执行器侧的工单报告转发正文，内联最小工单投影） |
 | `src/executor/dsh.ts` | DshExecutor 门面与 `WorkerSlots`：每工单一个会话与工作区的并发槽位，按工单聚合的 `WorkerState` 状态登记，启动/投递效果接线与对拆分模块的 `WorkerContext` 共享上下文 |
 | `src/executor/launch.ts` | 工作单元启动：`ticketExecution` 执行元数据、工作区准备命令与校验、排队的启动流程与启动失败报告 |
 | `src/executor/delivery.ts` | 工作单元投递：待处理输入逐条注入运行中的会话，空闲工作单元的唤醒预留与输入文本截断 |
 | `src/executor/lifecycle.ts` | 工作单元生命周期：结束事务后的停止收尾、宿主停机、重启对账与宿主 agent 事件订阅 |
 | `src/executor/idle.ts` | 工作单元空闲与重试：瞬时失败分类 `transient`、退避重试、交接给人的作业收集与等待中报告组装 |
 | `src/executor/background.ts` | DeepSeek Harness 中执行器的后台工作、其会话拥有的 shell 任务（`ctx.jobs`）及其子代理（`ctx.subagents`）：`runningJobs`、`untilQuiet`、`killJobs`、`collectJobs`、`stopSubagents`、`stopBackground`、`until`，以及 `cancelled`（其子代理停止时取消了回合的执行器） |
-| `src/infra/commands.ts` | `Commands`，CLI 传输：`run`；`api` 和 `pages`，限制在已配置仓库并经过校验；`glab`、`gitlabApi` 和 `gitlabPages`，限制在已配置的 GitLab 项目并经过校验；以机器人身份运行的 `lark`；`git`。`CliError` 携带命令输出报告的错误码，例如 GitHub 或 GitLab 的 HTTP 状态；不打印任何内容的命令以结束方式失败，绝不带出其参数；`validItems` 跳过并计数列表中的格式错误项 |
+| `src/infra/commands.ts` | `Commands`，CLI 传输：`run`；`api` 和 `pages`，限制在已配置仓库并经过校验；`glab`、`gitlabApi` 和 `gitlabPages`，限制在已配置的 GitLab 项目并经过校验；以机器人身份运行的 `lark`；`git`（独立于 CLI 的更长超时）。`CliError` 携带命令输出报告的错误码，例如 GitHub 或 GitLab 的 HTTP 状态；不打印任何内容的命令以结束方式失败，绝不带出其参数；`validItems` 跳过并计数列表中的格式错误项 |
+| `src/infra/host.ts` | `hostOf`：实例地址的站点主机名推导，零依赖叶子，deployment 与 infra 共用（避免两者互相 import） |
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |
 | `src/infra/worker-sources.ts` | 执行侧的分发数据与调度器：工单目录到来源记录的登记（`recordTicketSource`）、记录到 CLI 的表（`writeWorkerRecords`），以及按记录选择 CLI 的 `WORKER_DISPATCH_BODY` |
 | `src/infra/git-timeout.ts` | `withGitTimeout`：给已绑定的 `Commands` 覆盖 git 类命令的超时（项目 `execution.gitTimeoutSeconds`），其余方法委托原对象 |
@@ -517,6 +519,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/text.spec.ts` | 词数统计（IM 消息限制依赖的分词计数）与统一脱敏：URL 内嵌凭据、带引号与裸键的 Authorization/Bearer 头、令牌型查询参数和私钥块 |
 | `tests/class-docs.spec.ts` | `src` 中每个类之前都有 JSDoc 块 |
 | `tests/docs.spec.ts` | 编号文档只链接到更早的文档、每个本地链接都能解析、没有文档包含合并冲突标记，以及本文档的表格列出每个模块和每个测试 |
+| `tests/architecture.spec.ts` | 静态架构守卫：`core` 零外部依赖、`infra` 不依赖业务域、`deployment ↔ infra` 无值级环、`executor` 不值级依赖 app 展示层、code-repos 消费方经由 `port.ts` 取用 |
 
 `tests/fixtures/` 保存多个测试共享的内容：`host.ts`，模拟的 DeepSeek Harness 宿主；`panel-server.ts` 和 `panel.tsx`，假管理 API 和页面周围的面板；`deployment.ts`，解析后的部署；`git.ts`，测试启动的每个 git 的环境（不指名任何仓库）；以及 `async.ts`。
 

@@ -4,10 +4,9 @@
  */
 import { latestReport, liveTicket, runningAssignment, waitsForPerson, type Assignment, type Ticket } from '../core/index.ts'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { resultRelay } from '../app/notices.ts'
 import { Later } from '../app/effects.ts'
 import { collectJob, killJobs, runningJobs, stopSubagents, untilQuiet } from './background.ts'
-import { workerSessionId } from './format.ts'
+import { workerSessionId, workerReportText } from './format.ts'
 import type { WorkerContext } from './dsh.ts'
 
 /** 启动或工作单元回合的最大瞬时重试次数，以及恢复回合前的初始退避时长。 */
@@ -159,10 +158,10 @@ export async function workerIdle(w: WorkerContext, ticket: Ticket, idle: Assignm
     const before = latestReport(current)?.summary ?? ''
     const updated = w.host.engine.report(ticket.id, { state: 'waiting', summary: said || before })
     // orchestrator_report 之后的静默收尾既不是新状态，也不是空交接。
-    if (said) w.host.sessions.relay(updated.id, resultRelay(updated, 'waiting', said).text)
+    if (said) w.host.sessions.relay(updated.id, workerReportText(updated, 'waiting', said))
     else if (!before.trim()) {
-      w.host.sessions.relay(updated.id, resultRelay(updated, 'waiting',
-        'Worker ended without a status report. Use orchestrator_ticket_request_status to request one.').text)
+      w.host.sessions.relay(updated.id, workerReportText(updated, 'waiting',
+        'Worker ended without a status report. Use orchestrator_ticket_request_status to request one.'))
     }
   })
 }

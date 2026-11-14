@@ -8,6 +8,7 @@ import { z } from 'zod'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
 import { spawnArgv } from './infra/commands.ts'
+import { hostOf } from './infra/host.ts'
 import { SetupError } from './setup.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -187,8 +188,8 @@ export function firstSource<K extends ResolvedSource['kind']>(deployment: Deploy
   for (const source of Object.values(deployment.sources)) if (source.kind === kind) return source as Extract<ResolvedSource, { kind: K }>
   return undefined
 }
-/** 实例地址的站点主机名；留空时使用 `fallback`。 */
-export const hostOf = (instanceUrl: string, fallback: string): string => instanceUrl ? new URL(instanceUrl).host : fallback
+/** 实例地址的站点主机名；留空时使用 `fallback`。定义在 `infra/host.ts`（零依赖叶子），此处具名再导出保持既有导入路径。 */
+export { hostOf } from './infra/host.ts'
 /** 实例地址的网页基地址；留空时使用 `fallback`。 */
 export const webBaseOf = (instanceUrl: string, fallback: string): string => instanceUrl || fallback
 /** 探测 CLI 时只在自建实例上设置 `GH_HOST` / `GITLAB_HOST`。 */
