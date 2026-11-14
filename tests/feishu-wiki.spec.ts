@@ -1,7 +1,8 @@
-/** 飞书知识库遍历：目录递归、多文档、多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突。 */
+/** 飞书知识库遍历：目录递归、多文档、多维表格、稳定键、跳过类型、单文档隔离与严格编号冲突；含多维表格回写。 */
 import { describe, expect, it } from 'vitest'
 import type { FeishuWikiApi, WikiNodeRef, WikiRecord } from '../src/task-sources/feishu-api.ts'
 import { documentTables, readWikiTasks, WikiStrictConflict } from '../src/task-sources/feishu-wiki-read.ts'
+import { feishuWikiTaskSource } from '../src/task-sources/feishu-wiki.ts'
 import type { TaskFieldMap } from '../src/task-sources/kind.ts'
 
 const columns: TaskFieldMap = { id: 'id', title: 'title', description: 'description', status: 'status', priority: 'priority' }
@@ -160,5 +161,41 @@ describe('feishu wiki reading', () => {
       [{ 编号: '1', 标题: '登录' }],
       [{ 编号: '2', 标题: '支付' }],
     ])
+  })
+})
+
+describe('feishu wiki writeback', () => {
+  let api: FeishuWikiApi
+  const config = { feishuCredential: 'cred', spaceId: 'space-1', roots: [], strict: false, idColumn: 'id', titleColumn: 'title',
+    descriptionColumn: 'description', statusColumn: 'status', priorityColumn: 'priority' }
+  const ctx = { feishu: async () => api }
+
+  it('updates the bitable record the task id points at, using the status column', async () => {
+    const updates: { appToken: string; tableId: string; recordId: string; fields: Record<string, unknown> }[] = []
+    api = { ...apiOf({ nodes: [ref('bit1', 'bitable')] }),
+      async updateRecord(appToken, tableId, recordId, fields) { updates.push({ appToken, tableId, recordId, fields }) } }
+    await feishuWikiTaskSource.writeback!(config, { taskId: 'feishu-bitable:bit1:tbl1:rec9', taskTitle: '登录' }, '已完成', ctx)
+    expect(updates).toEqual([{ appToken: 'bit1', tableId: 'tbl1', recordId: 'rec9', fields: { status: '已完成' } }])
+  })
+
+  it('uses the configured status column name', async () => {
+    const updates: Record<string, unknown>[] = []
+    api = { ...apiOf({ nodes: [ref('bit1', 'bitable')] }),
+      async updateRecord(_app, _table, _record, fields) { updates.push(fields) } }
+    await feishuWikiTaskSource.writeback!({ ...config, statusColumn: '状态' },
+      { taskId: 'feishu-bitable:bit1:tbl1:rec1', taskTitle: 'x' }, 'done', ctx)
+    expect(updates).toEqual([{ 状态: 'done' }])
+  })
+
+  it('refuses docx tasks and missing credentials instead of guessing a target', async () => {
+    api = apiOf({ nodes: [ref('bit1', 'bitable')] })
+    await expect(feishuWikiTaskSource.writeback!(config, { taskId: 'feishu:doc-a:1', taskTitle: '登录' }, '已完成', ctx))
+      .rejects.toThrow(/不支持回写/)
+    await expect(feishuWikiTaskSource.writeback!({ ...config, feishuCredential: '' },
+      { taskId: 'feishu-bitable:bit1:tbl1:rec1', taskTitle: 'x' }, '已完成', ctx)).rejects.toThrow(/可写回的飞书凭据/)
+    const unwritable = { ...apiOf({ nodes: [ref('bit1', 'bitable')] }) } as FeishuWikiApi
+    delete (unwritable as { updateRecord?: unknown }).updateRecord
+    await expect(feishuWikiTaskSource.writeback!(config, { taskId: 'feishu-bitable:bit1:tbl1:rec1', taskTitle: 'x' }, '已完成',
+      { feishu: async () => unwritable })).rejects.toThrow(/可写回/)
   })
 })

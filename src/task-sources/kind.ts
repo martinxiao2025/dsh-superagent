@@ -86,12 +86,14 @@ export interface TaskSourceRunContext {
   feishuIm?(credential: string): Promise<FeishuImApi | undefined>
 }
 
-/** 回写上下文：回写前同样需要代码仓库工作副本，但不需要读取任务。 */
+/** 回写上下文：回写前同样需要代码仓库工作副本，但不需要读取任务；飞书驱动按凭据取写回能力。 */
 export interface TaskSourceWriteContext {
   signal?: AbortSignal
   syncRepo?(): Promise<string>
   /** 绑定到代码仓库记录的命令入口；用于在回写后把工作副本恢复干净。 */
   commands?: Commands
+  /** 按飞书凭据 ID 取得知识库读取能力；飞书知识库驱动的回写使用（写回多维表格记录）。 */
+  feishu?(credential: string): Promise<FeishuWikiApi | undefined>
 }
 
 /** 推送上下文：与回写共用工作副本与命令入口。 */

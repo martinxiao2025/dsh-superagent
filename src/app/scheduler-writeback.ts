@@ -53,6 +53,7 @@ export class SchedulerWriteback {
     if (!parsed.success) throw new Error(`Invalid task source configuration: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
     await driver.writeback(parsed.data, { taskId: payload.task, taskTitle: payload.taskTitle }, payload.status,
       { signal: this.base.host.lifetime, syncRepo: () => this.base.syncRepo(payload.project),
-        commands: this.base.host.commands.scope(projectRepoId(payload.project)) })
+        commands: this.base.host.commands.scope(projectRepoId(payload.project)),
+        feishu: credential => this.base.host.feishuWiki?.(credential) ?? Promise.resolve(undefined) })
   }
 }

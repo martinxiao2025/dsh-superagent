@@ -16,9 +16,11 @@ export type LarkCall = (args: string[]) => Promise<unknown>
 /** 飞书 OpenAPI 的固定前缀；HTTP 直连与凭据探测共用。 */
 export const FEISHU_BASE = 'https://open.feishu.cn/open-apis'
 
-/** 传输面：`path` 以 `/` 开头且不含 `/open-apis` 前缀；返回已解包的 `data` 对象。 */
+/** 传输面：`path` 以 `/` 开头且不含 `/open-apis` 前缀；返回已解包的 `data` 对象。写操作走 `post`。 */
 export interface FeishuTransport {
   get(path: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>
+  /** JSON POST；`path` 约定同 `get`。bitable 记录更新等写操作使用。 */
+  post(path: string, body?: Record<string, unknown>): Promise<Record<string, unknown>>
 }
 
 /** 应用身份的 tenant_access_token：内存缓存到过期前 60 秒，不落盘、不进配置。 */
@@ -43,9 +45,10 @@ export class TokenManager {
   }
 }
 
-/** CLI 身份：`lark api GET /open-apis<path> --params <json>`；`ok/data` 解包由调用方提供的 `LarkCall` 负责。 */
+/** CLI 身份：`lark api GET/POST /open-apis<path> --params/--data <json>`；`ok/data` 解包由调用方提供的 `LarkCall` 负责。 */
 const CLI_ERROR_CODE = /\s\((\d+)\)$/
 export function larkTransport(lark: LarkCall): FeishuTransport {
+  const decode = (data: unknown): Record<string, unknown> => (data ?? {}) as Record<string, unknown>
   return {
     async get(path, params = {}) {
       let data: unknown
@@ -57,25 +60,44 @@ export function larkTransport(lark: LarkCall): FeishuTransport {
         const code = CLI_ERROR_CODE.exec(text)?.[1]
         throw code ? new FeishuApiError(text, undefined, Number(code)) : error
       }
-      return (data ?? {}) as Record<string, unknown>
+      return decode(data)
+    },
+    async post(path, body = {}) {
+      let data: unknown
+      try {
+        data = await lark(['api', 'POST', `/open-apis${path}`, '--data', JSON.stringify(body)])
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error)
+        const code = CLI_ERROR_CODE.exec(text)?.[1]
+        throw code ? new FeishuApiError(text, undefined, Number(code)) : error
+      }
+      return decode(data)
     },
   }
 }
 
-/** 应用身份：先经 TokenManager 换取 tenant token，再携带 Bearer 读取；错误信封转为带状态码与业务码的 FeishuApiError。 */
+/** 应用身份：先经 TokenManager 换取 tenant token，再携带 Bearer 读写；错误信封转为带状态码与业务码的 FeishuApiError。 */
 export function httpTransport(appId: string, appSecret: string, signal?: AbortSignal): FeishuTransport {
   const tenant = new TokenManager(appId, appSecret, signal)
+  const call = async (path: string, init: { method: 'GET' | 'POST'; url: URL; body?: string }): Promise<Record<string, unknown>> => {
+    const response = await fetch(init.url, { method: init.method, signal,
+      headers: { authorization: `Bearer ${await tenant.token()}`, ...(init.method === 'POST' ? { 'content-type': 'application/json' } : {}) },
+      ...init.body ? { body: init.body } : {} })
+    const payload = await response.json() as { code?: number; msg?: string; message?: string; data?: unknown }
+    if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
+      throw new FeishuApiError(`${payload.msg ?? payload.message ?? `飞书返回 HTTP ${response.status}`}${payload.code ? ` (${payload.code})` : ''}`,
+        response.status, payload.code)
+    }
+    return (payload.data ?? {}) as Record<string, unknown>
+  }
   return {
     async get(path, params = {}) {
       const url = new URL(`${FEISHU_BASE}${path}`)
       for (const [key, value] of Object.entries(params)) if (value !== '') url.searchParams.set(key, String(value))
-      const response = await fetch(url, { signal, headers: { authorization: `Bearer ${await tenant.token()}` } })
-      const payload = await response.json() as { code?: number; msg?: string; message?: string; data?: unknown }
-      if (!response.ok || (payload.code !== undefined && payload.code !== 0)) {
-        throw new FeishuApiError(`${payload.msg ?? payload.message ?? `飞书返回 HTTP ${response.status}`}${payload.code ? ` (${payload.code})` : ''}`,
-          response.status, payload.code)
-      }
-      return (payload.data ?? {}) as Record<string, unknown>
+      return call(path, { method: 'GET', url })
+    },
+    async post(path, body = {}) {
+      return call(path, { method: 'POST', url: new URL(`${FEISHU_BASE}${path}`), body: JSON.stringify(body) })
     },
   }
 }

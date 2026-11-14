@@ -1,6 +1,6 @@
 /**
  * 飞书知识库任务来源驱动：一个 spaceId 绑定一组根节点，目录递归、多文档与多维表格都从同一遍历产生任务。
- * 首批只读，不实现回写。
+ * 回写只支持多维表格记录的状态字段（任务键携带记录 ID）；docx 正文文档没有可更新的记录，明确报未支持。
  */
 import { z } from 'zod'
 import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
@@ -9,7 +9,7 @@ import { feishuFailureCode } from '../feishu-transport.ts'
 import { issuesText, readWikiTasks } from './feishu-wiki-read.ts'
 import {
   DEFAULT_TASK_FIELDS, errorText, taskColumnShape, taskColumnsOf,
-  type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps,
+  type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps, type TaskSourceWriteContext,
 } from './kind.ts'
 
 /** 根节点以 token 为身份；标题与类型由读取时解析，避免存下会过期的显示值。 */
@@ -99,7 +99,7 @@ async function verify(config: FeishuWikiTaskSourceConfig, field: string, deps: T
   return [columnCheck(field, config)]
 }
 
-/** 飞书知识库驱动：只读；每个文档/表格独立解析，单份失败不拖垮其他文档。 */
+/** 飞书知识库驱动：读取知识空间、目录与多维表格；回写只支持多维表格记录的状态字段。 */
 export const feishuWikiTaskSource: TaskSourceDriver<FeishuWikiTaskSourceConfig> = {
   kind: 'feishu-wiki',
   title: { zh: '飞书知识库', en: 'Feishu wiki' },
@@ -122,5 +122,20 @@ export const feishuWikiTaskSource: TaskSourceDriver<FeishuWikiTaskSourceConfig> 
       throw new Error(`知识库没有可读取的任务：${issuesText(result.issues)}`)
     }
     return result.tasks
+  },
+  /** 回写多维表格记录的状态字段：任务键携带记录 ID；docx 任务没有可定位的记录，明确报未支持。 */
+  async writeback(config: FeishuWikiTaskSourceConfig, target, status, ctx: TaskSourceWriteContext): Promise<void> {
+    const parts = target.taskId.split(':')
+    if (parts[0] !== 'feishu-bitable' || parts.length !== 4) {
+      throw new Error(`飞书文档任务不支持回写（正文文档没有可更新的记录）：${target.taskId}`)
+    }
+    const [, nodeToken = '', tableId = '', recordId = ''] = parts
+    if (!nodeToken || !tableId || !recordId) throw new Error(`任务键不是可回写的多维表格记录：${target.taskId}`)
+    const api = config.feishuCredential ? await ctx.feishu?.(config.feishuCredential) : undefined
+    if (!api?.updateRecord) throw new Error('任务来源没有绑定可写回的飞书凭据，无法回写知识库')
+    try { await api.node(nodeToken) } catch (error) {
+      throw new Error(`无法回写：多维表格 ${nodeToken} 已不可读（${error instanceof Error ? error.message : String(error)}）`)
+    }
+    await api.updateRecord(nodeToken, tableId, recordId, { [config.statusColumn || DEFAULT_TASK_FIELDS.status]: status })
   },
 }

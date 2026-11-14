@@ -17,7 +17,7 @@ export interface WikiNodeRef {
 export interface WikiTableRef { tableId: string; name: string }
 export interface WikiRecord { recordId: string; fields: Record<string, unknown> }
 
-/** 一次读取所需的全部飞书调用；实现方负责鉴权与分页。 */
+/** 一次读取所需的全部飞书调用；实现方负责鉴权与分页。写操作（回写）是可选能力。 */
 export interface FeishuWikiApi {
   node(token: string): Promise<WikiNodeRef>
   children(spaceId: string, parentToken: string): Promise<WikiNodeRef[]>
@@ -25,6 +25,8 @@ export interface FeishuWikiApi {
   document(documentId: string): Promise<string>
   tables(appToken: string): Promise<WikiTableRef[]>
   records(appToken: string, tableId: string): Promise<WikiRecord[]>
+  /** 更新多维表格一条记录的字段；只写回状态列时使用。缺省表示该身份不支持写操作。 */
+  updateRecord?(appToken: string, tableId: string, recordId: string, fields: Record<string, unknown>): Promise<void>
 }
 
 /** 凭据读取知识库的能力；未安装或材料不可用时返回 undefined，由驱动给出可读的预检结果。 */
@@ -94,6 +96,11 @@ export function feishuWikiApi(transport: FeishuTransport): FeishuWikiApi {
           fields: (item.fields ?? {}) as Record<string, unknown> })).filter(item => item.recordId),
         hasMore: data.has_more === true, pageToken: String(data.page_token ?? '') }
       })
+    },
+    async updateRecord(appToken, tableId, recordId, fields) {
+      // PUT 语义由 `record_ids` + 字段负载承载：飞书 bitable 的记录更新端点是 PUT。
+      await transport.post(`/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records/${encodeURIComponent(recordId)}`,
+        { fields })
     },
   }
 }

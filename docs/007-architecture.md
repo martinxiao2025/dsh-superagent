@@ -314,7 +314,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/task-sources/excel.ts` | Excel 驱动：先同步代码仓库工作副本，再读取 CSV / TSV / XLSX，支持回写 |
 | `src/task-sources/feishu-im.ts` | 飞书消息驱动：按群 ID 读取最近消息，一条消息一个任务，去掉 @ 占位、跳过空文本，按消息编号去重；只读 |
 | `src/task-sources/feishu-im-api.ts` | 飞书群消息读取接口：文本、富文本与非文本占位抽取，按时间倒序分页；应用身份走 HTTP，CLI 身份走 `lark api` |
-| `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：按 `spaceId` 唯一归属与根节点集合读取，目录递归、多文档与多维表格都转成任务；首批只读 |
+| `src/task-sources/feishu-wiki.ts` | 飞书知识库驱动：按 `spaceId` 唯一归属与根节点集合读取，目录递归、多文档与多维表格都转成任务；回写多维表格记录的状态字段（docx 任务明确报未支持） |
 | `src/task-sources/feishu-api.ts` | 飞书知识库读取接口：节点、目录、docx 正文、多维表格与记录；应用身份走 HTTP，CLI 身份走 `lark api` |
 | `src/task-sources/feishu-wiki-read.ts` | 知识库遍历：根节点顺序 → 目录顺序 → 表出现顺序，稳定键、跳过类型、单文档隔离与严格编号冲突 |
 | `src/task-sources/excel-format.ts` | 010 标准任务格式：`tasks` 表头契约、状态与优先级枚举、行级校验、版本门禁与完成/失败状态映射 |

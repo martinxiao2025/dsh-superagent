@@ -577,6 +577,6 @@ const ProjectTaskSourceSchema = z.discriminatedUnion('kind', [
 
 ### 13.3 已知残留
 
-- 飞书文档回写未支持（Excel/TSV/CSV 已闭环）；群消息来源无回写目标。
+- 飞书 docx 任务回写未支持（正文文档没有可更新的记录，驱动明确报错）；多维表格（bitable）记录的状态字段已支持回写（2026-11-14，`updateRecord` 经 FeishuTransport 的 POST 双实现）；群消息来源无回写目标。
 - 工作副本与 worktree 的目录清理依赖 workspace GC 的保留窗口；`repos/` 下的孤儿目录不自动清理。
 - 原文档漂移项已随 2026-11-12 文档清理关闭：005 已按当前面板重写，原 009 已拆并删除，原 014 的循环依赖计数以 `011-architecture-review.md` §1 的脚本口径（2 组 SCC）为准。

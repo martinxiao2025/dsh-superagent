@@ -24,6 +24,16 @@
 - 服务脚本新增 `backup` 子命令：服务运行中走快照；停止时冷复制整个状态目录（含 `secrets/`，从 profile patch 自动检测 `stateDir`）；`--keep N`（默认 14）自动清理旧备份。
 - 文档：006 新增「日常备份」节（含恢复步骤与 secrets 边界说明），009 §9.2 新增「版本 ↔ schema ↔ 迁移」对照表。
 
+### 飞书知识库回写（2026-11-14）
+
+- 多维表格（bitable）任务的状态字段回写落地：`FeishuTransport` 新增 `post` 双实现（CLI `lark api POST --data` / HTTP Bearer POST），`FeishuWikiApi` 新增 `updateRecord`（bitable 记录更新端点）。
+- 驱动 `writeback`：任务键 `feishu-bitable:<node>:<table>:<record>` 直接定位记录并按 `statusColumn` 写状态；docx 任务没有可更新的记录，明确报「不支持回写」而不是猜测目标。
+- 009 §13.3 残留项同步更新：飞书回写缺口只剩 docx 正文文档与群消息来源（后者本质无状态可写）。
+
+### 凭据面收紧（2026-11-14）
+
+- 工单分发脚本对 `git-credential` 不再走「唯一来源」兜底：凭据材料只对已登记的工单/工作副本目录（或显式指定来源的准备命令）发放；未登记目录里的 git 拿不到任何凭据，即使只配置了一个来源。`gh`/`glab`/`lark-cli` 保留唯一来源兜底（主会话合法使用）。
+
 ### 单元测试 Windows 兼容与简化（2026-11-13）
 
 - 修复 `deployment.spec.ts` / `environment.spec.ts` 在 Windows 上因符号链接权限失败的用例：普通符号链接
