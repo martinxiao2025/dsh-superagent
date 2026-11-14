@@ -18,16 +18,24 @@ export interface TaskSourceVerifyMeta {
 
 /** 驱动注册表；测试可以传入额外驱动验证「注册即可接入」。 */
 export class TaskSourceRegistry {
-  constructor(readonly drivers: readonly TaskSourceDriver[] = TASK_SOURCE_DRIVERS) {}
+  private readonly registered: readonly TaskSourceDriver[]
+  constructor(readonly drivers: readonly TaskSourceDriver[] = TASK_SOURCE_DRIVERS) { this.registered = drivers }
 
   /** 面板下拉按标题排序；同名时按注册名稳定排序。 */
   kinds(): readonly TaskSourceDriver[] {
-    return [...this.drivers].sort((left, right) => left.title.zh.localeCompare(right.title.zh) || left.kind.localeCompare(right.kind))
+    return [...this.registered].sort((left, right) => left.title.zh.localeCompare(right.title.zh) || left.kind.localeCompare(right.kind))
   }
 
   /** 按注册名取驱动；未知类型返回 undefined，由调用方决定报错还是返回预检失败。 */
   kind(name: string): TaskSourceDriver | undefined {
-    return this.drivers.find(driver => driver.kind === name)
+    return this.registered.find(driver => driver.kind === name)
+  }
+
+  /** 登记一个额外驱动（测试注入）；与内置驱动重名时整体替换，保持幂等。 */
+  register(driver: TaskSourceDriver): void {
+    const remaining = this.registered.filter(entry => entry.kind !== driver.kind)
+    ;(this.registered as TaskSourceDriver[]) = remaining.length === this.registered.length
+      ? [...this.registered, driver] : [...remaining, driver]
   }
 
   /**

@@ -510,6 +510,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/workspace-gc.spec.ts` | 执行工作区回收：保留期、运行中与未知目录、禁用回收与删除失败 |
 | `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败（每次重试都是新工单）、工作项级增删改、`runOnStart`、停用/删除项目、活动条目唯一索引与终态清理、回写副作用与重启恢复 |
 | `tests/scheduler-batch1.spec.ts` | 调度可靠性批次：到期时间 ±10% 抖动（注入固定随机源）、一轮检查内项目的有界并发轮询（慢项目不阻塞同批、单项目失败不中断）、项目级 prepare 优先于全局命令，以及 `withGitTimeout` 覆盖 |
+| `tests/scheduler-runtime.spec.ts` | 调度器与真实引擎的集成：内存任务来源驱动 + 真实 Runtime/Store/Effects——轮询入队、建单与 worker 首条消息、报告完成后的队列结算与驱动回写、失败退避重试产生新工单、停用项目保留排队项 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/thread-timeline.spec.ts` | 线程时间线的客户端合并：新页与已加载更早页之间的间隙检测、按时间去重合并（重复 id 以更早页为准）与分页游标推进 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |
