@@ -325,7 +325,7 @@ curl -s -X POST -H 'x-orchestrator-request: 1' -H 'content-type: application/jso
 安装写入的进程环境：
 
 - **命令垫片** 位于 `<stateDir>/worker-bin`，在 `PATH` 最前面：`gh`、`glab` 和 `lark-cli` 按工单的来源记录选择该记录的 CLI 与账号；被阻止的命令会失败。垫片在运行目标之前会从 `PATH` 中移除自己的目录。
-- **git 配置** 位于 `<stateDir>/worker-gitconfig`：替换操作者的全局和系统 git 配置。它为项目仓库的托管站点注册凭据助手（走 `gh`/`glab` 的 `auth git-credential` 协议，按工单记录分发），并定义 Git LFS 过滤器。有仓库使用 SSH 认证时对应主机不改写 SSH 地址，由本机或凭据的 SSH key 访问。HTTP 代理等个人 git 设置不生效。这里不设置提交身份（`useConfigOnly = true`），git 从不提示凭据，并会移除 `GH_TOKEN` 和 `GITHUB_TOKEN`。
+- **git 配置** 位于 `<stateDir>/worker-gitconfig`：替换操作者的全局和系统 git 配置。它为项目仓库的托管站点注册凭据助手（走 `gh`/`glab` 的 `auth git-credential` 协议，按工单记录分发），并定义 Git LFS 过滤器。凭据助手只对**已登记的工单/工作副本目录**（或显式指定来源的准备命令）发放材料；未登记目录里的 git 拿不到任何凭据，即使只配置了一个来源。有仓库使用 SSH 认证时对应主机不改写 SSH 地址，由本机或凭据的 SSH key 访问。HTTP 代理等个人 git 设置不生效。这里不设置提交身份（`useConfigOnly = true`），git 从不提示凭据，并会移除 `GH_TOKEN` 和 `GITHUB_TOKEN`。
 
 `worker-bin` 或 `worker-gitconfig` 中不是由 dsh-superagent 写入的文件会阻止安装。位于 git 仓库内、且该仓库自身配置添加了凭据的工单目录会使工单失败。
 

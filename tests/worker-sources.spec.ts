@@ -77,6 +77,20 @@ describe('worker dispatch script', () => {
     expect(failure).toEqual({ code: 1, stderr: 'gh cannot choose a Source record: this installation has 2 GitHub Sources (alpha, beta); '
       + "run it inside a ticket directory so it uses the ticket's Source record." })
   })
+  it('never falls back to the only record for git-credential: credentials need a registered directory or an explicit source', async () => {
+    records({ only: { kind: 'github', cli: probeCli('gh-cred') } })
+    // 未登记目录：即使只有一条记录也不发放凭据。
+    const failure = await failureOf(['git-credential', 'fill'])
+    expect(failure).toEqual({ code: 1, stderr: 'git cannot choose a Source record: run it inside the ticket or repository work directory '
+      + "so it uses that record's credential; credentials are never handed out for an unregistered directory." })
+    // 登记目录内：正常按目录选择。
+    records({ only: { kind: 'github', cli: probeCli('gh-cred') } }, { [dir]: 'only' })
+    expect(JSON.parse((await dispatch(['git-credential', 'fill'])).stdout) as Probe)
+      .toEqual({ name: 'gh-cred', argv: ['auth', 'git-credential', 'fill'], path: expect.any(String), marker: 'kept' })
+    // 显式来源（准备命令场景）同样可用。
+    records({ only: { kind: 'github', cli: probeCli('gh-cred') } })
+    expect(JSON.parse((await dispatch(['git-credential', 'fill'], { source: 'only' })).stdout) as Probe).toMatchObject({ name: 'gh-cred' })
+  })
   it('reports unavailable sources with the kinds the command serves', async () => {
     records({})
     await expect(failureOf(['gh'])).resolves.toEqual({ code: 1, stderr: 'gh is unavailable: this installation has no GitHub Source.' })
@@ -107,6 +121,8 @@ describe('worker dispatch script', () => {
     records({ acme: { kind: 'github', cli: probeCli('gh-probe') } })
     expect(JSON.parse((await dispatch(['gh', 'api', 'user'])).stdout) as Probe)
       .toEqual({ name: 'gh-probe', argv: ['api', 'user'], path: expect.any(String), marker: 'kept' })
+    // 凭据协议要求目录已登记：工单/工作副本目录内的 git 才能拿到该记录的凭据。
+    records({ acme: { kind: 'github', cli: probeCli('gh-probe') } }, { [dir]: 'acme' })
     expect(JSON.parse((await dispatch(['git-credential', 'fill'])).stdout) as Probe)
       .toEqual({ name: 'gh-probe', argv: ['auth', 'git-credential', 'fill'], path: expect.any(String), marker: 'kept' })
     records({ acme: { kind: 'github', cli: programSource(join(dir, 'real'), 'gh-fail', 'return 3') } })
