@@ -482,7 +482,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/health.spec.ts` | 每个部分一个健康条目，各由其下一次成功清除 |
 | `tests/delivery.spec.ts` | `AgentDelivery` |
 | `tests/retry-health.spec.ts`、`tests/role-models.spec.ts` | 模型预算重试，以及两个角色的模型 |
-| `tests/runtime.spec.ts` | 在模拟 DeepSeek Harness 宿主上通过工具和 HTTP 运行整个应用 |
+| `tests/runtime-tickets.spec.ts`、`tests/runtime-sources.spec.ts`、`tests/runtime-sessions.spec.ts`、`tests/runtime-infra.spec.ts`、`tests/fixtures/runtime-host.ts` | 在模拟 DeepSeek Harness 宿主上通过工具和 HTTP 运行整个应用：工单生命周期、来源与策略、会话与预设、环境与基础设施（共享宿主夹具 `runtimeHost`） |
 | `tests/tools.spec.ts` | 会话的工具：`orchestrator_read` 为每个角色读取什么，以及其他主会话工具的结构和检查 |
 | `tests/runtime-concurrency.spec.ts` | 重叠的工作：轮次期间的触发器、投递和启动期间发生变化的工单 |
 | `tests/http.spec.ts` | 同源和回环检查、运行时未就绪时的健康探针与 503、每种失败的状态码、请求体上限、路径参数和查询 |
