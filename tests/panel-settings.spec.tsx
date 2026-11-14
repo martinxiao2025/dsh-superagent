@@ -286,7 +286,7 @@ it('refuses to delete a Git credential a project still references, with the coun
     origin: 'pasted' as const, keyPath: '', revision: 1, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••oken' }]
   server.settings = { ...server.settings, projects: { content: { name: '内容运营', enabled: true,
     codeRepo: { kind: 'github' as const, config: { repository: 'acme/widgets' } }, taskSource: { kind: 'excel', config: {} },
-    gitCredential: 'cred', feishuCredential: '', execution: { directory: '', branch: '' },
+    gitCredential: 'cred', feishuCredential: '', execution: { directory: '', branch: '', prepare: '', gitTimeoutSeconds: 0 },
     schedule: { intervalMinutes: 30, runOnStart: true }, retry: { maxRetries: 2, retryBackoffSeconds: 60 },
     taskPolicy: { pendingStatuses: ['待处理'], doneStatus: '已完成', failedStatus: '失败' } } } }
   await mount()

@@ -358,7 +358,7 @@ const PROJECT_STEPS = ['basics', 'codeRepo', 'taskSource', 'execution'] as const
 type ProjectStep = typeof PROJECT_STEPS[number]
 /** 新建项目的默认执行参数；与 ProjectSchema 的默认值保持一致。 */
 const PROJECT_DEFAULTS = {
-  intervalMinutes: '30', maxRetries: '2', retryBackoffSeconds: '60',
+  intervalMinutes: '30', maxRetries: '2', retryBackoffSeconds: '60', gitTimeoutSeconds: '0',
   pendingStatuses: '待处理, todo, pending, open', doneStatus: '已完成', failedStatus: '失败',
 }
 /** 新建项目的仓库/来源默认值：仓库取目录第一项，任务来源优先 Excel；配置为空，保存时由服务端补默认值。 */
@@ -376,7 +376,9 @@ interface WizardDraft {
   feishuCredential: string
   directory: string
   branch: string
+  prepare: string
   intervalMinutes: string
+  gitTimeoutSeconds: string
   runOnStart: boolean
   maxRetries: string
   retryBackoffSeconds: string
@@ -387,7 +389,8 @@ interface WizardDraft {
 /** 空白向导：仓库取目录第一项，任务来源优先 Excel；配置为空，保存时由服务端补默认值。 */
 const emptyWizard = (repoKinds: readonly CodeRepoKindView[], sourceKinds: readonly TaskSourceKindView[]): WizardDraft => ({
   name: '', enabled: true, repo: emptyRepo(repoKinds), gitCredential: '', source: emptySource(sourceKinds),
-  feishuCredential: '', directory: '', branch: '', intervalMinutes: PROJECT_DEFAULTS.intervalMinutes, runOnStart: true,
+  feishuCredential: '', directory: '', branch: '', prepare: '', intervalMinutes: PROJECT_DEFAULTS.intervalMinutes,
+  gitTimeoutSeconds: PROJECT_DEFAULTS.gitTimeoutSeconds, runOnStart: true,
   maxRetries: PROJECT_DEFAULTS.maxRetries, retryBackoffSeconds: PROJECT_DEFAULTS.retryBackoffSeconds,
   pendingStatuses: PROJECT_DEFAULTS.pendingStatuses, doneStatus: PROJECT_DEFAULTS.doneStatus, failedStatus: PROJECT_DEFAULTS.failedStatus,
 })
@@ -401,14 +404,15 @@ function ProjectWizard() {
   const [draft, setDraft] = useState<WizardDraft>(() => emptyWizard(settings.codeRepoKinds, settings.taskSourceKinds))
   const [branches, setBranches] = useState<string[]>([])
   const [defaultBranch, setDefaultBranch] = useState('')
-  const { name, enabled, repo, gitCredential, source, feishuCredential, directory, branch, intervalMinutes, runOnStart,
+  const { name, enabled, repo, gitCredential, source, feishuCredential, directory, branch, prepare, intervalMinutes, gitTimeoutSeconds, runOnStart,
     maxRetries, retryBackoffSeconds, pendingStatuses, doneStatus, failedStatus } = draft
   const edit = (next: Partial<WizardDraft>) => setDraft(current => ({ ...current, ...next }))
   const repoChecks = useFieldChecks('POST code-repos/verify', () => ({ kind: repo.kind, config: repo.config, gitCredential }))
   const sourceChecks = useFieldChecks('POST task-sources/verify', () =>
     ({ kind: source.kind, config: source.config, repo, gitCredential, feishuCredential }))
   const interval = Number(intervalMinutes), retries = Number(maxRetries), backoff = Number(retryBackoffSeconds)
-  const numbersValid = [interval, retries, backoff].every(value => Number.isInteger(value) && value >= 0)
+  const gitTimeout = Number(gitTimeoutSeconds)
+  const numbersValid = [interval, retries, backoff, gitTimeout].every(value => Number.isInteger(value) && value >= 0)
   const policyValid = [pendingStatuses, doneStatus, failedStatus].every(value => value.trim() !== '')
   /** 仓库步就绪：全地址已填、连通性验证通过且已选分支；配置或凭据变更后必须重新验证。 */
   const repoConnected = repoChecks.checks.remote?.ok === true
@@ -445,7 +449,7 @@ function ProjectWizard() {
     const { id } = await call('POST projects', { body: {
       name: name.trim(), enabled, codeRepo: repo, taskSource: source,
       gitCredential, feishuCredential,
-      execution: { directory: directory.trim(), branch: branch.trim() },
+      execution: { directory: directory.trim(), branch: branch.trim(), prepare, gitTimeoutSeconds: gitTimeout },
       schedule: { intervalMinutes: interval, runOnStart },
       retry: { maxRetries: retries, retryBackoffSeconds: backoff },
       taskPolicy: { pendingStatuses: pendingStatuses.split(/[,，]/).map(status => status.trim()).filter(Boolean),
@@ -509,6 +513,14 @@ function ProjectWizard() {
         <Field label={t('projectDirectory')} hint={t('projectDirectoryHint')}>
           <Input className="dt-mono" value={directory} placeholder={t('executionDirectoryEmpty')}
             onChange={event => edit({ directory: event.target.value })} />
+        </Field>
+        <Field label={t('projectPrepare')} hint={t('projectPrepareHint')}>
+          <Input className="dt-mono" value={prepare} placeholder={t('projectPrepareEmpty')}
+            onChange={event => edit({ prepare: event.target.value })} />
+        </Field>
+        <Field label={t('projectGitTimeout')} hint={t('projectGitTimeoutHint')}>
+          <Input type="number" required value={gitTimeoutSeconds}
+            onChange={event => edit({ gitTimeoutSeconds: event.target.value })} />
         </Field>
         <Field label={t('projectInterval')} hint={t('projectIntervalHint')}>
           <Input type="number" required value={intervalMinutes}
@@ -656,6 +668,14 @@ function ProjectForm({ project }: { project: ProjectView }) {
         <Field label={t('projectBranch')} hint={t('projectBranchHint')}>
           <Input value={value.execution.branch} placeholder={t('projectBranchEmpty')}
             onChange={event => edit({ execution: { ...value.execution, branch: event.target.value } })} />
+        </Field>
+        <Field label={t('projectPrepare')} hint={t('projectPrepareHint')}>
+          <Input className="dt-mono" value={value.execution.prepare} placeholder={t('projectPrepareEmpty')}
+            onChange={event => edit({ execution: { ...value.execution, prepare: event.target.value } })} />
+        </Field>
+        <Field label={t('projectGitTimeout')} hint={t('projectGitTimeoutHint')}>
+          <Input type="number" required value={String(value.execution.gitTimeoutSeconds)}
+            onChange={event => edit({ execution: { ...value.execution, gitTimeoutSeconds: numberOf(event.target.value) ?? 0 } })} />
         </Field>
       </div>
       <div className="dt-form dt-block">

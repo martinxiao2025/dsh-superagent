@@ -24,6 +24,8 @@ export interface ReconcileContext {
   readonly syncRepo: (projectId: string) => Promise<string>
   /** 项目是否仍有任务在执行：执行器占用与队列中的在途条目任一成立即视为忙。 */
   busy(projectId: string): boolean
+  /** 下次轮询时间：调用方实现按间隔加抖动。 */
+  nextPollOf(intervalMs: number): number
   /** 记录项目级轮询失败并刷新健康与快照。 */
   fail(projectId: string, message: string): void
   /** 把变更写回队列并通知上层；调用方已持有事务。 */
@@ -50,13 +52,13 @@ export class SchedulerReconcile {
     // 项目有任务在执行时不拉取：同步会改写轮询工作副本，与 worker 的检出互相踩。
     // 推迟到 `min(轮询间隔, BUSY_RETRY_MS)` 之后重试，原因写进快照供排障，不静默丢弃。
     if (this.base.busy(projectId)) {
-      this.base.nextPoll.set(projectId, this.base.now() + Math.min(interval, BUSY_RETRY_MS))
+      this.base.nextPoll.set(projectId, this.base.nextPollOf(Math.min(interval, BUSY_RETRY_MS)))
       this.base.deferred.set(projectId, { reason: 'A task from this project is running; polling and the git pull are deferred', at: this.base.stamp() })
       this.base.changed()
       return
     }
     this.base.deferred.delete(projectId)
-    this.base.nextPoll.set(projectId, this.base.now() + interval)
+    this.base.nextPoll.set(projectId, this.base.nextPollOf(interval))
     const driver = this.base.registry.kind(project.taskSource.kind)
     if (!driver) return this.base.fail(projectId, `Unknown task source type: ${project.taskSource.kind}`)
     const parsed = driver.schema.safeParse(this.base.sourceConfig(driver.fields, project.taskSource.config, project.feishuCredential))

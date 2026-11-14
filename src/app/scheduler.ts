@@ -8,6 +8,7 @@ import type { Engine } from '../core/index.ts'
 import { key } from '../core/ids.ts'
 import type { Settings } from '../policy.ts'
 import type { Commands } from '../infra/commands.ts'
+import { withGitTimeout } from '../infra/git-timeout.ts'
 import { syncRepoWorkCopy } from '../code-repos/work.ts'
 import type { GitAuth } from '../code-repos/sync.ts'
 import { projectRepoId } from '../projects/kind.ts'
@@ -60,6 +61,8 @@ export interface SchedulerHost {
   readonly health?: { set(health: Health): void }
   /** 回收过期的执行工作区；实现必须跳过运行中或仍被未结束工单引用的目录。 */
   readonly collectWorkspaces?: () => Promise<void>
+  /** 到期时间的抖动随机源；返回 [0,1)。测试可注入固定值。 */
+  readonly jitter?: () => number
   readonly now?: () => number
 }
 
@@ -67,6 +70,10 @@ export interface SchedulerHost {
 const TICK_MS = 15_000
 /** 工作区回收的间隔；与保留期无关，保留期由实现按工单结束时间判断。 */
 const GC_INTERVAL_MS = 60 * 60_000
+/** 一轮检查内并行轮询的项目数上限；单项目内部仍串行，忙项目由 busy 检测推迟。 */
+const POLL_CONCURRENCY = 4
+/** 到期时间的抖动幅度：±10%，避免启用的项目在同一秒集中打远端。 */
+const POLL_JITTER = 0.1
 
 /** 项目调度器：轮询任务来源、维护持久化队列、在容量允许时建单并跟踪工单终态。 */
 export class ProjectScheduler {
@@ -85,15 +92,19 @@ export class ProjectScheduler {
   private readonly reconcile: SchedulerReconcile
   private readonly dispatch: SchedulerDispatch
   private readonly writeback: SchedulerWriteback
+  /** 到期时间的抖动随机源；测试可注入固定值，使时间断言确定。 */
+  private readonly jitter: () => number
 
   constructor(private readonly host: SchedulerHost) {
     this.registry = host.registry ?? taskSources
     this.syncRepo = host.syncRepo ?? (projectId => this.defaultSync(projectId))
+    this.jitter = host.jitter ?? Math.random
     this.writeback = new SchedulerWriteback({ host, registry: this.registry, syncRepo: this.syncRepo,
       busy: projectId => this.busy(projectId),
       sourceConfig: (fields, config, feishuCredential) => this.sourceConfig(fields, config, feishuCredential) })
     this.reconcile = new SchedulerReconcile({ host, nextPoll: this.nextPoll, errors: this.errors, deferred: this.deferred,
       registry: this.registry, syncRepo: this.syncRepo, busy: projectId => this.busy(projectId),
+      nextPollOf: intervalMs => this.nextPollOf(intervalMs),
       fail: (projectId, message) => this.fail(projectId, message), save: entry => this.save(entry),
       cancel: (entry, reason) => this.dispatch.cancel(entry, reason),
       sourceConfig: (fields, config, feishuCredential) => this.sourceConfig(fields, config, feishuCredential),
@@ -103,15 +114,14 @@ export class ProjectScheduler {
       now: () => this.now(), stamp: () => this.stamp() })
   }
 
-  /** 启动周期检查；`runOnStart` 的项目立即轮询一次，其余项目等首个间隔到期。 */
+  /** 启动周期检查；`runOnStart` 的项目立即轮询一次，其余项目等首个间隔（含抖动）到期。 */
   start(): void {
     if (this.timer) return
     this.timer = setInterval(() => void this.tick(), TICK_MS)
     this.timer.unref?.()
-    const now = this.now()
-    this.nextGc = now
+    this.nextGc = this.now()
     for (const [id, project] of Object.entries(this.host.settings().projects)) {
-      if (project.enabled && !project.schedule.runOnStart) this.nextPoll.set(id, now + project.schedule.intervalMinutes * 60_000)
+      if (project.enabled && !project.schedule.runOnStart) this.nextPoll.set(id, this.nextPollOf(project.schedule.intervalMinutes * 60_000))
     }
     void this.tick(true)
     this.host.lifetime.addEventListener('abort', () => this.stop(), { once: true })
@@ -129,9 +139,7 @@ export class ProjectScheduler {
       const settings = this.host.settings()
       try {
         await this.dispatch.recover()
-        for (const [id, project] of Object.entries(settings.projects)) {
-          if (project.enabled) await this.reconcile.poll(id, settings)
-        }
+        await this.pollProjects(Object.entries(settings.projects).filter(([, project]) => project.enabled).map(([id]) => id), settings)
         this.dispatch.retire()
         this.dispatch.pump(settings)
         await this.reclaim()
@@ -238,15 +246,15 @@ export class ProjectScheduler {
       const settings = this.host.settings()
       try {
         await this.dispatch.recover()
-        const projects = settings.projects
-        const now = this.now()
-        for (const [id, project] of Object.entries(projects)) {
+        const due: string[] = []
+        for (const [id, project] of Object.entries(settings.projects)) {
           if (!project.enabled) continue
-          const due = this.nextPoll.get(id)
+          const next = this.nextPoll.get(id)
           // 启动时只轮询 `runOnStart` 的项目；之后按各自的下次轮询时间到期执行。
-          if (startup ? !project.schedule.runOnStart : due !== undefined && due > now) continue
-          await this.reconcile.poll(id, settings)
+          if (startup ? !project.schedule.runOnStart : next !== undefined && next > this.now()) continue
+          due.push(id)
         }
+        await this.pollProjects(due, settings)
         for (const entry of this.host.store.queue.active().filter(queueInFlight)) this.dispatch.settle(entry, this.dispatch.ticketOf(entry))
         this.dispatch.retire()
         this.dispatch.pump(settings)
@@ -258,6 +266,27 @@ export class ProjectScheduler {
         this.reportHealth(settings)
       }
     })
+  }
+
+  /**
+   * 一轮检查内并行轮询一批项目：全局并发上限 `POLL_CONCURRENCY`，慢项目（大仓库 clone）
+   * 不再阻塞其他项目的轮询与建单。单项目串行由忙检测保证：项目有任务在跑时 poll 会推迟，
+   * 且同一轮内每个项目只出现一次。
+   */
+  private async pollProjects(projectIds: readonly string[], settings: Settings): Promise<void> {
+    let index = 0
+    const workers = Array.from({ length: Math.min(POLL_CONCURRENCY, projectIds.length) }, async () => {
+      for (;;) {
+        const current = projectIds[index++]
+        if (current === undefined) return
+        if (this.host.lifetime.aborted) return
+        // 单项目失败已在 reconcile 内记录，不中断同批其他项目的轮询。
+        try { await this.reconcile.poll(current, settings) } catch (error) {
+          this.fail(current, String(error instanceof Error ? error.message : error))
+        }
+      }
+    })
+    await Promise.all(workers)
   }
 
   /** 按固定间隔回收过期工作区；失败不阻塞调度，只记录在调度健康条目中。 */
@@ -370,8 +399,11 @@ export class ProjectScheduler {
     const repoId = projectRepoId(projectId)
     const auth = project?.gitCredential ? this.host.gitAuth?.(project.gitCredential) : undefined
     // 工作副本跟随项目选定的分支：清单轮询、回写与执行 worktree 都落在同一分支上；
-    // 未选择分支时留空，按远端默认分支检出。
-    const result = await syncRepoWorkCopy({ commands: this.host.commands.scope(repoId), stateDir: this.host.stateDir, repo: repoId,
+    // 未选择分支时留空，按远端默认分支检出。项目可用 gitTimeoutSeconds 放宽 git 类命令的超时（大仓库首次 clone）。
+    const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
+    const scoped = this.host.commands.scope(repoId)
+    const commands = gitTimeout ? withGitTimeout(scoped, gitTimeout) : scoped
+    const result = await syncRepoWorkCopy({ commands, stateDir: this.host.stateDir, repo: repoId,
       branch: project?.execution.branch, signal: this.host.lifetime, ...(auth ? { auth } : {}) })
     if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repoId}`)
     return result.directory
@@ -381,6 +413,12 @@ export class ProjectScheduler {
     this.errors.set(projectId, message)
     this.reportHealth()
     this.changed()
+  }
+
+  /** 下次轮询时间：间隔加 ±10% 抖动，避免所有项目在同一时刻集中打远端。 */
+  nextPollOf(intervalMs: number): number {
+    const spread = Math.round(intervalMs * POLL_JITTER)
+    return this.now() + intervalMs + Math.round((this.jitter() * 2 - 1) * spread)
   }
 
   private now(): number { return this.host.now ? this.host.now() : Date.now() }

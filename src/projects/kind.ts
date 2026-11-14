@@ -44,7 +44,11 @@ export const ProjectSchema = z.object({
   execution: z.object({
     directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
     branch: z.string().trim().max(200).default(''),
-  }).strict().default(() => ({ directory: '', branch: '' })),
+    /** 项目级 prepare 命令：在工作副本检出后的工单目录里运行（通常安装项目依赖）；留空时无仓库工单才走全局 executor.prepare。 */
+    prepare: z.string().max(LIMITS.prepareCommand).default(''),
+    /** 项目的 git 超时覆盖（秒）；0 表示沿用部署配置的 gitTimeoutMs。大仓库首次 clone 时按项目放宽。 */
+    gitTimeoutSeconds: z.number().int().min(LIMITS.projectGitTimeoutSeconds.min).max(LIMITS.projectGitTimeoutSeconds.max).default(0),
+  }).strict().default(() => ({ directory: '', branch: '', prepare: '', gitTimeoutSeconds: 0 })),
   schedule: z.object({
     intervalMinutes: z.number().int().min(LIMITS.projectIntervalMinutes.min).max(LIMITS.projectIntervalMinutes.max).default(30),
     runOnStart: z.boolean().default(true),

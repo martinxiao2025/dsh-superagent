@@ -405,6 +405,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/infra/commands.ts` | `Commands`，CLI 传输：`run`；`api` 和 `pages`，限制在已配置仓库并经过校验；`glab`、`gitlabApi` 和 `gitlabPages`，限制在已配置的 GitLab 项目并经过校验；以机器人身份运行的 `lark`；`git`。`CliError` 携带命令输出报告的错误码，例如 GitHub 或 GitLab 的 HTTP 状态；不打印任何内容的命令以结束方式失败，绝不带出其参数；`validItems` 跳过并计数列表中的格式错误项 |
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |
 | `src/infra/worker-sources.ts` | 执行侧的分发数据与调度器：工单目录到来源记录的登记（`recordTicketSource`）、记录到 CLI 的表（`writeWorkerRecords`），以及按记录选择 CLI 的 `WORKER_DISPATCH_BODY` |
+| `src/infra/git-timeout.ts` | `withGitTimeout`：给已绑定的 `Commands` 覆盖 git 类命令的超时（项目 `execution.gitTimeoutSeconds`），其余方法委托原对象 |
 | `src/infra/paths.ts` | 包的根目录，即打包文件所在位置 |
 | `src/infra/text.ts` | 字数统计和聊天消息限制、`fill` 和 `sameName` |
 | `src/infra/health.ts` | `HealthBoard`，每个部分的健康条目，各由其唯一写入者认领 |
@@ -503,6 +504,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/workspace.spec.ts` | 工单执行工作区：从轮询工作副本检出独立 worktree、复用、拒绝覆盖与移除 |
 | `tests/workspace-gc.spec.ts` | 执行工作区回收：保留期、运行中与未知目录、禁用回收与删除失败 |
 | `tests/queue.spec.ts` | 项目调度队列：全局 FIFO 与项目轮转、消失取消与重现、失败退避与最终失败（每次重试都是新工单）、工作项级增删改、`runOnStart`、停用/删除项目、活动条目唯一索引与终态清理、回写副作用与重启恢复 |
+| `tests/scheduler-batch1.spec.ts` | 调度可靠性批次：到期时间 ±10% 抖动（注入固定随机源）、一轮检查内项目的有界并发轮询（慢项目不阻塞同批、单项目失败不中断）、项目级 prepare 优先于全局命令，以及 `withGitTimeout` 覆盖 |
 | `tests/client.spec.tsx`、`tests/navigation.spec.ts`、`tests/controls.spec.tsx` | 客户端插件的注册和轮询、会话导航和路由记忆、本地控件，以及面板的导入无循环依赖 |
 | `tests/thread-timeline.spec.ts` | 线程时间线的客户端合并：新页与已加载更早页之间的间隙检测、按时间去重合并（重复 id 以更早页为准）与分页游标推进 |
 | `tests/panel-overview.spec.tsx`、`panel-source.spec.tsx`、`panel-trigger.spec.tsx`、`panel-eval.spec.tsx`、`panel-execution.spec.tsx` | 面板的每个页面，针对按路由应答的假管理 API |

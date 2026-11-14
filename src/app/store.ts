@@ -138,6 +138,19 @@ export class Store implements Repositories {
       CREATE INDEX IF NOT EXISTS queue_seq ON queue(seq);
     `)
   }
+  /**
+   * 规范化一段 SQL 列定义用于比对：压平空白、去掉双引号。
+   * SQLite 重建表时 `sqlite_master.sql` 的空白与引号格式可能与这里保存的字面量不同，
+   * 逐字 `includes` 比对会漏判漂移；按规范化后的子串匹配，格式扰动不再影响判定。
+   * 不改大小写：定义里的字符串字面量（如状态枚举 `'queued'`）区分大小写。
+   */
+  private static normalizeDefinition(definition: string): string {
+    return definition.replace(/\s+/g, ' ').trim().replaceAll('"', '')
+  }
+  /** `sqlite_master.sql` 中是否包含规范化后的列定义（在生成列名之后）。 */
+  private static sqlHasColumn(sql: string, name: string, definition: string): boolean {
+    return Store.normalizeDefinition(sql).includes(`${name} ${Store.normalizeDefinition(definition)}`)
+  }
   /** 确保工作集列与索引和当前构建一致；定义变化的生成列会被重建。 */
   private addColumns(): void {
     const columns = (table: string) => new Set(this.db.prepare('SELECT name FROM pragma_table_xinfo(?)').all(table).map(row => String(row.name)))
@@ -146,8 +159,14 @@ export class Store implements Repositories {
       const sql = String(this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)?.sql ?? '')
       const generated = this.db.prepare('SELECT name FROM pragma_table_xinfo(?) WHERE hidden IN (2, 3)').all(table).map(row => String(row.name))
       for (const name of generated) {
-        if (definitions[name] && sql.includes(`${name} ${definitions[name]}`)) continue
-        this.db.exec(`DROP INDEX IF EXISTS ${table}_${name}; ALTER TABLE ${table} DROP COLUMN ${name}`)
+        if (definitions[name] && Store.sqlHasColumn(sql, name, definitions[name]!)) continue
+        // 引用该列的索引都要先删（名称不一定是 `<table>_<column>`，例如唯一索引 `queue_unique_active`）。
+        for (const index of this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?").all(table)
+          .map(row => String(row.name))) {
+          const indexSql = String(this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?").get(index)?.sql ?? '')
+          if (indexSql && Store.normalizeDefinition(indexSql).includes(name)) this.db.exec(`DROP INDEX IF EXISTS ${index}`)
+        }
+        this.db.exec(`ALTER TABLE ${table} DROP COLUMN ${name}`)
       }
       const existing = columns(table)
       for (const [name, definition] of Object.entries(definitions)) {

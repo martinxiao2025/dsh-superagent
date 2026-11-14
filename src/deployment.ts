@@ -24,7 +24,9 @@ export const Config = s.object({
   admissionContextTimeoutMs: s.number().min(LIMITS.admissionContextTimeoutMs.min).max(LIMITS.admissionContextTimeoutMs.max).step(1)
     .default(15000).description('Time limit of one context read during an assessment, in milliseconds.').volatile(),
   commandTimeoutMs: s.number().min(LIMITS.commandTimeoutMs.min).max(LIMITS.commandTimeoutMs.max).step(1).default(90_000)
-    .description('Time limit of one CLI or git command, in milliseconds.').volatile(),
+    .description('Time limit of one CLI command, in milliseconds.').volatile(),
+  gitTimeoutMs: s.number().min(LIMITS.gitTimeoutMs.min).max(LIMITS.gitTimeoutMs.max).step(1).default(600_000)
+    .description('Time limit of one git command (clone, fetch, merge), in milliseconds; larger than the CLI timeout because a first clone of a big repository takes minutes. A project\'s git timeout setting overrides this per command.').volatile(),
   githubCli: s.string().default('gh').description('GitHub CLI used when a GitHub code repository record leaves it empty.').volatile(),
   gitlabCli: s.string().default('glab').description('GitLab CLI used when a GitLab code repository record leaves it empty.').volatile(),
   githubHost: s.string().default('github.com').description('Host used for GitHub records that leave the instance address empty.').volatile(),
@@ -42,6 +44,7 @@ export interface Machine {
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
   commandTimeoutMs: Volatile<number>
+  gitTimeoutMs: Volatile<number>
   githubCli: Volatile<string>
   gitlabCli: Volatile<string>
   githubHost: Volatile<string>
@@ -58,10 +61,10 @@ const MOVED: Record<string, string> = {
 export function machineOf(config: DeploymentConfig): Machine {
   const unknown = Object.keys(config).filter(key => !(key in (Config.dict ?? {})))
   if (unknown.length) throw new Error(`dsh-superagent configuration has keys it does not use: ${unknown.map(key => MOVED[key] ? `${key} (now ${MOVED[key]})` : key).join(', ')}; docs/006-deployment.md lists the keys`)
-  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, commandTimeoutMs, githubCli, gitlabCli, githubHost, gitlabHost,
-    workspaceRetentionDays } = config
-  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, commandTimeoutMs, githubCli, gitlabCli, githubHost, gitlabHost,
-    workspaceRetentionDays }
+  const { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, commandTimeoutMs, gitTimeoutMs, githubCli, gitlabCli, githubHost,
+    gitlabHost, workspaceRetentionDays } = config
+  return { stateDir, promptMaxChars, admissionContextMaxPages, admissionContextTimeoutMs, commandTimeoutMs, gitTimeoutMs, githubCli, gitlabCli, githubHost,
+    gitlabHost, workspaceRetentionDays }
 }
 
 /**

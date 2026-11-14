@@ -106,7 +106,9 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     },
     executor: { slotsInUse: () => 0, projectsInUse: () => [] },
     commands: { scope: () => ({}) } as never, stateDir: 'C:/tmp', lifetime: new AbortController().signal,
-    syncRepo: async () => 'C:/tmp/repo', now: () => clock }
+    syncRepo: async () => 'C:/tmp/repo', now: () => clock,
+    // 固定 0.5 抖动：到期时间恰为间隔本身，时间推进断言保持确定。
+    jitter: () => 0.5 }
   const scheduler = new ProjectScheduler(host)
   /** 执行排队的回写副作用；真实实现由 Effects 在工作线程外调用同一个处理器。 */
   const flush = async () => {

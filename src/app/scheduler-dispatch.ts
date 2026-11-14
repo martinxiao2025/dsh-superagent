@@ -49,17 +49,15 @@ export class SchedulerDispatch {
   }
 
   settle(entry: QueueEntry, ticket: Ticket | undefined): void {
-    if (!ticket) return this.retry(entry, 'The ticket disappeared')
-    if (ticket.ended) {
-      const { outcome, by } = ticket.ended
-      if (outcome === 'completed' || outcome === 'merged' || outcome === 'closed') return this.succeed(entry)
-      if (outcome === 'stopped' && by === 'human') return this.finish(entry, 'cancelled', 'Stopped by a person')
-      return this.retry(entry, `The ticket ended: ${outcome}`)
-    }
-    // 工作单元报告失败或阻塞后工单在等人；项目重试接管，不再依赖人工跟进。
-    if (ticketStage(ticket).stage === 'person') {
-      this.base.host.store.atomic(() => this.base.host.engine.stopTicket(ticket.id, 'The assignment did not finish; the project retries it'))
-      return this.retry(entry, 'The assignment did not finish')
+    // 动作数据由纯函数 `settleOutcome` 给出（终态映射的唯一出口）；这里只负责按序解释执行。
+    for (const action of settleOutcome(entry, ticket)) {
+      if (action.kind === 'succeed') this.succeed(entry)
+      else if (action.kind === 'finish') this.finish(entry, action.state, action.reason)
+      else if (action.kind === 'stop-then-retry') {
+        this.base.host.store.atomic(() => this.base.host.engine.stopTicket(action.ticketId,
+          'The assignment did not finish; the project retries it'))
+        this.retry(entry, action.reason)
+      } else this.retry(entry, action.reason)
     }
   }
 
@@ -171,4 +169,32 @@ export class SchedulerDispatch {
     const slug = entry.task.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24)
     return `task-${slug || entry.item}`
   }
+}
+
+/** settleOutcome 的一个结算动作；`stop` 先停工单（person 阶段的项目接管），其余按队列侧动作命名。 */
+export type SettleAction =
+  | { kind: 'retry'; reason: string }
+  | { kind: 'succeed' }
+  | { kind: 'finish'; state: 'cancelled'; reason: string }
+  | { kind: 'stop-then-retry'; ticketId: string; reason: string }
+
+/**
+ * 工单终态 → 队列结算的唯一映射出口。
+ * 输入只依赖队列条目与工单的当前事实，输出动作数据；recover、observe（工单结束回调）
+ * 与 settle 的所有调用方共用这一份语义，改动终态语义时只有这里一个出口。
+ * `forget` 的时序契约（先停工单再清队列、迟到 observe 找不到条目）不在此列，由调用方保证。
+ */
+export function settleOutcome(entry: QueueEntry, ticket: Ticket | undefined): readonly SettleAction[] {
+  if (!ticket) return [{ kind: 'retry', reason: 'The ticket disappeared' }]
+  if (ticket.ended) {
+    const { outcome, by } = ticket.ended
+    if (outcome === 'completed' || outcome === 'merged' || outcome === 'closed') return [{ kind: 'succeed' }]
+    if (outcome === 'stopped' && by === 'human') return [{ kind: 'finish', state: 'cancelled', reason: 'Stopped by a person' }]
+    return [{ kind: 'retry', reason: `The ticket ended: ${outcome}` }]
+  }
+  // 工作单元报告失败或阻塞后工单在等人；项目重试接管，不再依赖人工跟进。
+  if (ticketStage(ticket).stage === 'person') {
+    return [{ kind: 'stop-then-retry', ticketId: ticket.id, reason: 'The assignment did not finish' }]
+  }
+  return []
 }

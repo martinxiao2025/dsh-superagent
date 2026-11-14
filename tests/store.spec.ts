@@ -252,6 +252,22 @@ it('replaces a working-set column an earlier build defined otherwise, and drops 
   store.close()
 })
 
+it('keeps a generated column whose stored DDL spells the same definition with different whitespace or quoting', () => {
+  const path = join(directory, 'orchestrator.sqlite')
+  const db = new DatabaseSync(path)
+  // 同一语义的 `open` 定义用不同空白与双引号书写；规范化比对后不应误判为漂移而重建。
+  db.exec(`CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE ticket (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+    ALTER TABLE ticket ADD COLUMN "open" INTEGER AS (CASE WHEN value ->> '$.ended' IS NULL THEN 1 END);
+    CREATE INDEX ticket_open ON ticket("open") WHERE "open" IS NOT NULL`)
+  db.prepare('INSERT INTO kv VALUES (?,?)').run('schema', String(SCHEMA_VERSION))
+  db.prepare('INSERT INTO ticket (id, value) VALUES (?,?)').run('t', JSON.stringify(ticket('t', 'open', [{ state: 'running' }])))
+  db.close()
+  const store = new Store(path)
+  // 列未被删除重建（数据保留），且工作集读取仍然正确。
+  expect(ids(store.tickets.open())).toEqual(['t'])
+  store.close()
+})
+
 it('lists in the same order in SQLite and in memory, and undoes a failed nested transaction alone in both', () => {
   const store = new Store(join(directory, 'orchestrator.sqlite'))
   const order = (items: { id?: string; key?: string }[]) => items.map(item => item.id ?? item.key)

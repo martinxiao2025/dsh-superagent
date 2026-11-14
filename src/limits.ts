@@ -13,5 +13,9 @@ export const LIMITS = {
   admissionContextMaxPages: { min: 1, max: 100 },
   admissionContextTimeoutMs: { min: 1, max: 90_000 },
   commandTimeoutMs: { min: 1_000, max: 3_600_000 },
+  /** git 类命令（clone/fetch/merge）单独的超时界限；默认值与上限都宽于普通 CLI。 */
+  gitTimeoutMs: { min: 1_000, max: 3_600_000 },
+  /** 项目级 git 超时覆盖（秒）；0 表示沿用全局配置。 */
+  projectGitTimeoutSeconds: { min: 0, max: 3600 },
   workspaceRetentionDays: { min: 0, max: 3650 },
 } as const

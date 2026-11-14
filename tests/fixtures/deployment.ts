@@ -9,7 +9,8 @@ export const reference = <T>(value: T): Volatile<T> & { set(next: T): void } => 
 }
 export const testMachine = (overrides: Partial<Machine> = {}): Machine => ({
   stateDir: '/tmp/dsh-superagent-test', promptMaxChars: reference(100000), admissionContextMaxPages: reference(10),
-  admissionContextTimeoutMs: reference(15000), commandTimeoutMs: reference(90_000), githubCli: reference('gh'), gitlabCli: reference('glab'),
+  admissionContextTimeoutMs: reference(15000), commandTimeoutMs: reference(90_000), gitTimeoutMs: reference(600_000),
+  githubCli: reference('gh'), gitlabCli: reference('glab'),
   githubHost: reference('github.com'), gitlabHost: reference('gitlab.com'), workspaceRetentionDays: reference(14), ...overrides,
 })
 export const testGithub = (overrides: Partial<ResolvedGithubSource> = {}): ResolvedGithubSource => ({

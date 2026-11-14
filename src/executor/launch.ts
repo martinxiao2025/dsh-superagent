@@ -52,6 +52,11 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
   return { name, project: identity, directory, assignment }
 }
 
+/** 准备命令的选择：项目级 prepare 优先于全局 executor.prepare；无仓库的工单只能用全局命令，避免多项目共享缓存互相污染。 */
+export function prepareCommandOf(settings: Settings, project: Settings['projects'][string] | undefined, repo: string): string {
+  return (repo && project?.execution.prepare?.trim()) || settings.executor.prepare.trim()
+}
+
 /**
  * 以工单的执行环境变量，在工单工作区中运行配置的 `executor.prepare` 命令，然后按工作单元的视角校验该目录。
  * 项目工单会先把项目代码仓库检出到工单目录：worker 必须在真实仓库副本上工作，而不是一个空目录。
@@ -72,7 +77,9 @@ export async function prepareDirectory(w: WorkerContext, ticket: Ticket): Promis
     ? await materializeWorkspace({ git: checkout, stateDir: host.machine.stateDir, repo, directory,
       branch: project!.execution.branch, signal: host.lifetime })
     : undefined
-  const command = settings.executor.prepare.trim()
+  // 项目级 prepare 优先：项目工作区（仓库检出）内安装项目自己的依赖；全局命令只对无仓库的工单兜底，
+  // 避免多个项目共享同一份缓存与同一套凭据注入互相污染。
+  const command = prepareCommandOf(settings, project, repo)
   const env = Object.fromEntries(host.environment(ticket).map(variable => [variable.key, variable.value]))
   // 强制超时，使挂起的准备命令（例如在凭据提示上）让工单失败，而不是无限占用工作单元槽位。
   const signal = AbortSignal.any([host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])

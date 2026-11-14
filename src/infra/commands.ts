@@ -211,6 +211,14 @@ export class Commands {
     if (!result.ok) throw membership(new CliError(`${result.error?.message ?? 'Feishu command failed'}${code ? ` (${code})` : ''}`, code))
     return result.data
   }
-  /** 在 PATH 上使用智能体隔离的 git 环境和凭据助手运行 `git`。 */
-  async git(args: string[], cwd: string): Promise<string> { return this.run('git', args, cwd) }
+  /** 在 PATH 上使用智能体隔离的 git 环境和凭据助手运行 `git`；git 类命令（clone/fetch/merge）用独立的更长超时，项目可用更长的覆盖值。 */
+  async git(args: string[], cwd: string, timeoutMs?: number): Promise<string> {
+    const limit = timeoutMs ?? this.deployment.gitTimeoutMs.get()
+    try {
+      const { file, args: argv, windowsVerbatimArguments } = spawnCommand('git', args)
+      const { stdout } = await exec(file, argv, { cwd, signal: this.signal, timeout: limit, maxBuffer: 16 * 1024 * 1024, windowsVerbatimArguments,
+        env: { ...process.env, ...this.environment, ...this.hostEnvironment() } })
+      return stdout
+    } catch (error) { throw commandError(error, 'git', limit) }
+  }
 }

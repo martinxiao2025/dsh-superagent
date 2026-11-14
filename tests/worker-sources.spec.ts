@@ -98,8 +98,9 @@ describe('worker dispatch script', () => {
     delete env.DSH_SUPERAGENT_SOURCE
     const probe = JSON.parse((await runProgram(process.execPath, [join(dir, 'worker-dispatch.mjs'), 'gh'],
       { cwd: dir, env, timeout: 15_000 })).stdout) as Probe
-    // 其余条目按原顺序保留，非 PATH 变量原样传递。
-    expect(probe.path).toBe([extra, process.env.PATH ?? ''].join(delimiter))
+    // 其余条目按原顺序保留（分发脚本会丢弃空条目），非 PATH 变量原样传递。
+    const rest = (process.env.PATH ?? '').split(delimiter).filter(entry => entry !== '')
+    expect(probe.path).toBe([extra, ...rest].join(delimiter))
     expect(probe.marker).toBe('kept')
   })
   it('forwards arguments, injects the git credential protocol, and passes the CLI\'s exit code through', async () => {

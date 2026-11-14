@@ -12,7 +12,7 @@ const project = {
   codeRepo: { kind: 'github' as const, config: { repository: 'acme/widgets' } },
   taskSource: { kind: 'excel', config: {} },
   gitCredential: '', feishuCredential: '',
-  execution: { directory: '', branch: '' },
+  execution: { directory: '', branch: '', prepare: '', gitTimeoutSeconds: 0 },
   schedule: { intervalMinutes: 30, runOnStart: true },
   retry: { maxRetries: 2, retryBackoffSeconds: 60 },
   taskPolicy: { pendingStatuses: ['待处理', 'todo'], doneStatus: '已完成', failedStatus: '失败' },
@@ -131,7 +131,7 @@ it('creates a project through the four-step wizard and saves the full configurat
   expect(server.settings.projects.project).toMatchObject({
     name: '内容运营', codeRepo: { kind: 'github', config: { remote: 'https://github.com/acme/content.git', auth: 'https' } },
     taskSource: { kind: 'excel', config: {} }, gitCredential: '', feishuCredential: '',
-    execution: { directory: '/srv/work/content', branch: 'main' },
+    execution: { directory: '/srv/work/content', branch: 'main', prepare: '', gitTimeoutSeconds: 0 },
     schedule: { intervalMinutes: 5, runOnStart: true },
     retry: { maxRetries: 4, retryBackoffSeconds: 30 },
     taskPolicy: { pendingStatuses: ['todo', 'pending'], doneStatus: '已完成', failedStatus: '失败' },
