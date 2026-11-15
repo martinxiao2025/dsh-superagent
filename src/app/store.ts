@@ -7,6 +7,7 @@ import { key, threadKey, type ChannelRef, type Decision, type OutboundMessage, t
   type ThreadFacts, type Ticket, type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { KV, type Family, type Key } from '../kv.ts'
 import { QueueEntrySchema, type QueueEntry } from '../queue/model.ts'
+import { ProjectSchema, type Project } from '../projects/kind.ts'
 import { SettingsSchema, type Settings, type SettingsOrigin, type SettingsSave } from '../policy.ts'
 import type { GitCredential } from '../git-credentials/kind.ts'
 import type { FeishuCredential } from '../feishu-credentials/kind.ts'
@@ -57,9 +58,16 @@ const SETS: Record<string, Record<string, string>> = {
     // 建单后的工单反查（调度器结算）：只在建单中/执行中的行上非 NULL，终态行不会误命中。
     ticketId: `TEXT AS (CASE WHEN value ->> '$.state' IN ('starting','running') THEN value ->> '$.ticketId' END)`,
   },
+  // 用量记录（append-only）：按工单的预算求和与按模型/阶段的聚合都靠生成列定位。
+  usage: {
+    ticket: "TEXT AS (value ->> '$.ticket')",
+    scope: "TEXT AS (value ->> '$.scope')",
+    model: "TEXT AS (value ->> '$.model')",
+    stage: "TEXT AS (value ->> '$.stage')",
+  },
 }
 /** 当前数据库模式版本；只有这一版本的数据库可以被打开，其他版本必须重置。 */
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 15
 /** 工单的关键字段形状：读取时校验这些不变量，未知字段放行；与 `entity` 的 fail-fast 策略一致。 */
 const TicketShape = z.object({
   id: z.string(), title: z.string(), decisionId: z.string(), createdAt: z.string(), updatedAt: z.string(),
@@ -80,6 +88,32 @@ const DecisionShape = z.object({
   policyVersion: z.string(), at: z.string(), kind: z.string(), strength: z.string(),
   reason: z.array(z.unknown()),
 }).passthrough()
+/** 项目记录的关键字段形状：读取时校验这些不变量，未知字段放行；记录键不在文档里（与原设置快照同构）。 */
+const ProjectShape = z.object({ name: z.string(), enabled: z.boolean() }).passthrough()
+/** 一次模型请求结算的用量记录；计数不相交（billed input = input + cacheRead + cacheWrite）。 */
+export interface UsageRecord {
+  at: string
+  /** 承载该请求的 DSH 会话 ID。 */
+  session: string
+  /** 归因范围：编排主会话或（子代理经父链归因后的）工单工作单元。 */
+  scope: 'master' | 'worker' | 'subagent'
+  /** 归因到的工单；主会话评估请求没有工单。 */
+  ticket?: string
+  provider: string
+  model: string
+  /** 请求发生时工单所处的工作阶段；主会话与未声明阶段的工单没有该字段。 */
+  stage?: string
+  input: number
+  output: number
+  total?: number
+  cacheRead: number
+  cacheWrite: number
+  reasoning: number
+  /** 请求绑定的提示词修订（`KV.sessions.prompts` 的最新值）。 */
+  promptRevision?: number
+}
+/** 一个工单（或全局）的用量合计；`requests` 为计入的请求数。 */
+export interface UsageSum { requests: number; input: number; output: number; cacheRead: number; cacheWrite: number; reasoning: number }
 /** 拒绝打开其他模式版本的错误消息：本版本不做迁移，只能备份后用 `reset` 从空基线重新开始。 */
 const unsupported = (version: number): string =>
   `Unsupported orchestrator database version ${version}: this build opens schema ${SCHEMA_VERSION} only; back it up and start from an empty baseline with reset (the panel's Reset action, \`reset\` command, or the resetState setting)`
@@ -130,6 +164,8 @@ export class Store implements Repositories {
         generation INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', due INTEGER NOT NULL,
         since TEXT NOT NULL, PRIMARY KEY (kind, key));
       CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, value TEXT NOT NULL, seq INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS project (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS usage (seq INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS git_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS feishu_credential (id TEXT PRIMARY KEY, value TEXT NOT NULL, at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS trigger_at ON trigger(at);
@@ -302,6 +338,69 @@ export class Store implements Repositories {
     list: (): FeishuCredential[] => this.values('SELECT value FROM feishu_credential ORDER BY rowid'),
     save: (value: FeishuCredential): void => { this.db.prepare('INSERT INTO feishu_credential VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, at=excluded.at').run(value.id, JSON.stringify(value), value.updatedAt) },
     remove: (id: string): void => { this.db.prepare('DELETE FROM feishu_credential WHERE id=?').run(id) },
+  }
+  /** 项目记录：交付单元独立建表，不再随设置快照整体重写；写路径由 `Settings` 服务在块事务内维护。 */
+  readonly projects = {
+    get: (id: string): Project | undefined => {
+      const row = this.db.prepare('SELECT value FROM project WHERE id=?').get(id)
+      return row ? this.entity<Project>(String(row.value), 'project', '', id) : undefined
+    },
+    /** 全部项目，按创建顺序；列表读取跳过单行损坏并上报（与 `entityValues` 同口径）。 */
+    list: (): { id: string; project: Project }[] => {
+      const items: { id: string; project: Project }[] = []
+      for (const row of this.db.prepare('SELECT id, value FROM project ORDER BY rowid').all()) {
+        try {
+          const id = String(row.id), parsed = ProjectShape.safeParse(JSON.parse(String(row.value)))
+          if (!parsed.success) throw new Error(`The project record ${id} is corrupt: ${parsed.error.issues.map(issue => issue.message).join('; ')}`)
+          items.push({ id, project: parsed.data as unknown as Project })
+        } catch (error) { this.report(error) }
+      }
+      return items
+    },
+    /** 项目的 `Record` 视图，供原本读取 `settings.projects` 的调用点平移。 */
+    map: (): Record<string, Project> => Object.fromEntries(this.projects.list().map(({ id, project }) => [id, project])),
+    save: (id: string, project: Project): void => {
+      this.db.prepare('INSERT INTO project VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value, at=excluded.at')
+        .run(id, JSON.stringify(project), new Date().toISOString())
+    },
+    remove: (id: string): void => { this.db.prepare('DELETE FROM project WHERE id=?').run(id) },
+  }
+  /** 模型用量流水（append-only）：预算求和按工单聚合，回顾报告按修订/模型/阶段聚合。 */
+  readonly usage = {
+    add: (record: UsageRecord): void => { this.db.prepare('INSERT INTO usage (value) VALUES (?)').run(JSON.stringify(record)) },
+    /** 一个工单的全部用量行，按时间顺序。 */
+    forTicket: (ticketId: string): UsageRecord[] => this.values("SELECT value FROM usage WHERE ticket = ? ORDER BY seq", ticketId),
+    /** 一个工单的用量合计；无任何记录时返回 undefined（预算闸据此跳过）。 */
+    sumTicket: (ticketId: string): UsageSum | undefined => {
+      const row = this.db.prepare(`SELECT COUNT(*) AS requests, SUM(COALESCE(value ->> '$.input', 0)) AS input,
+        SUM(COALESCE(value ->> '$.output', 0)) AS output, SUM(COALESCE(value ->> '$.cacheRead', 0)) AS cacheRead,
+        SUM(COALESCE(value ->> '$.cacheWrite', 0)) AS cacheWrite, SUM(COALESCE(value ->> '$.reasoning', 0)) AS reasoning
+        FROM usage WHERE ticket = ?`).get(ticketId) as Record<string, number | null> | undefined
+      if (!row || !Number(row.requests)) return undefined
+      return { requests: Number(row.requests), input: Number(row.input ?? 0), output: Number(row.output ?? 0),
+        cacheRead: Number(row.cacheRead ?? 0), cacheWrite: Number(row.cacheWrite ?? 0), reasoning: Number(row.reasoning ?? 0) }
+    },
+    /** 全局用量合计（面板总览）。 */
+    sum: (): UsageSum => {
+      const row = this.db.prepare(`SELECT COUNT(*) AS requests, SUM(COALESCE(value ->> '$.input', 0)) AS input,
+        SUM(COALESCE(value ->> '$.output', 0)) AS output, SUM(COALESCE(value ->> '$.cacheRead', 0)) AS cacheRead,
+        SUM(COALESCE(value ->> '$.cacheWrite', 0)) AS cacheWrite, SUM(COALESCE(value ->> '$.reasoning', 0)) AS reasoning FROM usage`)
+        .get() as Record<string, number | null>
+      return { requests: Number(row.requests ?? 0), input: Number(row.input ?? 0), output: Number(row.output ?? 0),
+        cacheRead: Number(row.cacheRead ?? 0), cacheWrite: Number(row.cacheWrite ?? 0), reasoning: Number(row.reasoning ?? 0) }
+    },
+    /** 按模型聚合（面板用量卡）。 */
+    byModel: (): (UsageSum & { provider: string; model: string })[] => {
+      return this.db.prepare(`SELECT value ->> '$.provider' AS provider, value ->> '$.model' AS model, COUNT(*) AS requests,
+        SUM(COALESCE(value ->> '$.input', 0)) AS input, SUM(COALESCE(value ->> '$.output', 0)) AS output,
+        SUM(COALESCE(value ->> '$.cacheRead', 0)) AS cacheRead, SUM(COALESCE(value ->> '$.cacheWrite', 0)) AS cacheWrite,
+        SUM(COALESCE(value ->> '$.reasoning', 0)) AS reasoning FROM usage GROUP BY provider, model ORDER BY input + cacheRead + cacheWrite DESC`).all()
+        .map(row => ({ provider: String(row.provider), model: String(row.model), requests: Number(row.requests),
+          input: Number(row.input ?? 0), output: Number(row.output ?? 0), cacheRead: Number(row.cacheRead ?? 0),
+          cacheWrite: Number(row.cacheWrite ?? 0), reasoning: Number(row.reasoning ?? 0) }))
+    },
+    /** 最新的 `limit` 条用量记录，最新的在前（面板流水页）。 */
+    recent: (limit = 50): UsageRecord[] => this.values('SELECT value FROM usage ORDER BY seq DESC LIMIT ?', limit),
   }
   readonly threads = {
     get: (keyValue: string): Thread | undefined => { const row = this.db.prepare('SELECT value FROM thread WHERE key=?').get(keyValue); return row ? this.entity<Thread>(String(row.value), 'thread', 'key', keyValue) : undefined },

@@ -48,8 +48,7 @@ export class SchedulerWriteback {
    *  最终状态由全部条目的结果聚合而成——多工作项任务不再由「最后结算的那个工作项」决定清单状态。
    */
   writeBack(entry: QueueEntry, kind: 'done' | 'failed'): void {
-    const settings = this.base.host.settings()
-    const project = settings.projects[entry.project]
+    const project = this.base.host.project(entry.project)
     const driver = project && this.base.registry.kind(project.taskSource.kind)
     if (!project || !driver?.writeback) return
     // 任务聚合：同任务的其他工作项仍在活动态时不回写，等最后一个工作项结算时统一写。
@@ -72,8 +71,7 @@ export class SchedulerWriteback {
     // 与轮询互斥（评审 S9）：poll 副作用正在 fetch/merge 同一镜像时推迟回写，
     // 避免写回提交落在 checkout 覆盖后的内容上或制造 index.lock 冲突。
     if (this.base.polling(payload.project)) throw new Later('The project is being polled; the writeback is deferred until the poll finishes')
-    const settings = this.base.host.settings()
-    const project = settings.projects[payload.project]
+    const project = this.base.host.project(payload.project)
     const driver = project && this.base.registry.kind(project.taskSource.kind)
     if (!project || !driver?.writeback) throw new Error(`The task source for ${payload.project} is unavailable`)
     const parsed = driver.schema.safeParse(this.base.sourceConfig(driver.fields, project.taskSource.config, project.feishuCredential))

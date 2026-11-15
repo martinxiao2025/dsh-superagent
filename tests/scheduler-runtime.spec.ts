@@ -138,7 +138,7 @@ describe('调度器与真实引擎集成', () => {
   it('轮询入队 → 建单 → worker 首条消息承载任务 → 报告完成 → 队列结算并回写驱动', async () => {
     driver.tasks = [task('t1', '登录修复')]
     const current = runtime.store.settings()
-    runtime.store.saveSettings({ ...current, projects: { p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     // scan 一轮完成轮询、建单与派工：真实引擎创建了工单与 worker 会话。
     await runtime.scheduler.scan()
     await runtime.idle()
@@ -168,7 +168,7 @@ describe('调度器与真实引擎集成', () => {
 
   it('worker 报告失败时队列按项目退避重试，重试产生新工单', async () => {
     driver.tasks = [task('t2', '导出修复')]
-    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     await runtime.scheduler.scan()
     await runtime.idle()
     const entry = runtime.store.queue.list()[0]!
@@ -194,7 +194,7 @@ describe('调度器与真实引擎集成', () => {
 
   it('停用项目保留排队项；重新启用后继续派工', async () => {
     driver.tasks = [task('t3', '样式修复')]
-    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     await runtime.scheduler.scan()
     await runtime.idle()
     const first = runtime.store.queue.list()[0]!
@@ -209,14 +209,14 @@ describe('调度器与真实引擎集成', () => {
     const queuedBefore = runtime.store.queue.list().filter(entry => entry.task === 't4')
     expect(queuedBefore).toHaveLength(1)
     const settings = runtime.store.settings()
-    runtime.store.saveSettings({ ...settings, projects: { ...settings.projects, p1: { ...project('p1'), enabled: false } as never } })
+    runtime.store.projects.save('p1', { ...project('p1'), enabled: false } as never)
     runtime.scheduler.pump()
     await runtime.idle()
     const queued = runtime.store.queue.list().filter(entry => entry.task === 't4')
     expect(queued).toHaveLength(1)
     expect(queued[0]).toMatchObject({ state: 'queued' })
     // 重新启用后继续派工。
-    runtime.store.saveSettings({ ...settings, projects: { ...settings.projects, p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     runtime.scheduler.pump()
     await runtime.idle()
     expect(runtime.store.queue.get(queued[0]!.id)).toMatchObject({ state: 'running' })
@@ -227,7 +227,7 @@ describe('调度器与真实引擎集成', () => {
     // pump 会幂等拿回历史尝试已结束的旧工单——重试不执行任何新工单还会再次回写失败。
     // 修复：triggerId 纳入 tickets.length（工单历史代次，永不复位）。
     driver.tasks = [task('t5', '部署修复')]
-    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     await runtime.scheduler.scan()
     await runtime.idle()
     const entry = runtime.store.queue.list()[0]!
@@ -258,7 +258,7 @@ describe('调度器与真实引擎集成', () => {
     // 回归背景：settleOutcome 曾对全部 person 阶段 stop-then-retry——worker 通过 attention
     // 提的问题会在 15 秒内被强停重建，问题丢失且烧掉重试预算。现在只有 blocked/failed 接管。
     driver.tasks = [task('t6', '设计确认')]
-    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     await runtime.scheduler.scan()
     await runtime.idle()
     const entry = runtime.store.queue.list()[0]!
@@ -278,7 +278,7 @@ describe('调度器与真实引擎集成', () => {
 
   it('worker 报告 blocked 时项目按既有语义接管（评审 C2 白名单的反向验证）', async () => {
     driver.tasks = [task('t7', '构建修复')]
-    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    runtime.store.projects.save('p1', project('p1') as never)
     await runtime.scheduler.scan()
     await runtime.idle()
     const entry = runtime.store.queue.list()[0]!

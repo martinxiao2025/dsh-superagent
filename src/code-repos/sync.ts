@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type { Commands } from '../infra/commands.ts'
 import { hostOf, type Probe, type RepoAuth } from '../deployment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
+import { normalizePath } from '../infra/win32.ts'
 import type { SecretMaterial } from '../secrets/vault.ts'
 
 /** 一次 git 调用的认证材料；只来自 Git 凭据，不进入设置或日志。 */
@@ -283,12 +284,9 @@ async function isRepository(git: (args: string[]) => Promise<string>, directory:
   return top !== '' && samePath(top, directory)
 }
 
-/** 比较两个路径是否指向同一目录；Windows 大小写不敏感且允许混用分隔符。 */
+/** 比较两个路径是否指向同一目录；规则单源在 `infra/win32.ts` 的 `normalizePath`（Windows 大小写不敏感）。 */
 function samePath(left: string, right: string): boolean {
-  const normalize = (value: string): string => resolve(value).replace(/\\/g, '/')
-  const a = normalize(left)
-  const b = normalize(right)
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+  return normalizePath(left) === normalizePath(right)
 }
 
 /** 当前提交；空仓库返回空字符串。 */

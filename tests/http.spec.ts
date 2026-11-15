@@ -7,6 +7,7 @@ import { SettingsConflict } from '../src/app/settings.ts'
 import type { HttpHost } from '../src/app/http/routes.ts'
 import type { StartupStatus } from '../src/app/startup.ts'
 import { SettingsSchema } from '../src/policy.ts'
+import { ProjectSchema } from '../src/projects/kind.ts'
 import { SetupError } from '../src/setup.ts'
 import { ApiError, caller } from '../src/client/api.ts'
 import { zh } from '../src/client/locales.ts'
@@ -80,18 +81,19 @@ it('serves the scheduling queue snapshot for the panel', async () => {
 })
 
 it('serves a Project\'s Tasks and queue state for the panel', async () => {
-  const settings = SettingsSchema.parse({ projects: { a: { name: 'A',
-    codeRepo: { kind: 'github', config: { repository: 'acme/widgets' } },
-    taskSource: { kind: 'excel', config: { file: '/tasks.csv' } } } } })
+  const settings = SettingsSchema.parse({})
+  const project = ProjectSchema.parse({ name: 'A', codeRepo: { kind: 'github', config: { repository: 'acme/widgets' } },
+    taskSource: { kind: 'excel', config: { file: '/tasks.csv' } } })
+  const projects: Record<string, typeof project> = { a: project }
   const item = { id: 'q1', project: 'a', projectName: 'A', task: 't1', item: 0, title: '一', state: 'running' as const, attempt: 0,
     dueAt: 0, ticketId: 'ticket-1', enqueuedAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }
-  const call = serve({ configured: () => true, store: { settings: () => settings },
+  const call = serve({ configured: () => true, store: { settings: () => settings, projects: { get: (id: string) => projects[id] } },
     queue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item], projects: [] }),
     projectQueue: () => ({ at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, items: [item], projects: [] }) })
   expect(await call('GET', 'projects/a/tasks')).toEqual({ status: 200, body: {
     project: { id: 'a', name: 'A', enabled: true, codeRepo: { kind: 'github', name: 'acme/widgets' },
-      taskSource: { kind: 'excel', name: 'excel' }, execution: settings.projects.a!.execution,
-      schedule: settings.projects.a!.schedule, retry: settings.projects.a!.retry, taskPolicy: settings.projects.a!.taskPolicy },
+      taskSource: { kind: 'excel', name: 'excel' }, execution: projects.a!.execution,
+      schedule: projects.a!.schedule, retry: projects.a!.retry, taskPolicy: projects.a!.taskPolicy },
     at: '2026-01-01T00:00:00.000Z', maxWorkers: 2, used: 1, queued: 0, running: 1, items: [item], total: 1 } })
   expect(await call('GET', 'projects/missing/tasks')).toEqual({ status: 404, body: { error: 'Project not found' } })
 })

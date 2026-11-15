@@ -208,9 +208,9 @@ it('creates, reads and removes a project with its embedded repository and task s
   // 项目改名通过项目块保存，仓库与来源随项目一起写入。
   const block = settings.block('project:project')
   await settings.save('project:project', { ...(block.value as object), name: '支付重构二期' }, block.revision, 'panel')
-  expect(store.settings().projects.project!.name).toBe('支付重构二期')
+  expect(store.projects.get('project')!.name).toBe('支付重构二期')
   expect(await settings.removeProject('project', 'panel')).toMatchObject({ removed: true, restarting: true })
-  expect(store.settings().projects).toEqual({})
+  expect(store.projects.list()).toEqual([])
 })
 
 it('refuses two Projects that resolve to the same wiki space, on create and on save', async () => {
@@ -223,7 +223,7 @@ it('refuses two Projects that resolve to the same wiki space, on create and on s
   await expect(settings.createProject('p2', { name: '项目二', codeRepo: repo,
     taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } }, 'panel'))
     .rejects.toThrow(new UserError('knowledgeBaseClaimed', { space: 'space-1', project: 'p1' }))
-  expect(store.settings().projects.p2).toBeUndefined()
+  expect(store.projects.get('p2')).toBeUndefined()
   // 已存在的项目改绑到同一空间同样拒绝，原绑定保持不变。
   await settings.createProject('p2', { name: '项目二', codeRepo: repo,
     taskSource: { kind: 'excel', config: { file: '/tasks.csv' } } }, 'panel')
@@ -232,6 +232,6 @@ it('refuses two Projects that resolve to the same wiki space, on create and on s
   await expect(settings.save('project:p2', { ...value, taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } },
     block.revision, 'panel'))
     .rejects.toThrow(new UserError('knowledgeBaseClaimed', { space: 'space-1', project: 'p1' }))
-  expect(store.settings().projects.p2!.taskSource).toMatchObject({ kind: 'excel', config: { file: '/tasks.csv' } })
+  expect(store.projects.get('p2')!.taskSource).toMatchObject({ kind: 'excel', config: { file: '/tasks.csv' } })
 })
 

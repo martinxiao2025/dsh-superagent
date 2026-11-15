@@ -31,7 +31,7 @@ export interface ExecutorHost {
   /** 执行器向引擎报告任务分配和输入的进展。 */
   readonly engine: Pick<EngineForExecutor, 'assignmentStarted' | 'inputsDelivered' | 'inputsRead' | 'turnEnded' | 'deliveryFailed' | 'report'
     | 'assignmentInterrupted'>
-  readonly store: Pick<Store, 'tickets' | 'triggers' | 'set' | 'settings' | 'atomic' | 'afterCommit'>
+  readonly store: Pick<Store, 'tickets' | 'triggers' | 'set' | 'settings' | 'atomic' | 'afterCommit' | 'projects'>
   /** 绑定到代码仓库记录的 git 入口；用于把项目仓库检出到工单目录。 */
   readonly commands: Pick<Commands, 'scope'>
   /** 持久的效果队列，启动和输入投递经由它运行。 */
@@ -104,12 +104,9 @@ export class WorkerSlots {
   free(ticketId: string): void { this.starting.delete(ticketId) }
 }
 
-/** 工单所属项目：优先执行时记录的项目名；旧工单退回执行目录的最后一段。 */
+/** 工单所属项目：执行时记录的项目名；重置后的工单都有该字段。 */
 export function projectOfTicket(ticket: Ticket | undefined): string | undefined {
-  if (!ticket) return undefined
-  if (ticket.execution?.project) return ticket.execution.project
-  const directory = ticket.execution?.directory
-  return directory ? directory.split(/[\\/]+/).filter(Boolean).pop() : undefined
+  return ticket?.execution?.project
 }
 
 /**

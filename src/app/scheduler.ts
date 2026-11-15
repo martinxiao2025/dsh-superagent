@@ -9,7 +9,7 @@ import { key } from '../core/ids.ts'
 import type { Settings } from '../policy.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { GitAuth } from '../code-repos/port.ts'
-import { projectRepoId } from '../projects/kind.ts'
+import { projectRepoId, type Project } from '../projects/kind.ts'
 import type { TaskSourceRegistry } from '../task-sources/index.ts'
 import type { FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import type { FeishuImReader } from '../task-sources/feishu-im-api.ts'
@@ -35,6 +35,9 @@ export interface QueuePage extends QueueSnapshot {
 export interface SchedulerHost {
   readonly store: Store
   readonly settings: () => Settings
+  /** 项目记录（独立建表）：按 ID 取单个，或取全部的 `Record` 视图。 */
+  readonly projects: () => Record<string, Project>
+  readonly project: (id: string) => Project | undefined
   readonly engine: Pick<Engine, 'schedule' | 'stopTicket'>
   /** 执行器当前的槽位占用与项目占用。 */
   readonly executor: { slotsInUse(): number; projectsInUse(): string[] }
@@ -136,7 +139,7 @@ export class ProjectScheduler {
     this.timer = setInterval(() => void this.tick(), TICK_MS)
     this.timer.unref?.()
     this.nextGc = this.now()
-    for (const [id, project] of Object.entries(this.host.settings().projects)) {
+    for (const [id, project] of Object.entries(this.host.projects())) {
       if (project.enabled && !project.schedule.runOnStart) this.nextPoll.set(id, this.nextPollOf(project.schedule.intervalMinutes * 60_000))
     }
     void this.tick(true)
@@ -155,7 +158,7 @@ export class ProjectScheduler {
       const settings = this.host.settings()
       try {
         await this.dispatch.recover()
-        await this.pollProjects(Object.entries(settings.projects).filter(([, project]) => project.enabled).map(([id]) => id), settings)
+        await this.pollProjects(Object.entries(this.host.projects()).filter(([, project]) => project.enabled).map(([id]) => id), settings)
         this.dispatch.retire()
         this.dispatch.pump(settings)
         await this.reclaim()
@@ -212,7 +215,7 @@ export class ProjectScheduler {
     const settings = this.host.settings()
     const active = this.host.store.queue.active()
     const total = this.host.store.queue.count()
-    const projects = Object.entries(settings.projects).map(([id, project]) => ({
+    const projects = Object.entries(this.host.projects()).map(([id, project]) => ({
       id, name: project.name, enabled: project.enabled,
       ...(this.nextPoll.has(id) ? { nextPollAt: new Date(this.nextPoll.get(id)!).toISOString() } : {}),
       ...(this.errors.get(id) ? { lastError: this.errors.get(id)! } : {}),
@@ -236,7 +239,7 @@ export class ProjectScheduler {
   /** 项目详情视图的完整条目集：活动按序 + 终态最新在前；详情页是交互路径，不做分页。 */
   projectQueue(projectId: string): QueueSnapshot {
     const settings = this.host.settings()
-    const project = settings.projects[projectId]
+    const project = this.host.project(projectId)
     const status = { id: projectId, name: project?.name ?? projectId, enabled: project?.enabled ?? false,
       ...(this.nextPoll.has(projectId) ? { nextPollAt: new Date(this.nextPoll.get(projectId)!).toISOString() } : {}),
       ...(this.errors.get(projectId) ? { lastError: this.errors.get(projectId)! } : {}),
@@ -255,7 +258,7 @@ export class ProjectScheduler {
 
   /** 队列条目的面板形态；字段与既有快照逐字一致（新增不改名）。 */
   private toItem(entry: QueueEntry, settings: Settings) {
-    return { id: entry.id, project: entry.project, projectName: settings.projects[entry.project]?.name ?? entry.project,
+    return { id: entry.id, project: entry.project, projectName: this.host.project(entry.project)?.name ?? entry.project,
       task: entry.task, item: entry.item, title: entry.title, state: entry.state, attempt: entry.attempt, dueAt: entry.dueAt,
       ...(entry.ticketId ? { ticketId: entry.ticketId } : {}), ...(entry.reason ? { reason: entry.reason } : {}),
       enqueuedAt: entry.enqueuedAt, updatedAt: entry.updatedAt }
@@ -272,7 +275,7 @@ export class ProjectScheduler {
       const settings = this.host.settings()
       try {
         await this.dispatch.recover()
-        for (const [id, project] of Object.entries(settings.projects)) {
+        for (const [id, project] of Object.entries(this.host.projects())) {
           if (!project.enabled) continue
           const next = this.nextPoll.get(id)
           // 启动时只轮询 `runOnStart` 的项目；之后按各自的下次轮询时间到期执行。
@@ -333,7 +336,7 @@ export class ProjectScheduler {
     // 停止过程中数据库可能已经关闭；健康上报不是关键路径，跳过即可。
     if (!this.host.health || this.host.lifetime.aborted) return
     try {
-      const projects = Object.values((settings ?? this.host.settings()).projects).filter(project => project.enabled).length
+      const projects = Object.values(this.host.projects()).filter(project => project.enabled).length
       const items = this.host.store.queue.list()
       const queued = items.filter(entry => entry.state === 'queued').length
       const running = items.filter(queueInFlight).length

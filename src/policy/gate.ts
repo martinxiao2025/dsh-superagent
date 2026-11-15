@@ -9,6 +9,7 @@ import { key, type ActorRef, type GateResult, type Mandate, type Policy, type Po
 import { ADMISSION_DEFAULTS, type Admission, type AdmissionCell } from '../admission.ts'
 import { sameName } from '../infra/text.ts'
 import { AllowedSchema, RuleSchema, type Rule, type Settings } from '../settings/schema.ts'
+import type { Project } from '../projects/kind.ts'
 
 export const POLICY_REVISION = 'mandate-v3'
 /**
@@ -47,9 +48,9 @@ const ruleChanged = (was: Rule | undefined, is: Rule): boolean =>
   was === undefined || JSON.stringify(RuleSchema.parse(was)) !== JSON.stringify(RuleSchema.parse(is))
 
 /** 计算设置从 `old` 变为 `now` 时，对每个未结束工单的授权或匹配规则的影响。 */
-export function policyEffects(tickets: readonly Ticket[], old: Settings, now: Settings, scope: (settings: Settings) => SourceScope):
-  Map<string, PolicyEffect> {
-  const before = settingsPolicy(old, scope(old)), after = settingsPolicy(now, scope(now))
+export function policyEffects(tickets: readonly Ticket[], old: Settings, now: Settings, scope: (settings: Settings) => SourceScope,
+  projects?: (id: string) => Project | undefined): Map<string, PolicyEffect> {
+  const before = settingsPolicy(old, scope(old), projects), after = settingsPolicy(now, scope(now), projects)
   const effects = new Map<string, PolicyEffect>()
   for (const ticket of tickets) {
     const rules = (ticket.mandate.basis.rules ?? []).flatMap((id): NonNullable<PolicyEffect['rules']> => {
@@ -61,7 +62,7 @@ export function policyEffects(tickets: readonly Ticket[], old: Settings, now: Se
     if (before.revalidate(ticket.mandate) && !after.revalidate(ticket.mandate)) {
       // 使用先前的受理模式和规则时，除非发送者或接收范围失去授权，否则授权仍然有效。
       const asBefore = { ...now, eval: old.eval, policy: { ...now.policy, rules: old.policy.rules } }
-      if (!settingsPolicy(asBefore, scope(now)).revalidate(ticket.mandate)) {
+      if (!settingsPolicy(asBefore, scope(now), projects).revalidate(ticket.mandate)) {
         Object.assign(effect, { requesterAllowed: false, requester: ticket.mandate.actor })
       } else if (ticket.mandate.strength === 'inferred' && old.eval.mode === 'auto' && now.eval.mode !== 'auto') effect.proactive = false
     }
@@ -69,8 +70,8 @@ export function policyEffects(tickets: readonly Ticket[], old: Settings, now: Se
   }
   return effects
 }
-/** 构建活动策略，用于门禁进入的触发器并重新校验既有工单的授权。 */
-export function settingsPolicy(settings: Settings, sources: SourceScope): Policy {
+/** 构建活动策略，用于门禁进入的触发器并重新校验既有工单的授权；项目独立建表后由调用方按 ID 供给。 */
+export function settingsPolicy(settings: Settings, sources: SourceScope, projects?: (id: string) => Project | undefined): Policy {
   const version = policyVersion(settings)
   const mode = settings.eval.mode
   /** 门禁非人工触发器：只有列表内的机器人（作为推断候选）和无发送者的系统/CI 事件可以通过；其他机器人被拒绝。 */
@@ -121,7 +122,7 @@ export function settingsPolicy(settings: Settings, sources: SourceScope): Policy
       const { basis } = mandate
       // 项目调度的授权：项目仍启用并带有任务时有效；仓库与来源已随项目保存。
       if (basis.via === 'scheduled') {
-        const project = settings.projects[basis.project]
+        const project = projects?.(basis.project)
         return !!project?.enabled && !!basis.task
       }
       const { source } = basis

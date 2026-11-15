@@ -16,7 +16,7 @@ import type { DroppedReply, HistoryView, Problem, ProjectTasksView, PromptsView,
 import { SETUP_FIELDS } from '../../src/deployment.ts'
 import { CODE_REPO_TYPES, codeRepoType } from '../../src/code-repos/types.ts'
 import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema } from '../../src/policy.ts'
-import { ProjectSchema } from '../../src/projects/kind.ts'
+import { ProjectSchema, type Project } from '../../src/projects/kind.ts'
 import type { GitCredentialInput, GitCredentialView } from '../../src/git-credentials/kind.ts'
 import type { FeishuCredentialInput, FeishuCredentialView } from '../../src/feishu-credentials/kind.ts'
 import type { CredentialCheck } from '../../src/secrets/check.ts'
@@ -94,6 +94,8 @@ export interface PanelServer {
   joined?: Record<string, string>; joining?: Record<string, string>
   joinError?: string
   settings: Settings; revisions: Record<string, number>
+  /** 项目记录独立于设置快照（与服务端的 `Store.projects` 同构）。 */
+  projects: Record<string, Project>
   /** 按记录 ID 索引的未结束工单数量；面板据此提示删除保护与停用后果。 */
   openTickets: Record<string, number>
   prompts: PromptsView
@@ -193,7 +195,7 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
   sources: sourceSettings(),
   codeRepoKinds: CODE_REPO_TYPES.map(type => ({ kind: type.kind, title: type.title, description: type.description,
     fields: type.fields.filter(field => field.key !== 'auth' && field.key !== 'sshKey') })),
-  projects: Object.entries(server.settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
+  projects: Object.entries(server.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
     value: project, revision: server.revisions[`project:${id}`] ?? 0 })),
   taskSourceKinds: [
     { kind: 'feishu-im', title: { zh: '飞书消息', en: 'Feishu messages' }, description: { zh: '群消息', en: 'Chat messages' }, needsFeishuCredential: true,
@@ -242,7 +244,7 @@ const ticketDetail = (): TicketPageView => ({
   ...ticketSummary(), paused: false, decision: acceptDecision(), threads: [threadSummary()],
   mandate: { strength: 'explicit', policyVersion: 'abcdef1234567890', basis: { via: 'addressed', sender: 'Alice', addressed: 'mention' },
     actor: actor('feishu', MEMBER), scope: '修复登录页回归' },
-  basis: { facts: [{ name: 'sender', value: 'Alice' }, { name: 'addressed', value: 'mention' }], legacy: false },
+  basis: { facts: [{ name: 'sender', value: 'Alice' }, { name: 'addressed', value: 'mention' }] },
   environment: [{ key: 'DSH_SUPERAGENT_DIR', value: '/w/t1', description: { zh: '执行目录', en: 'Directory' }, owner: 'executor' },
     { key: 'DSH_SUPERAGENT_GITHUB_NUMBER', value: '', description: { zh: '编号', en: 'Number' }, owner: 'github' }],
   channels: [{ source: 'feishu', url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1', label: { zh: '飞书消息',
@@ -285,7 +287,7 @@ function initial(): PanelServer {
     setup: { machine: MACHINE, problem: null, feishuProblem: null,
       accounts: { repository: 'acme/widgets', agent: 'agent-bot', feishu: { appId: 'cli_bot', brand: 'feishu', botId: 'ou_bot',
         name: 'Widgets Bot' }, gitlab: null } },
-    settings, revisions: { policy: 3, eval: 1, executor: 0 },
+    settings, revisions: { policy: 3, eval: 1, executor: 0 }, projects: {},
     prompts: { masterId: 'master', sections: TEAM_SECTIONS, skillName: SKILL_NAME.source, builtin: ['feishu', 'github'],
       skillPrefix: SKILL_PREFIX, revision: 0, current: { ...defaults, config: defaultPrompts() },
       defaults: defaultPrompts(), parts: Object.entries(builtInParts()).map(([key, part]) => ({ key, ...part, base: builtInBase(part.text) })),
@@ -348,12 +350,12 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET sources': { answer: sourceStatuses },
   'GET queue': { answer: () => ({ at: '2026-09-23T00:00:00Z', maxWorkers: server.settings.executor.maxWorkers, used: 0,
     items: server.queueItems,
-    projects: Object.entries(server.settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled })) }) },
+    projects: Object.entries(server.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled })) }) },
   'POST queue/:id/retry': { answer: () => ({ retried: true }) },
   'POST queue/:id/cancel': { answer: () => ({ cancelled: true }) },
   'POST queue/clear': { query: ['project'], answer: () => ({ cancelled: 0 }) },
   'GET projects/:id/tasks': { query: ['limit'], answer: ({ params, query }) => {
-    const project = server.settings.projects[params.id]
+    const project = server.projects[params.id]
     if (!project) return refuse(404, 'Project not found')
     const all = server.queueItems.filter(item => item.project === params.id)
     const offset = Number(query.offset ?? 0), limit = Number(query.limit ?? 50)
@@ -432,12 +434,12 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     const { id, ...value } = body
     const recordId = id ?? 'project'
     const project = ProjectSchema.parse(value)
-    server.settings = { ...server.settings, projects: { ...server.settings.projects, [recordId]: project } }
+    server.projects = { ...server.projects, [recordId]: project }
     return { id: recordId, revision: 0, restarting: false as const }
   } },
   'DELETE projects/:id': { answer: ({ params }) => {
-    const { [params.id]: _record, ...projects } = server.settings.projects
-    server.settings = { ...server.settings, projects }
+    const { [params.id]: _record, ...projects } = server.projects
+    server.projects = projects
     return { removed: true as const, restarting: false as const }
   } },
   // 凭据与设置快照分开存放：伪实现只保留视图，不保留任何材料。
@@ -484,7 +486,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     return { checks }
   } },
   'DELETE git-credentials/:id': { answer: ({ params }) => {
-    const used = Object.values(server.settings.projects).filter(project => project.gitCredential === params.id).length
+    const used = Object.values(server.projects).filter(project => project.gitCredential === params.id).length
     if (used) return refuse(409, `The ${params.id} Git credential is still used by ${used} Projects`,
       { code: 'gitCredentialInUse', values: { credential: params.id, count: String(used) } })
     server.gitCredentials = server.gitCredentials.filter(item => item.id !== params.id)
@@ -619,7 +621,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     const record = block.startsWith('source:') ? server.settings.sources[block.slice('source:'.length)] : undefined
     const source = record ? KINDS.find(kind => kind.kind === record.kind) : undefined
     const projectId = block.startsWith('project:') ? block.slice('project:'.length) : undefined
-    const project = projectId ? server.settings.projects[projectId] : undefined
+    const project = projectId ? server.projects[projectId] : undefined
     if (!['policy', 'eval', 'executor'].includes(block) && !record && !project) {
       return block.includes(':') ? refuse(404, 'Record not found') : refuse(400, 'Invalid settings: block')
     }
@@ -629,7 +631,7 @@ const ROUTES: { [K in keyof Api]: Route<K> } = {
     else if (block === 'executor') server.settings = { ...server.settings, executor: ExecutorConfigSchema.parse(body.value) }
     else if (block === 'eval') server.settings = { ...server.settings, eval: EvalConfigSchema.parse(body.value) }
     else if (project && projectId) {
-      server.settings = { ...server.settings, projects: { ...server.settings.projects, [projectId]: ProjectSchema.parse(body.value) } }
+      server.projects = { ...server.projects, [projectId]: ProjectSchema.parse(body.value) }
     } else if (record && source) {
       const { name, enabled, config: value } = SourceSave.parse(body.value)
       const config = source.schema.parse(value)

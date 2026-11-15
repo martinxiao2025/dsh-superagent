@@ -14,7 +14,7 @@ import type { SourceRegistry } from '../sources/registry.ts'
 import { resolveRoleModel } from './role-models.ts'
 import { changedPaths, settingsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
-import { setupChanged, type Setup } from './setup.ts'
+import { projectsChanged, setupChanged, type Setup } from './setup.ts'
 import type { Store } from './store.ts'
 import { KV } from '../kv.ts'
 
@@ -33,7 +33,8 @@ interface Block {
   merge(settings: SettingsValue, value: unknown, id: string): SettingsValue
   guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin): void
 }
-const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'project', Block> = {
+// 项目（`project:<id>`）独立建表：解析走 `parseProject`、写路径走 `saveProject`，不进入设置快照。
+const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
   policy: {
     parse: (value, sources) => {
       const policy = PolicyConfigSchema.parse(value)
@@ -55,10 +56,6 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source' | 'project', Bloc
     merge: (settings, value, id) => ({ ...settings, sources: { ...settings.sources, [id]: { ...settings.sources[id]!, ...value as object } } }),
     // 只有管理面板可以切换来源账户。
     guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
-  },
-  project: {
-    parse: value => parseProject(value),
-    merge: (settings, value, id) => ({ ...settings, projects: { ...settings.projects, [id]: value as SettingsValue['projects'][string] } }),
   },
 }
 
@@ -82,7 +79,7 @@ function projectSpace(project: Project): string {
 
 /** `Settings` 使用的宿主依赖。 */
 export interface SettingsHost {
-  readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'triggers' | 'get'>
+  readonly store: Pick<Store, 'settings' | 'saveSettings' | 'blockRevision' | 'atomic' | 'tickets' | 'triggers' | 'get' | 'set' | 'projects'>
   readonly sources: SourceRegistry
   /** 当设置保存改变策略版本时收到通知。 */
   readonly engine: EngineForSettings
@@ -150,7 +147,7 @@ export class Settings {
         allowed: Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.allowed.length])), read: 'settings/policy' },
       sources: sources.instances(settings).map(({ id, kind, name, enabled, installed }) =>
         ({ id, kind, name, enabled, installed, revision: revision(`source:${id}`), read: `settings/source:${id}` })),
-      projects: Object.entries(settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
+      projects: store.projects.list().map(({ id, project }) => ({ id, name: project.name, enabled: project.enabled,
         codeRepo: project.codeRepo.kind, taskSource: project.taskSource.kind, revision: revision(`project:${id}`), read: `settings/project:${id}` })) }
   }
   /**
@@ -163,7 +160,7 @@ export class Settings {
     const { store, sources } = this.host
     const settings = store.settings(), [family, id] = block.includes(':') ? block.split(/:(.*)/s) : [block, '']
     const instance = family === 'source' ? sources.instances(settings).find(item => item.id === id) : undefined
-    const project = family === 'project' ? settings.projects[id!] : undefined
+    const project = family === 'project' ? store.projects.get(id!) : undefined
     const value = block === 'pause' ? { paused: settings.paused } : block === 'policy' || block === 'eval' || block === 'executor' ? settings[block]
       : instance ? { name: instance.name, enabled: instance.enabled, config: instance.config }
         : project ?? undefined
@@ -184,11 +181,12 @@ export class Settings {
     const stale = () => revision !== store.blockRevision(block)
     if (stale()) throw new SettingsConflict('Settings changed. Reload before saving.')
     const [kind, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, block]
+    // 项目独立建表：解析、守卫与持久化都走项目写路径，不进入设置快照。
+    if (kind === 'project') return this.saveProject(id, value, revision, origin)
     if (!(kind in BLOCKS)) throw new UserError('unknownBlock', { block })
     const rules = BLOCKS[kind as keyof typeof BLOCKS]
     const stored = store.settings()
     if (kind === 'source' && !sources.record(id)) throw new UserError('sourceNotInstalled', { source: id })
-    if (kind === 'project' && !stored.projects[id]) throw new UserError('projectNotInstalled', { project: id })
     const parsed = rules.parse(value, sources, id)
     const current = stored
     // 停用一条正在工作的记录会结束它名下未完成工单，而不是让它们失去来源后悬挂。
@@ -201,7 +199,6 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
-    if (kind === 'project') this.checkKnowledgeOwner(candidate, id)
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // 异步检查后重新读取当前设置，以防无关块被并发保存。
@@ -216,7 +213,8 @@ export class Settings {
     const before = policyVersion(old), after = policyVersion(settings)
     const scope = (version: SettingsValue) => ({
       scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
-    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, SettingsSchema.parse(settings), scope)
+    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, SettingsSchema.parse(settings), scope,
+      id => store.projects.get(id))
     const notified = [...effects.keys()]
     store.atomic(() => {
       store.saveSettings(SettingsSchema.parse(settings), { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
@@ -305,7 +303,8 @@ export class Settings {
     const before = policyVersion(current), after = policyVersion(settings)
     const scope = (version: SettingsValue) => ({
       scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
-    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), current, settings, scope)
+    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), current, settings, scope,
+      id => store.projects.get(id))
     const notified = [...effects.keys()]
     store.atomic(() => {
       store.saveSettings(settings, { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
@@ -320,72 +319,95 @@ export class Settings {
   }
   /** 创建一个项目；代码仓库与任务来源随项目保存，配置由各自 schema 校验。 */
   async createProject(id: string | undefined, value: unknown, origin: SettingsOrigin) {
-    const current = this.current()
+    const { store, sessions } = this.host
     const project = parseProject(value)
-    const recordId = this.recordId(id, 'project', current.projects, 'projectExists', 'project')
-    const settings = SettingsSchema.parse({ ...current, projects: { ...current.projects, [recordId]: project } })
-    this.checkKnowledgeOwner(settings, recordId)
-    return this.persistRecord(`project:${recordId}`, settings, current, origin, recordId)
+    const before = store.projects.list()
+    const recordId = this.recordId(id, 'project', before, 'projectExists', 'project')
+    this.checkKnowledgeOwner([...before, { id: recordId, project }], recordId)
+    const block: SettingsSave = `project:${recordId}`
+    store.atomic(() => {
+      store.projects.save(recordId, project)
+      this.bumpBlock(block)
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(undefined, project)))
+    })
+    // 新建项目同样可能改变部署材料（仓库、凭据引用），需要按 save 的同一规则触发初始化重跑，
+    // 否则部署里没有新项目的仓库来源，调度轮询会以「记录必须是 GitHub 或 GitLab」失败。
+    const restarting = projectsChanged(before, store.projects.list()) || !this.host.setup.configured()
+    const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    if (restarting) this.host.setup.restart()
+    return { id: recordId, revision: store.blockRevision(block), restarting, context_delivery: delivery }
   }
-
+  /**
+   * 保存一个项目块（`project:<id>`）：项目独立建表，写入 `Store.projects` 并推进块修订。
+   * 项目不影响策略版本（`policyVersion` 只含规则与来源），因此没有策略通知与工单效果。
+   * @throws 当项目不存在（`projectNotInstalled`）、修订过时（SettingsConflict）、知识空间归属冲突或配置无效时抛出。
+   */
+  async saveProject(id: string, value: unknown, revision: number, origin: SettingsOrigin) {
+    const { store, sessions } = this.host
+    const block: SettingsSave = `project:${id}`
+    if (revision !== store.blockRevision(block)) throw new SettingsConflict('Settings changed. Reload before saving.')
+    const before = store.projects.list()
+    const previous = before.find(entry => entry.id === id)?.project
+    if (!previous) throw new UserError('projectNotInstalled', { project: id })
+    const project = parseProject(value)
+    this.checkKnowledgeOwner(before.map(entry => entry.id === id ? { id, project } : entry), id)
+    store.atomic(() => {
+      store.projects.save(id, project)
+      this.bumpBlock(block)
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(previous, project)))
+    })
+    const restarting = projectsChanged(before, store.projects.list()) || !this.host.setup.configured()
+    const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    if (restarting) this.host.setup.restart()
+    else this.host.requestPass()
+    return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting, context_delivery: delivery,
+      stopped: 0 }
+  }
   /**
    * 知识空间归属唯一：`spaceId` 全库只归属一个项目，两个项目解析出同一空间即拒绝保存。
-   * 任务来源随项目保存后，这里直接比较项目自己的任务来源配置。
+   * 任务来源随项目保存，这里直接比较项目自己的任务来源配置；`entries` 已包含写入后的候选项目。
    * @throws 冲突时抛出 `knowledgeBaseClaimed`。
    */
-  private checkKnowledgeOwner(settings: SettingsValue, projectId: string): void {
-    const project = settings.projects[projectId]
+  private checkKnowledgeOwner(entries: { id: string; project: Project }[], projectId: string): void {
+    const project = entries.find(entry => entry.id === projectId)?.project
     const space = project ? projectSpace(project) : ''
     if (!space) return
-    for (const [id, other] of Object.entries(settings.projects)) {
+    for (const { id, project: other } of entries) {
       if (id === projectId) continue
       if (projectSpace(other) === space) throw new UserError('knowledgeBaseClaimed', { space, project: id })
     }
   }
-  /** 删除一个项目；队列与运行记录由 P4 的调度器负责收尾。 */
+  /** 删除一个项目；队列与运行记录由调度器负责收尾（路由层随后调用 forgetProject）。 */
   async removeProject(id: string, origin: SettingsOrigin) {
-    const current = this.current()
-    if (!current.projects[id]) throw new UserError('projectNotInstalled', { project: id })
-    const { [id]: _record, ...projects } = current.projects
-    const settings = SettingsSchema.parse({ ...current, projects })
-    return this.removeRecord(`project:${id}`, settings, current, origin)
-  }
-  /** 生成记录 ID：未提供时按类型、`<类型>-2`… 递增；显式 ID 冲突时拒绝。 */
-  private recordId(id: string | undefined, base: string, records: Record<string, unknown>, code: UserErrorCode, field: string): string {
-    if (id === undefined) {
-      let candidate = base, suffix = 2
-      while (records[candidate]) candidate = `${base}-${suffix++}`
-      return candidate
-    }
-    if (records[id]) throw new UserError(code, { [field]: id })
-    return id
-  }
-  /** 保存新建记录：写入设置与变更通知，返回块修订与上下文投递状态。 */
-  private async persistRecord(block: SettingsSave, settings: SettingsValue, current: SettingsValue, origin: SettingsOrigin, id: string) {
     const { store, sessions } = this.host
+    const before = store.projects.list()
+    const previous = before.find(entry => entry.id === id)?.project
+    if (!previous) throw new UserError('projectNotInstalled', { project: id })
+    const block: SettingsSave = `project:${id}`
     store.atomic(() => {
-      store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
-      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
-    })
-    // 新建项目同样可能改变部署材料（仓库、凭据引用），需要按 save 的同一规则触发初始化重跑，
-    // 否则部署里没有新项目的仓库来源，调度轮询会以「记录必须是 GitHub 或 GitLab」失败。
-    const restarting = setupChanged(current, settings) || !this.host.setup.configured()
-    const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
-    if (restarting) this.host.setup.restart()
-    return { id, revision: store.blockRevision(block), restarting, context_delivery: delivery }
-  }
-  /** 删除记录并写入变更通知。 */
-  private async removeRecord(block: SettingsSave, settings: SettingsValue, current: SettingsValue, origin: SettingsOrigin) {
-    const { store, sessions } = this.host
-    store.atomic(() => {
-      store.saveSettings(settings, { source: origin, block, policyVersion: policyVersion(current), policyChanged: false, notified: [] })
-      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
+      store.projects.remove(id)
+      this.bumpBlock(block)
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(previous, undefined)))
     })
     // 删除项目同样改变部署材料：仓库来源要在初始化重跑后移出部署，避免残留可同步的孤儿记录。
-    const restarting = setupChanged(current, settings) || !this.host.setup.configured()
+    const restarting = projectsChanged(before, store.projects.list()) || !this.host.setup.configured()
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
     if (restarting) this.host.setup.restart()
     return { removed: true as const, restarting, context_delivery: delivery }
+  }
+  /** 推进一个块的修订计数器；项目写路径不走 `saveSettings`，由它单独维护。 */
+  private bumpBlock(block: SettingsSave): void {
+    this.host.store.set(KV.settings.block(block), this.host.store.blockRevision(block) + 1)
+  }
+  /** 生成记录 ID：未提供时按类型、`<类型>-2`… 递增；显式 ID 冲突时拒绝。 */
+  private recordId(id: string | undefined, base: string, entries: { id: string }[], code: UserErrorCode, field: string): string {
+    if (id === undefined) {
+      let candidate = base, suffix = 2
+      while (entries.some(entry => entry.id === candidate)) candidate = `${base}-${suffix++}`
+      return candidate
+    }
+    if (entries.some(entry => entry.id === id)) throw new UserError(code, { [field]: id })
+    return id
   }
   /** 删除记录后释放它拥有的 `sync:<id>` 健康项，并取消待处理的策略同步重试。 */
   private releaseSource(id: string): void {

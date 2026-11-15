@@ -25,7 +25,7 @@ function queued(state: 'queued' | 'running', extra: Record<string, unknown> = {}
 }
 
 it('lists projects with queue and runtime counts, then opens the project Tasks and queue', async () => {
-  server.settings = { ...server.settings, projects: { content: project } }
+  server.projects = { content: project }
   server.queueItems = [queued('queued'), queued('running', { ticketId: 't1' })]
   await mount()
   await click(zh['tab.projects'])
@@ -43,7 +43,7 @@ it('lists projects with queue and runtime counts, then opens the project Tasks a
 })
 
 it('sends retry, cancel and clear requests from the project queue', async () => {
-  server.settings = { ...server.settings, projects: { content: project } }
+  server.projects = { content: project }
   server.queueItems = [
     queued('queued', { id: 'q1' }),
     queued('running', { id: 'q2', ticketId: 't2' }),
@@ -64,7 +64,7 @@ it('sends retry, cancel and clear requests from the project queue', async () => 
 })
 
 it('loads more task entries beyond the first page of the project queue', async () => {
-  server.settings = { ...server.settings, projects: { content: project } }
+  server.projects = { content: project }
   server.queueItems = Array.from({ length: 55 }, (_, index) =>
     queued('queued', { id: `q${index}`, state: index % 2 ? 'failed' : 'queued', attempt: 1 }))
   await mount()
@@ -128,7 +128,7 @@ it('creates a project through the four-step wizard and saves the full configurat
   await type(field(zh.projectPendingStatuses), 'todo, pending')
   await click(zh.projectCreate)
   await settle()
-  expect(server.settings.projects.project).toMatchObject({
+  expect(server.projects.project).toMatchObject({
     name: '内容运营', codeRepo: { kind: 'github', config: { remote: 'https://github.com/acme/content.git', auth: 'https' } },
     taskSource: { kind: 'excel', config: {} }, gitCredential: '', feishuCredential: '',
     execution: { directory: '/srv/work/content', branch: 'main', prepare: '', gitTimeoutSeconds: 0 },
@@ -141,20 +141,20 @@ it('creates a project through the four-step wizard and saves the full configurat
   await type(field(zh.projectInterval), '7')
   await type(field(zh.projectMaxRetries), '6')
   await click(zh.save)
-  expect(server.settings.projects.project?.schedule.intervalMinutes).toBe(7)
-  expect(server.settings.projects.project?.retry.maxRetries).toBe(6)
+  expect(server.projects.project?.schedule.intervalMinutes).toBe(7)
+  expect(server.projects.project?.retry.maxRetries).toBe(6)
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:project'])
 })
 
 it('edits the code repository embedded in the project', async () => {
-  server.settings = { ...server.settings, projects: { content: project } }
+  server.projects = { content: project }
   await mount()
   await click(zh['tab.settings'])
   await click(find(`${zh['settingsGroup.projects']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await click(zh.edit)
   await type(field('仓库地址'), 'https://github.com/acme/next.git')
   await click(zh.save)
-  expect(server.settings.projects.content?.codeRepo).toEqual({ kind: 'github', config: { remote: 'https://github.com/acme/next.git', auth: 'https' } })
+  expect(server.projects.content?.codeRepo).toEqual({ kind: 'github', config: { remote: 'https://github.com/acme/next.git', auth: 'https' } })
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/project:content'])
 })
 

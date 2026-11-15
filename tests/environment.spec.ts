@@ -133,14 +133,6 @@ return 1`)
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${workerGitConfig(dir)} was not written by dsh-superagent`)
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toBe('[user]\n\tname = someone\n')
   })
-  it('replaces the files it wrote under the project\'s earlier names', async () => {
-    await writeEnvironment(testDeployment({ stateDir: dir }), ['old-cli', 'older-cli'])
-    const legacy = (file: string, name: string) => writeFileSync(file, readFileSync(file, 'utf8').replace('Written by dsh-superagent', `Written by ${name}`))
-    legacy(join(workerBin(dir), shimFile('old-cli')), 'dsh-tag'); legacy(join(workerBin(dir), shimFile('older-cli')), 'dsh-freelancer'); legacy(workerGitConfig(dir), 'dsh-go')
-    await writeEnvironment(testDeployment({ stateDir: dir }), [])
-    expect(readdirSync(workerBin(dir)).sort()).toEqual([shimFile('gh'), shimFile('lark-cli')])
-    expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('Written by dsh-superagent')
-  })
 })
 
 describe('agent git configuration', () => {

@@ -118,7 +118,7 @@ interface Received { source?: string; scope?: Record<string, unknown>; row?: str
  */
 export type MandateBasis = Received & { sender?: string; rules?: string[] } & (
   | { via: 'addressed'; addressed: 'mention' | 'direct' }
-  | { via: 'followup'; authority?: string }
+  | { via: 'followup' }
   | { via: 'admission'; cell: AdmissionCell; addressed?: 'mention' | 'direct'; observation?: { mode: AcceptMode } }
   /** 来源机器人名单上的机器人的消息：最多只能是推断候选，永远不会是明确请求或停止。 */
   | { via: 'bot'; addressed?: 'mention' | 'direct'; observation: { mode: AcceptMode } }

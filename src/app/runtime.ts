@@ -214,10 +214,10 @@ export class Runtime extends Service implements SourceHost {
     const { store, setup, commands, machine } = this
     // 凭据记录与项目引用相互独立：项目只保存记录 ID，材料永远不进入设置快照。
     const vault = new SecretVault(machine.stateDir)
-    const projects = () => store.settings().projects
+    const projects = () => store.projects.map()
     const gitCredentials = new GitCredentials({ credentials: store.gitCredentials, vault, projects, probe: gitProbe(commands, vault) })
     const feishuCredentials = new FeishuCredentials({ credentials: store.feishuCredentials, vault,
-      references: () => feishuCredentialReferences(store.settings()), probe: feishuProbe(commands) })
+      references: () => feishuCredentialReferences(store.projects.list()), probe: feishuProbe(commands) })
     /** 凭据的调用方式：CLI 身份用可执行文件，应用身份用 appId 与密钥；材料只在这里短暂读取。 */
     const feishuApi = (credential: string): { cli: string } | { appId: string; secret: string } | undefined => {
       const record = store.feishuCredentials.get(credential)
@@ -296,7 +296,7 @@ export class Runtime extends Service implements SourceHost {
       deliver: (id, text) => this.sessions.prompt(this.masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
     const outbox = new Outbox({ store, effects: this.effects, sources: this.sources, commands: this.commands, paused: () => this.paused() })
     const executor = this.executor
-    const policy = () => settingsPolicy(store.settings(), this.sources)
+    const policy = () => settingsPolicy(store.settings(), this.sources, id => store.projects.get(id))
     const engine = new Engine({ repo: store, scope: this.sources, policy, assessor, executor,
       outbox, prepareTicket: (ticket, outcome) => executor.prepare(ticket, outcome), emit: event => {
         // 仅向主会话通知并非由其自身发起的领域事件。
@@ -314,6 +314,7 @@ export class Runtime extends Service implements SourceHost {
     // 任务来源注册表与仓库同步显式传入（调度器不再隐式回退到模块单例与默认实现，评审 P1-9）。
     const scheduleHealth = board.claim('schedule', { state: 'starting', detail: '', category: 'schedule' })
     const scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
+      projects: () => store.projects.map(), project: id => store.projects.get(id),
       engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
       executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
       effects: this.effects, commands: this.commands, stateDir: this.machine.stateDir, lifetime: this.lifetime,
@@ -428,7 +429,7 @@ export class Runtime extends Service implements SourceHost {
     // 管理路由由插件入口先挂载并按启动阶段报告；独立运行时（测试）没有挂载点时仍自行注册。
     if (this.boot) this.boot.mount.attach(this.httpHost())
     else this.disposers.push(registerHttp(this.ctx, this.httpHost()))
-    if (!await this.setup.run(this.store.settings())) {
+    if (!await this.setup.run(this.store.settings(), this.store.projects.list())) {
       this.runtimeHealth.set({ ...health('paused', 'setupPending'), at: now(), category: 'runtime' })
       return
     }
@@ -498,7 +499,7 @@ export class Runtime extends Service implements SourceHost {
    * 丢弃的只是自己未推送成功的提交，写入随后重放；轮询路径保持无损失败。
    */
   private async syncProjectRepo(projectId: string, options: { resetOnDivergence?: boolean } = {}): Promise<string> {
-    const project = this.store.settings().projects[projectId]
+    const project = this.store.projects.get(projectId)
     const repoId = projectRepoId(projectId)
     const auth = project?.gitCredential ? this.gitCredentials.authOf(project.gitCredential) : undefined
     const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
@@ -513,7 +514,7 @@ export class Runtime extends Service implements SourceHost {
 
   /** 把回写产生的本地提交推送远端（评审 S1）：与同步共用凭据、超时与作用域。 */
   private async pushProjectRepo(projectId: string): Promise<void> {
-    const project = this.store.settings().projects[projectId]
+    const project = this.store.projects.get(projectId)
     const repoId = projectRepoId(projectId)
     const auth = project?.gitCredential ? this.gitCredentials.authOf(project.gitCredential) : undefined
     const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
@@ -565,6 +566,6 @@ export class Runtime extends Service implements SourceHost {
 }
 
 /** 收集项目引用的飞书凭据 ID；删除凭据时按它统计引用。 */
-export function feishuCredentialReferences(settings: SettingsSnapshot): string[] {
-  return Object.values(settings.projects).flatMap(project => project.feishuCredential ? [project.feishuCredential] : [])
+export function feishuCredentialReferences(projects: { project: { feishuCredential?: string } }[]): string[] {
+  return projects.flatMap(({ project }) => project.feishuCredential ? [project.feishuCredential] : [])
 }

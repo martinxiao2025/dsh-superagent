@@ -10,6 +10,7 @@ import { Store } from '../src/app/store.ts'
 import { TaskSourceRegistry } from '../src/task-sources/index.ts'
 import type { TaskSourceDriver } from '../src/task-sources/kind.ts'
 import type { QueueEntry } from '../src/queue/model.ts'
+import type { Project } from '../src/projects/kind.ts'
 import type { Settings } from '../src/policy.ts'
 import type { RawTask } from '../src/task-sources/tasks.ts'
 
@@ -34,7 +35,7 @@ const memory = (): MemorySource => {
 }
 
 /** 一台内存宿主：真实调度器，队列、工单与执行器状态由测试控制。 */
-function setup(projects: Record<string, unknown>, maxWorkers = 2) {
+function setup(projects: Record<string, Project>, maxWorkers = 2) {
   const entries = new Map<string, QueueEntry>()
   const tickets = new Map<string, { id: string; assignments: unknown[]; undelivered: unknown[]; ended?: { outcome: string; by: string; at: string } }>()
   /** 与真实引擎一致：同一触发器只创建一个工单，重复投递拿回已存在的工单。 */
@@ -45,7 +46,6 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   /** pushRepo 的调用记录（评审 S1）：回写成功且驱动声明 push 时按项目推送。 */
   const pushed: string[] = []
   const settings = {
-    projects,
     executor: { maxWorkers }, taskPolicy: {},
   } as unknown as Settings
   const store = {
@@ -108,6 +108,7 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     },
     executor: { slotsInUse: () => 0, projectsInUse: () => [] },
     commands: { scope: () => ({}) } as never, stateDir: 'C:/tmp', lifetime: new AbortController().signal,
+    projects: () => projects, project: (id: string) => projects[id],
     syncRepo: async () => 'C:/tmp/repo', now: () => clock,
     // 回写路径的认证推送出口（评审 S1）：记录调用供断言；真实实现由 Runtime 装配凭据。
     pushRepo: (projectId: string) => { pushed.push(projectId); return Promise.resolve() },
@@ -123,11 +124,11 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     }
   }
   // `reload` 模拟插件热加载：模块重新求值后，同一状态库上出现新的调度器实例。
-  return { scheduler, reload: () => new ProjectScheduler(host), driver, entries, tickets, effects, flush, pushed, advance: (ms: number) => { clock += ms }, settings }
+  return { scheduler, reload: () => new ProjectScheduler(host), driver, entries, tickets, effects, flush, pushed, advance: (ms: number) => { clock += ms }, settings, projects }
 }
 
 /** 项目记录：每个项目自带一个内存任务来源；只有名称不同。 */
-const project = (id: string) => ({
+const project = (id: string): Project => ({
   id, name: id, enabled: true,
   codeRepo: { kind: 'github', config: {} },
   taskSource: { kind: 'memory', config: {} },
@@ -135,7 +136,7 @@ const project = (id: string) => ({
   execution: {}, schedule: { intervalMinutes: 5, runOnStart: false },
   retry: { maxRetries: 2, retryBackoffSeconds: 10 },
   taskPolicy: { doneStatus: 'done', failedStatus: 'failed', pendingStatuses: ['todo'] },
-})
+}) as unknown as Project
 
 it('按全局入队顺序出队，并跳过已有任务在跑的项目', async () => {
   const h = setup({ a: project('a'), b: project('b') })
@@ -345,7 +346,7 @@ it('停用的项目不再领取排队项，删除项目后队列记录被清理'
   const h = setup({ a: project('a') })
   h.driver.tasks = [task('a1', 'A 一')]
   await h.scheduler.poll('a')
-  h.settings.projects.a!.enabled = false
+  h.projects.a!.enabled = false
   h.scheduler.pump()
   expect([...h.entries.values()][0]!.state).toBe('queued')
   h.scheduler.forget('a')

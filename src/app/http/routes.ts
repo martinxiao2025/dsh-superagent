@@ -211,8 +211,7 @@ export function routes(runtime: HttpHost, listen: () => { host: string; port: nu
     },
     // 项目详情页读取该项目在队列中的任务与全局运行时占用；项目不存在时 404。
     'GET projects/:id/tasks': ({ params, query }) => {
-      const settings = store.settings()
-      const project = settings.projects[params.id]
+      const project = store.projects.get(params.id)
       if (!project) throw new RouteError(404, 'Project not found')
       return projectTasksView(params.id, project, runtime.projectQueue(params.id), ProjectTasksQuery.parse(query))
     },
@@ -303,7 +302,7 @@ export function routes(runtime: HttpHost, listen: () => { host: string; port: nu
       const block = SettingsBlockSchema.parse(params.block)
       const [family, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, '']
       const known = family === 'source' ? runtime.sources.instances().some(instance => instance.id === id)
-        : family === 'project' ? !!store.settings().projects[id] : true
+        : family === 'project' ? !!store.projects.get(id) : true
       if (!known) throw new RouteError(404, family === 'source' ? 'Source not found' : 'Project not found')
       const request = SaveRequest.parse(await body())
       return runtime.settings.save(block, request.value, request.revision, 'panel')

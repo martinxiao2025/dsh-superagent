@@ -387,7 +387,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/cards.ts` | 供模型使用的触发器、工单、线程和决定的紧凑卡片，工单卡片状态的封闭集合 `TICKET_STATES`，以及 `textPage` |
 | `src/app/resources.ts` | `RESOURCES` 和 `readResource`：`orchestrator_read` 为每个角色读取的内容 |
 | `src/app/tools/tool.ts` | `Tool` 类型、`readTool`、两个角色的 `orchestrator_read` 以及 `AcknowledgementSchema` |
-| `src/app/tools/main.ts` | 主会话的工具 |
+| `src/app/tools/host.ts` | `MainToolsHost`（主会话工具的宿主依赖）与 `routed` 响应格式化；定义文件共享的类型出口 |
+| `src/app/tools/main.ts` | 主会话的工具注册表：把 `definitions/` 的工具工厂组装成数组 |
+| `src/app/tools/definitions/route.ts`、`src/app/tools/definitions/ticket.ts`、`src/app/tools/definitions/eval.ts`、`src/app/tools/definitions/replies.ts`、`src/app/tools/definitions/settings.ts`、`src/app/tools/definitions/prompts.ts` | 主会话各工具的定义：路由（RouteItemSchema/FIELDS/route）、工单动作、评估、回复与线程、设置与策略同步、提示词保存 |
 | `src/app/tools/executor.ts` | 执行器会话的工具 |
 | `src/app/http/routes.ts` | `/orchestrator/api` 路由表与视图组装：`HttpHost`（HTTP 层唯一能力面）、`stateView` 等面板视图的类型出口 |
 | `src/app/http/schemas.ts` | 每条路由的 zod 请求校验 schema，与 `Api` 类型契约一一对应 |
@@ -413,6 +415,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/infra/host.ts` | `hostOf`：实例地址的站点主机名推导，零依赖叶子，deployment 与 infra 共用（避免两者互相 import） |
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |
 | `src/infra/worker-sources.ts` | 执行侧的分发数据与调度器：工单目录到来源记录的登记（`recordTicketSource`）、记录到 CLI 的表（`writeWorkerRecords`），以及按记录选择 CLI 的 `WORKER_DISPATCH_BODY` |
+| `src/infra/win32.ts` | Windows 特有规则的唯一权威实现：`cmdQuote`（与垫片源码形态 `CMD_QUOTE_SOURCE`）、`normalizePath`（与 `NORMALIZE_PATH_SOURCE`）和 `pathExtensions`；登记与查找路径键的共用出口 |
 | `src/infra/git-timeout.ts` | `withGitTimeout`：给已绑定的 `Commands` 覆盖 git 类命令的超时（项目 `execution.gitTimeoutSeconds`），其余方法委托原对象 |
 | `src/infra/paths.ts` | 包的根目录，即打包文件所在位置 |
 | `src/infra/text.ts` | 字数统计和聊天消息限制、`fill` 和 `sameName` |
@@ -499,6 +502,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/cards.spec.ts` | 内置文本必须逐文件陈述的规则 |
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
+| `tests/win32.spec.ts` | `infra/win32.ts` 的单源 Windows 规则：cmd 引用、路径归一、PATHEXT，以及垫片源码形态与实现的行为一致 |
 | `tests/worker-sources.spec.ts` | 调度器脚本的直接单测：以 Node 运行分发脚本正文，验证命令识别、记录选择（显式指定 → 目录祖先登记 → 该种类唯一一条，绝不按位置兜底）、worker-bin 离开 PATH 与凭据协议参数转发 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |

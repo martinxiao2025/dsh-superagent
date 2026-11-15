@@ -156,7 +156,7 @@ it('offers a Git credential for the project repository instead of auth fields', 
   expect(server.requests.filter(request => request.path === 'code-repos/verify').map(request => request.method)).toEqual(['POST'])
   // 预检只读取草稿，不创建项目，也不写入设置。
   expect(server.requests.filter(request => request.path === 'projects')).toEqual([])
-  expect(server.settings.projects).toEqual({})
+  expect(server.projects).toEqual({})
   await settle()
   expect(document.querySelector('.dt-check')).not.toBeNull()
   expect(server.requests.filter(request => request.path === 'code-repos/verify').map(request => request.method)).toEqual(['POST'])
@@ -284,11 +284,11 @@ it('saves an edited Git credential without resubmitting its stored material', as
 it('refuses to delete a Git credential a project still references, with the count in the refusal', async () => {
   server.gitCredentials = [{ id: 'cred', name: '机器人凭据', kind: 'https', provider: 'github', username: 'agent-bot', note: '',
     origin: 'pasted' as const, keyPath: '', revision: 1, updatedAt: '', lastVerifiedAt: '', configured: true, fingerprint: 'fp', hint: '••••oken' }]
-  server.settings = { ...server.settings, projects: { content: { name: '内容运营', enabled: true,
+  server.projects = { content: { name: '内容运营', enabled: true,
     codeRepo: { kind: 'github' as const, config: { repository: 'acme/widgets' } }, taskSource: { kind: 'excel', config: {} },
     gitCredential: 'cred', feishuCredential: '', execution: { directory: '', branch: '', prepare: '', gitTimeoutSeconds: 0 },
     schedule: { intervalMinutes: 30, runOnStart: true }, retry: { maxRetries: 2, retryBackoffSeconds: 60 },
-    taskPolicy: { pendingStatuses: ['待处理'], doneStatus: '已完成', failedStatus: '失败' } } } }
+    taskPolicy: { pendingStatuses: ['待处理'], doneStatus: '已完成', failedStatus: '失败' } } }
   await mount()
   await click(zh['tab.settings'])
   await click(find(zh['settingsGroup.gitCredentials'], '.dt-settings-link'))

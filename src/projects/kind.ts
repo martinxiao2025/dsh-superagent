@@ -41,6 +41,8 @@ export const ProjectSchema = z.object({
   gitCredential: z.string().trim().max(60).default(''),
   /** 飞书凭据记录 ID；飞书类任务来源统一使用它，配置里不再保存凭据 ID。 */
   feishuCredential: z.string().trim().max(60).default(''),
+  /** 宿主侧工作区记录 ID（DeepSeek Harness workspace）；由 ProjectWorkspaces 自动建立与同步，面板不直接编辑。 */
+  hostWorkspaceId: z.string().trim().max(80).optional(),
   execution: z.object({
     directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
     branch: z.string().trim().max(200).default(''),

@@ -16,7 +16,7 @@ import { codeRepoType } from '../code-repos/types.ts'
 import { repositoryOfRemote } from '../code-repos/kind.ts'
 import { taskSources, type TaskSourceVerifyMeta } from '../task-sources/index.ts'
 import { TaskRepoError } from '../task-sources/kind.ts'
-import { projectRepoId, type ProjectRepo } from '../projects/kind.ts'
+import { projectRepoId, type Project, type ProjectRepo } from '../projects/kind.ts'
 import type { FeishuWikiApi } from '../task-sources/feishu-api.ts'
 import type { FeishuImApi } from '../task-sources/feishu-im-api.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
@@ -49,13 +49,19 @@ const setupMaterial = (settings: Settings) => JSON.stringify({
   sources: Object.entries(settings.sources)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([id, record]) => [id, record.kind, record.enabled, (SETUP_FIELDS[record.kind] ?? []).map(key => record.config[key] ?? '')]),
-  // 项目仓库进入部署：每个项目把自己的仓库配置解析成来源，Git 凭据随项目保存。
-  projects: Object.entries(settings.projects)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([id, project]) => [id, project.enabled, project.codeRepo.kind,
-      (SETUP_FIELDS[project.codeRepo.kind] ?? []).map(key => project.codeRepo.config[key] ?? ''), project.gitCredential]),
 })
 export const setupChanged = (before: Settings | undefined, after: Settings): boolean => !before || setupMaterial(before) !== setupMaterial(after)
+/**
+ * 比较两份项目列表里进入部署的字段：项目 ID、启用状态、仓库类型与配置、Git 凭据引用。
+ * 项目仓库进入部署（每个项目把自己的仓库配置解析成来源，Git 凭据随项目保存），
+ * 因此项目写路径用它判定是否需要重启以重新解析部署；新增、删除或启停项目都会触发。
+ */
+const projectMaterial = (projects: { id: string; project: Project }[]) => JSON.stringify(projects
+  .slice().sort((left, right) => left.id.localeCompare(right.id))
+  .map(({ id, project }) => [id, project.enabled, project.codeRepo.kind,
+    (SETUP_FIELDS[project.codeRepo.kind] ?? []).map(key => project.codeRepo.config[key] ?? ''), project.gitCredential]))
+export const projectsChanged = (before: { id: string; project: Project }[] | undefined, after: { id: string; project: Project }[]): boolean =>
+  !before || projectMaterial(before) !== projectMaterial(after)
 /**
  * 按候选配置与 Git 凭据解析仓库远端：凭据决定认证方式；未绑定时沿用配置里的 auth 与 SSH key，
  * 与项目保存后的解析保持同一套规则。
@@ -106,10 +112,10 @@ export class Setup {
   }
   configured(): boolean { return this.resolved !== undefined }
   /** 解析每条来源记录并应用执行器环境；记录级 `SetupError` 存入 `sourceProblems`，机器级问题存入 `problem`。 */
-  async run(settings: Settings): Promise<boolean> {
+  async run(settings: Settings, projects: { id: string; project: Project }[]): Promise<boolean> {
     this.problem = undefined
     this.sourceProblems = {}
-    try { this.resolved = await this.resolve(settings); return true }
+    try { this.resolved = await this.resolve(settings, projects); return true }
     catch (error) {
       if (!(error instanceof SetupError)) throw error
       this.resolved = undefined
@@ -389,7 +395,7 @@ export class Setup {
       default: return undefined
     }
   }
-  private async resolve(settings: Settings): Promise<Deployment> {
+  private async resolve(settings: Settings, projects: { id: string; project: Project }[]): Promise<Deployment> {
     const { context, machine, lifetime } = this.host
     const probe = this.probe()
     const sources: Record<string, ResolvedSource> = {}
@@ -407,7 +413,7 @@ export class Setup {
       }
     }
     // 每个启用的项目把自己的仓库解析成部署来源，任务来源同步工作副本时复用同一套命令入口。
-    for (const [id, project] of Object.entries(settings.projects)) {
+    for (const { id, project } of projects) {
       if (!project.enabled) continue
       const repoId = projectRepoId(id)
       try {

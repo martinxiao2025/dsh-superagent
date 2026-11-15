@@ -10,7 +10,7 @@ import type { Settings } from '../policy.ts'
 import { runAsWorker, shellArgv, verifyDirectory } from '../infra/environment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
 import { materializeWorkspace, removeWorkspace } from '../code-repos/workspace.ts'
-import { projectRepoId } from '../projects/kind.ts'
+import { projectRepoId, type Project } from '../projects/kind.ts'
 import { executionRoot, projectDirectory, ticketDirectoryName } from '../execution-paths.ts'
 import { Later } from '../app/later.ts'
 import { batchLine, batchOf, capped, RETRIED, workerSessionId, WorktreeNameSchema } from './format.ts'
@@ -55,7 +55,7 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
 }
 
 /** 准备命令的选择：项目级 prepare 优先于全局 executor.prepare；无仓库的工单只能用全局命令，避免多项目共享缓存互相污染。 */
-export function prepareCommandOf(settings: Settings, project: Settings['projects'][string] | undefined, repo: string): string {
+export function prepareCommandOf(settings: Settings, project: Project | undefined, repo: string): string {
   return (repo && project?.execution.prepare?.trim()) || settings.executor.prepare.trim()
 }
 
@@ -71,7 +71,7 @@ export async function prepareDirectory(w: WorkerContext, ticket: Ticket): Promis
   const settings = host.store.settings()
   const basis = ticket.mandate.basis
   const projectId = basis.via === 'scheduled' ? basis.project : undefined
-  const project = projectId ? settings.projects[projectId] : undefined
+  const project = projectId ? host.store.projects.get(projectId) : undefined
   const repo = projectId ? projectRepoId(projectId) : ''
   const checkout = (args: string[], cwd: string) => host.commands.scope(repo).git(args, cwd)
   await mkdir(dirname(directory), { recursive: true })

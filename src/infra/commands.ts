@@ -6,14 +6,13 @@ import { z } from 'zod'
 import type { Deployment, ResolvedFeishuSource, ResolvedGithubSource, ResolvedGitlabSource, ResolvedSource } from '../deployment-types.ts'
 import { hostOf } from './host.ts'
 import { redact } from './text.ts'
+import { cmdQuote } from './win32.ts'
 
 const exec = promisify(execFile)
 /** 未配置 `commandTimeoutMs` 时的默认命令超时；与配置 schema 的默认值保持一致。 */
 const TIMEOUT_MS = 90_000
 /** Windows 上的 CLI 可能被安装为批处理文件，而 Windows 无法在无 shell 的情况下启动它。 */
 const BATCH = /\.(?:cmd|bat)$/i
-/** 为 `cmd.exe /c` 命令行引用一个参数，按 cmd 的预期把内嵌引号加倍。 */
-const cmdQuote = (argument: string): string => `"${argument.replaceAll('"', '""')}"`
 /**
  * 子进程运行 `program` 所需的 argv：`.cmd` 或 `.bat` 形式的 CLI（用于选择账号的包装脚本）经由 `cmd.exe` 执行，
  * 因为 Windows 无法直接启动批处理文件。

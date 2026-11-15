@@ -10,28 +10,22 @@ import { markdown, preview } from './text.ts'
 export type BasisFact =
   | { name: 'addressed'; value: 'mention' | 'direct' } | { name: 'followup' } | { name: 'admission'; value: AdmissionCell } | { name: 'observation' }
   | { name: 'mode'; value: AcceptMode } | { name: 'rules'; value: { id: string; name: string }[] } | { name: 'sender'; value: string }
-  | { name: 'legacyAuthority'; value: string } | { name: 'bot' } | { name: 'scheduled'; value: string }
-/**
- * 按阅读顺序提取可展示的授权准入信息（省略接收范围，它只用于重新校验），
- * 并把仅有 `authority` 的前 scope 时期记录标记为 `legacy`。
- */
-export function basisFacts(basis: MandateBasis, rule: Snapshot['rule']): { facts: BasisFact[]; legacy: boolean } {
+  | { name: 'bot' } | { name: 'scheduled'; value: string }
+/** 按阅读顺序提取可展示的授权准入信息（省略接收范围，它只用于重新校验）。 */
+export function basisFacts(basis: MandateBasis, rule: Snapshot['rule']): BasisFact[] {
   const facts: BasisFact[] = []
   if (basis.sender) facts.push({ name: 'sender', value: basis.sender })
   if (basis.via === 'bot') facts.push({ name: 'bot' })
   if (basis.via !== 'followup' && basis.via !== 'scheduled' && basis.addressed) facts.push({ name: 'addressed', value: basis.addressed })
   if (basis.via === 'scheduled') facts.push({ name: 'scheduled', value: basis.task })
-  // 已导入的依据已在 `authority` 中记录其后续来源。
-  if (basis.via === 'followup' && !basis.authority) facts.push({ name: 'followup' })
+  if (basis.via === 'followup') facts.push({ name: 'followup' })
   if (basis.via === 'admission') facts.push({ name: 'admission', value: basis.cell })
   const observation = basis.via === 'admission' || basis.via === 'bot' ? basis.observation : undefined
   // 列表中的机器人消息无论在哪里接收都属于推断出的候选，因此仅从 `observation` 中展示接受模式。
   if (observation && basis.via !== 'bot') facts.push({ name: 'observation' })
   if (observation?.mode) facts.push({ name: 'mode', value: observation.mode })
   if (basis.rules?.length) facts.push({ name: 'rules', value: basis.rules.map(rule) })
-  const authority = basis.via === 'followup' ? basis.authority : undefined
-  if (authority) facts.push({ name: 'legacyAuthority', value: authority })
-  return { facts, legacy: authority !== undefined }
+  return facts
 }
 export function ticketList(host: ViewHost, stage: 'open' | TicketStage['stage'], offset: number, limit: number) {
   const view = snapshot(host)
@@ -73,7 +67,7 @@ export function ticketDetail(host: ViewHost, id: string) {
   // 对来自机器人的授权传入 `human = false`，以便从策略列表中移除后，来源类型仍将该操作者标记为机器人。
   const human = ticket.mandate.basis.via !== 'bot'
   return { ...ticketLine(view, ticket), mandate: { ...ticket.mandate, actor: view.actor(ticket.mandate.actor, human) },
-    basis: basisFacts(ticket.mandate.basis, view.rule), paused: store.settings().paused,
+    basis: { facts: basisFacts(ticket.mandate.basis, view.rule) }, paused: store.settings().paused,
     channels: ticket.channels.map(channel => channelLink(view, channel)),
     decision: decision ? decisionView(view, decision) : undefined,
     // 每个已开始的分配都在工单唯一的执行器会话中运行。报告了非进行中状态的运行中分配，其回合已结束，除非人员响应恢复了工单。

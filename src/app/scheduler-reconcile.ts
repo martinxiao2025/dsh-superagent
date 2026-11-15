@@ -1,5 +1,5 @@
 /** 项目调度器的轮询与合并模块：读取任务来源，把轮询结果原子地合并进持久化队列；由 ProjectScheduler 组合。 */
-import { projectRepoId } from '../projects/kind.ts'
+import { projectRepoId, type Project } from '../projects/kind.ts'
 import { splitTask, type RawTask } from '../task-sources/tasks.ts'
 import type { TaskSourceRegistry } from '../task-sources/index.ts'
 import type { Settings } from '../policy.ts'
@@ -52,7 +52,7 @@ export class SchedulerReconcile {
 
   /** 轮询一个项目：读取任务来源，取消消失的任务，把新的工作项入队；`settings` 由调用链传入以避免重复读取。 */
   async poll(projectId: string, settings: Settings = this.base.host.settings()): Promise<void> {
-    const project = settings.projects[projectId]
+    const project = this.base.host.project(projectId)
     if (!project?.enabled) return
     // 资源级互斥（评审 C4）：互斥应落在工作副本这一共享资源上，而不是调用方的池子上。
     // 手动 scan 与 tick 投递的 poll 副作用各自持并发池，数值相同不代表同一项目不重叠；
@@ -66,7 +66,7 @@ export class SchedulerReconcile {
     }
   }
 
-  private async pollExclusive(projectId: string, project: Settings['projects'][string], settings: Settings): Promise<void> {
+  private async pollExclusive(projectId: string, project: Project, settings: Settings): Promise<void> {
     const interval = project.schedule.intervalMinutes * 60_000
     // 项目有任务在执行时不拉取：同步会改写轮询工作副本，与 worker 的检出互相踩。
     // 推迟到 `min(轮询间隔, BUSY_RETRY_MS)` 之后重试，原因写进快照供排障，不静默丢弃。
@@ -103,7 +103,7 @@ export class SchedulerReconcile {
    * 项目轮询结果合并进队列：按「任务 + 工作项稳定键」核对，消失的工作项取消、
    * 内容变化的旧条目被取代、新工作项入队；已完成且内容未变的同项不重复。
    */
-  private reconcile(projectId: string, project: Settings['projects'][string], tasks: readonly RawTask[]): void {
+  private reconcile(projectId: string, project: Project, tasks: readonly RawTask[]): void {
     const pending = new Set(project.taskPolicy.pendingStatuses.map(status => status.toLowerCase()))
     const present = new Map<string, RawTask>()
     for (const task of tasks) if (pending.has(task.status.trim().toLowerCase())) present.set(task.id, task)

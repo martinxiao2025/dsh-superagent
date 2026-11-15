@@ -69,14 +69,12 @@ function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: stri
   const { t, navigate } = usePanel()
   const { mandate, decision } = ticket
   const fact = (item: TicketPageView['basis']['facts'][number]): string => {
-    if (item.name === 'legacyAuthority') return valueLabel(t, 'legacy', item.value)
     if (item.name === 'mode' || item.name === 'addressed') return valueLabel(t, item.name, item.value)
     if (item.name === 'admission') return valueLabel(t, 'admissionCell', item.value)
     if (item.name === 'rules') return item.value.map(rule => rule.name).join(t('listSeparator'))
     if (item.name === 'scheduled') return `${t('basis.scheduled')} · ${item.value}`
     return item.name === 'sender' ? item.value : t('yes')
   }
-  const { legacy } = ticket.basis
   // 当 `sender` 与 `actor` 相同时省略 `sender`，因为后者已显示在状态行上。
   const facts = ticket.basis.facts.filter(item => !(item.name === 'sender' && item.value === actor))
   const direction = decision?.direction
@@ -100,9 +98,9 @@ function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: stri
   const version = <button type="button" className="dt-textlink dt-mono" onClick={() => navigate(settingsRoute('eval',
     { version: mandate.policyVersion }))}>{mandate.policyVersion.slice(0, 8)}</button>
   return <Section title={t('mandateDetails')} icon="shield">
-    <KeyValues rows={[...rows, [t('term.scope'), legacy ? t('legacyScopeShort') : mandate.scope || t('empty')],
+    <KeyValues rows={[...rows, [t('term.scope'), mandate.scope || t('empty')],
       ...facts.map((item): [string, string] => [valueLabel(t, 'basis', item.name), fact(item)]),
-      ...legacy ? [] : [[t('policyVersion'), version] as [string, ReactNode]]]} />
+      [t('policyVersion'), version] as [string, ReactNode]]} />
   </Section>
 }
 
@@ -115,7 +113,6 @@ export function TicketPage({ id }: { id: string }) {
       error={error} loading />}</>
   const status = ticketMark(t, data)
   const actor = actorName(t, data.mandate.actor)
-  const { legacy } = data.basis
   const undelivered = data.inputs.filter(input => !input.delivered)
   const failedText = /^(?:\w+Error|Error)\b[:：]/.test(data.summary)
   const failed = data.stage === 'person' && data.action === 'failed'
@@ -185,9 +182,7 @@ export function TicketPage({ id }: { id: string }) {
       </Details>}
       <Details icon="hash" title={t('identifiers')}>
         <KeyValues rows={[[t('ticketId'), <span className="dt-mono">{data.id}</span>], [t('executionDirectory'), <span
-          className="dt-mono">{data.directory ?? t('empty')}</span>],
-          ...legacy && data.mandate.scope ? [[t('legacyAssignment'), <span
-            className="dt-mono dt-clamp">{data.mandate.scope}</span>] as [string, ReactNode]] : []]} />
+          className="dt-mono">{data.directory ?? t('empty')}</span>]]} />
       </Details>
     </div>
     {data.actions.stop && <div className="dt-danger-zone">

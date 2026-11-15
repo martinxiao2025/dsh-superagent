@@ -58,10 +58,8 @@ describe('ticket execution environment', () => {
 })
 
 describe('project directory names', () => {
-  /** 项目自带的代码仓库不属于消息来源，因此不参与工单项目目录。 */
-  const withProject = () => SettingsSchema.parse({ projects: { alpha: { name: 'Alpha',
-    codeRepo: { kind: 'github', config: { repository: 'acme/Demo.ProjectOnline' } },
-    taskSource: { kind: 'feishu-wiki', config: { spaceId: 'space-1' } } } } })
+  /** 项目自带的代码仓库不属于消息来源（项目独立建表），因此不参与工单项目目录。 */
+  const withProject = () => SettingsSchema.parse({})
 
   it('names the directory after the ticket\'s Source record, never after the ticket', () => {
     const value = SettingsSchema.parse({ sources: { alpha: { kind: 'feishu', name: 'Alpha', enabled: true, config: {} } } })

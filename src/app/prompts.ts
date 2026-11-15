@@ -36,9 +36,7 @@ export const PromptConfigSchema = z.object({ communication: z.string(), scope: z
   skills: z.record(SkillNameSchema, z.string()), overrides: z.record(z.string(), OverrideSchema).optional()
     .describe('Text in place of a built-in part, by its key in prompts/defaults; a part not named follows its built-in text.') }).strict()
 export type PromptConfig = z.infer<typeof PromptConfigSchema>
-export interface PromptVersion { revision: number; previousRevision: number | null; savedAt: string; source: string; config: PromptConfig;
-  /** 当无法跨 schema 版本比较差异时保留的原始未迁移配置。 */
-  legacy?: { config: unknown } }
+export interface PromptVersion { revision: number; previousRevision: number | null; savedAt: string; source: string; config: PromptConfig }
 export const defaultPrompts = (): PromptConfig => ({ ...teamDefaults, skills: {} })
 
 const ENVIRONMENT_HEADING = '执行环境（来自本安装的设置；它优先于这些说明中在别处指定的任何仓库或账户；空值表示此处未配置该部分）。工单目录的 prepare 命令读取相同的变量：'
@@ -221,9 +219,6 @@ export class Prompts {
       const version = current.revision - offset - i === 0 && current.revision === 0 ? current : this.version(current.revision - offset - i)
       const { config, ...summary } = version
       const previous = version.previousRevision === null ? undefined : this.versions.get(version.previousRevision)?.config
-      // 团队部分之前的修订版本无法逐字段比较。
-      const legacy = version.legacy || (version.previousRevision !== null && this.versions.get(version.previousRevision)?.legacy)
-      if (legacy) return { ...summary, changed: ['legacy'] }
       const entries = (value: PromptConfig) => ({ communication: value.communication, scope: value.scope, delivery: value.delivery,
         ...Object.fromEntries(Object.entries(value.skills).map(([name, text]) => ['skill/' + name, text])),
         // 覆盖项会随其文本或其所编辑自的内置文本而变化。

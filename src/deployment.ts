@@ -9,6 +9,7 @@ import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
 import { spawnArgv } from './infra/commands.ts'
 import { hostOf } from './infra/host.ts'
+import { pathExtensions } from './infra/win32.ts'
 import { SetupError } from './setup.ts'
 // 已解析来源与部署形态的权威定义在零依赖叶子层；这里导入并具名再导出，保持既有导入路径不变。
 // `RepoAuth` 与其 zod schema 都留在本文件：schema 属于配置层，叶子层只有它的类型形态。
@@ -139,15 +140,13 @@ export const webBaseOf = (instanceUrl: string, fallback: string): string => inst
 const hostVariable = (name: string, instanceUrl: string): Record<string, string> | undefined =>
   instanceUrl ? { [name]: hostOf(instanceUrl, '') } : undefined
 
-/** Windows 会像 `cmd` 和 `where` 那样为裸命令名附加的扩展名；POSIX 不附加任何扩展名。 */
-const EXTENSIONS: readonly string[] = process.platform === 'win32'
-  ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean) : []
 /** 把命令名或绝对路径解析为可执行文件，忽略工作单元垫片目录。 */
 export function executable(name: string, path: string, exclude?: string): string {
   // Windows 用 `\` 和 `/` 两种分隔符，并把裸名字解析为 `gh.exe` 或 `gh.cmd`；POSIX 只用 `/` 分隔。
   if (/[\\/]/.test(name) && !isAbsolute(name)) throw new Error(`${name} must be a command name or an absolute path`)
+  const extensions = pathExtensions()
   const bases = isAbsolute(name) ? [name] : path.split(delimiter).filter(dir => isAbsolute(dir) && !(exclude && sameDirectory(dir, exclude))).map(dir => join(dir, name))
-  const candidates = bases.flatMap(base => [base, ...(EXTENSIONS.length && !extname(base) ? EXTENSIONS.map(extension => base + extension) : [])])
+  const candidates = bases.flatMap(base => [base, ...(extensions.length && !extname(base) ? extensions.map(extension => base + extension) : [])])
   for (const candidate of candidates) {
     try { if (statSync(candidate).isFile()) { accessSync(candidate, constants.X_OK); return candidate } }
     catch { /* 此处没有可执行文件；尝试下一个 PATH 目录。 */ }

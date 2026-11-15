@@ -6,6 +6,7 @@
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { CMD_QUOTE_SOURCE, NORMALIZE_PATH_SOURCE, normalizePath } from './win32.ts'
 
 /** 调度器脚本路径；垫片与 git 凭据助手都经由它执行记录自己的 CLI。 */
 export const workerDispatch = (stateDir: string): string => join(stateDir, 'worker-dispatch.mjs')
@@ -19,11 +20,10 @@ interface WorkerSources { clis: Record<string, WorkerRecord>; tickets: Record<st
 
 /**
  * 目录键：绝对路径，Windows 上统一小写（环境变量名与路径大小写不敏感）。
- * 调度器使用同一套规则查找，登记与查找必须一致。
+ * 规则单源在 `infra/win32.ts` 的 `normalizePath`；调度器（workspace-gc、code-repos/sync）使用同一函数查找。
  */
 export function ticketKey(directory: string): string {
-  const absolute = resolve(directory)
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+  return normalizePath(directory)
 }
 
 /**
@@ -119,7 +119,7 @@ export const WORKER_DISPATCH_BODY: string = [
   '    return { clis: value.clis ?? {}, tickets: value.tickets ?? {} }',
   '  } catch { return { clis: {}, tickets: {} } }',
   '})()',
-  'const normalize = path => process.platform === \'win32\' ? resolve(path).toLowerCase() : resolve(path)',
+  `const normalize = ${NORMALIZE_PATH_SOURCE}`,
   'const records = Object.entries(sources.clis).filter(([, record]) => kinds.includes(record.kind))',
   '',
   '// 记录选择：显式记录（准备命令的环境变量）→ 当前目录的祖先登记 → 该种类唯一一条；否则失败。',
@@ -154,7 +154,7 @@ export const WORKER_DISPATCH_BODY: string = [
   "// git 会把凭据操作作为参数追加；`gh auth git-credential` 与 `glab auth git-credential` 都按该协议读取 stdin。",
   "const argv = command === 'git-credential' ? ['auth', 'git-credential', ...args] : args",
   'const batch = /\\.(?:cmd|bat)$/i.test(record.cli)',
-  'const quote = value => `"${value.replaceAll(\'"\', \'""\')}"`',
+  `const quote = ${CMD_QUOTE_SOURCE}`,
   'const spec = process.platform === \'win32\' && batch',
   '  ? { file: process.env.ComSpec ?? \'cmd.exe\', args: [\'/d\', \'/s\', \'/c\', `"${quote(record.cli)} ${argv.map(quote).join(\' \')}"`], windowsVerbatimArguments: true }',
   '  : { file: record.cli, args: argv, windowsVerbatimArguments: false }',

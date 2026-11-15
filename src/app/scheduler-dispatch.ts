@@ -3,7 +3,7 @@ import type { Engine, ScheduledTicket } from '../core/index.ts'
 import { key } from '../core/ids.ts'
 import { ticketStage, type Ticket } from '../core/index.ts'
 import type { Settings } from '../policy.ts'
-import { projectRepoId } from '../projects/kind.ts'
+import { projectRepoId, type Project } from '../projects/kind.ts'
 import type { SchedulerHost } from './scheduler.ts'
 import { queueActive, queueInFlight, type QueueEntry } from '../queue/model.ts'
 
@@ -83,7 +83,7 @@ export class SchedulerDispatch {
     // 出队扫描下推到 SQL（queued 且到期，按 seq 排序），不再解析整表 JSON。
     for (const entry of this.base.host.store.queue.ready(this.base.now())) {
       // 停用或删除的项目不再领取排队项；条目保留供恢复后继续。
-      if (!settings.projects[entry.project]?.enabled) continue
+      if (!this.base.host.project(entry.project)?.enabled) continue
       if (used >= settings.executor.maxWorkers) break
       // 同项目同一时刻只跑一个任务：跳过时保留在原位，由后面的其他项目轮转。
       if (busy.has(entry.project)) continue
@@ -103,9 +103,8 @@ export class SchedulerDispatch {
 
   /** 停用的项目保留排队项但不派工（`pump` 跳过）；项目记录已不存在的条目取消，避免成为永久孤儿。 */
   retire(): void {
-    const projects = this.base.host.settings().projects
     for (const entry of this.base.host.store.queue.queued()) {
-      if (projects[entry.project]) continue
+      if (this.base.host.project(entry.project)) continue
       this.finish(entry, 'cancelled', 'The project was removed')
     }
   }
@@ -126,8 +125,7 @@ export class SchedulerDispatch {
   }
 
   private dispatch(entry: QueueEntry): boolean {
-    const settings = this.base.host.settings()
-    const project = settings.projects[entry.project]
+    const project = this.base.host.project(entry.project)
     if (!project?.enabled) return false
     const starting: QueueEntry = { ...entry, state: 'starting', startedAt: this.base.stamp(), updatedAt: this.base.stamp(), dueAt: this.base.now() }
     // 每次尝试都必须是一个新的触发器与工单：复用已结束工单的触发器只会拿回旧工单，重试不会真正执行。
@@ -167,7 +165,7 @@ export class SchedulerDispatch {
 
   /** 失败后按项目退避重排；达到 `maxRetries` 后进入最终失败并回写失败状态。 */
   private retry(entry: QueueEntry, reason: string): void {
-    const project = this.base.host.settings().projects[entry.project]
+    const project = this.base.host.project(entry.project)
     const attempt = entry.attempt + 1
     if (!project || attempt > project.retry.maxRetries) {
       this.base.writeBack({ ...entry, attempt }, 'failed')

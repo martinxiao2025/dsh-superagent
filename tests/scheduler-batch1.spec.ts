@@ -8,6 +8,7 @@ import type { TaskSourceDriver } from '../src/task-sources/kind.ts'
 import type { QueueEntry } from '../src/queue/model.ts'
 import type { Settings } from '../src/policy.ts'
 import type { RawTask } from '../src/task-sources/tasks.ts'
+import type { Project } from '../src/projects/kind.ts'
 import { prepareCommandOf } from '../src/executor/launch.ts'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -35,7 +36,7 @@ const memory = (): MemorySource => {
 }
 
 const settings = (projects: Record<string, unknown>, maxWorkers = 2): Settings =>
-  ({ projects, executor: { maxWorkers }, taskPolicy: {} } as unknown as Settings)
+  ({ executor: { maxWorkers }, taskPolicy: {} } as unknown as Settings)
 
 const project = (id: string, overrides: Record<string, unknown> = {}) => ({
   id, name: id, enabled: true,
@@ -79,7 +80,9 @@ function setup(projects: Record<string, unknown>, options: { jitters?: number[];
   const configured = settings(projects)
   const jitters = [...(options.jitters ?? [])]
   const host: ConstructorParameters<typeof ProjectScheduler>[0] = {
-    store, settings: () => configured, registry: new TaskSourceRegistry([driver]),
+    store, settings: () => configured,
+    projects: () => projects as never, project: (id: string) => (projects as Record<string, never>)[id],
+    registry: new TaskSourceRegistry([driver]),
     engine: { schedule: () => ({ ticketId: 'ticket-x', created: true }), stopTicket: () => undefined as never },
     effects: { enqueue: () => {}, cancel: () => {} },
     executor: { slotsInUse: () => 0, projectsInUse: () => [] },
@@ -147,16 +150,16 @@ describe('一轮内的并发轮询', () => {
 })
 
 describe('项目级 prepare', () => {
-  const executorSettings = (prepare: string, projectPrepare: string) =>
-    ({ executor: { prepare }, projects: { a: { execution: { prepare: projectPrepare } } } }) as unknown as Settings
+  const executorSettings = (prepare: string) => ({ executor: { prepare } }) as unknown as Settings
+  const projectWith = (prepare: string) => ({ execution: { prepare } }) as unknown as Project
   it('项目级 prepare 优先于全局命令', () => {
-    expect(prepareCommandOf(executorSettings('global-cmd', 'npm ci'), executorSettings('', 'npm ci').projects.a, 'repo-a')).toBe('npm ci')
+    expect(prepareCommandOf(executorSettings('global-cmd'), projectWith('npm ci'), 'repo-a')).toBe('npm ci')
   })
   it('项目未填写时回退全局命令', () => {
-    expect(prepareCommandOf(executorSettings('global-cmd', ''), executorSettings('global-cmd', '').projects.a, 'repo-a')).toBe('global-cmd')
+    expect(prepareCommandOf(executorSettings('global-cmd'), projectWith(''), 'repo-a')).toBe('global-cmd')
   })
   it('无仓库的工单只用全局命令，避免多项目共享缓存互相污染', () => {
-    expect(prepareCommandOf(executorSettings('global-cmd', 'npm ci'), executorSettings('', 'npm ci').projects.a, '')).toBe('global-cmd')
+    expect(prepareCommandOf(executorSettings('global-cmd'), projectWith('npm ci'), '')).toBe('global-cmd')
   })
 })
 

@@ -6,7 +6,6 @@ import { isAbsolute } from 'node:path'
 import { LIMITS } from '../limits.ts'
 import { z } from 'zod'
 import type { AdmissionRow } from '../admission.ts'
-import { ProjectSchema } from '../projects/kind.ts'
 import { WORKER_COMMANDS } from '../infra/environment.ts'
 
 export const RuleIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/)
@@ -58,9 +57,8 @@ const SourceRecordId = z.string().regex(/^[a-z][a-z0-9-]*$/)
 const RecordSchema = <T extends z.ZodTypeAny>(schema: T) => z.record(SourceRecordId, schema).default({})
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
-  /** 消息来源（飞书）；代码仓库与任务来源由各项目内嵌，不再单独保存记录。 */
+  /** 消息来源（飞书）；项目独立建表（`Store.projects`），不再随设置快照整体重写。 */
   sources: RecordSchema(SourceInstanceSchema),
-  projects: RecordSchema(ProjectSchema),
   policy: PolicyConfigSchema.default(() => PolicyConfigSchema.parse({})),
   eval: EvalConfigSchema.default(() => EvalConfigSchema.parse({})),
   executor: ExecutorConfigSchema.default(() => ExecutorConfigSchema.parse({})),

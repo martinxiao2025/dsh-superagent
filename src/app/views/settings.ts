@@ -53,7 +53,7 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
     taskSourceKinds: taskSources.kinds().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description,
       needsFeishuCredential: kind.fields.some(field => field.key === 'feishuCredential'),
       fields: kind.fields.filter(field => field.key !== 'feishuCredential' && field.key !== 'repo') })),
-    projects: Object.entries(settings.projects).map(([id, project]) => ({ id, name: project.name, enabled: project.enabled,
+    projects: store.projects.list().map(({ id, project }) => ({ id, name: project.name, enabled: project.enabled,
       value: project, revision: store.blockRevision(`project:${id}`) })),
     environment: { root: executionRoot(settings, stateDir), variables: declaredVariables(sources, settings) },
   }

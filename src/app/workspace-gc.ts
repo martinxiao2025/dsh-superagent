@@ -6,6 +6,7 @@
 import { readdir, rm, rmdir } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import type { Ticket } from '../core/index.ts'
+import { normalizePath } from '../infra/win32.ts'
 
 /** 回收输入；`workRoot` 通常来自 `executionRoot(settings, stateDir)`。 */
 export interface WorkspaceGcInput {
@@ -50,10 +51,7 @@ export interface WorkspaceGcReport {
   errors: string[]
 }
 
-const normalize = (path: string): string => {
-  const absolute = resolve(path)
-  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
-}
+const normalize = normalizePath
 
 /** 目录严格位于 `root` 内（而不是根本身或外部路径）。 */
 const inside = (root: string, directory: string): boolean => {

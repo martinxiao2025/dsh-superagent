@@ -14,8 +14,6 @@ import { CliError } from './commands.ts'
 import { workerDispatch, writeWorkerRecords, WORKER_DISPATCH_BODY, type WorkerRecord } from './worker-sources.ts'
 
 const MARKER = '# Written by dsh-superagent on every start; edits are lost.'
-/** 项目早先名称（`dsh-tag`、`dsh-go`、`dsh-freelancer`）下写入文件的标记，`dsh-superagent` 也拥有并会替换这些文件。 */
-const LEGACY_MARKERS = ['dsh-tag', 'dsh-go', 'dsh-freelancer'].map(name => `# Written by ${name} on every start; edits are lost.`)
 /** 工作单元需要的命令，`blockedCommands` 无法屏蔽它们：垫片和 git。 */
 export const WORKER_COMMANDS: readonly string[] = ['gh', 'git', 'lark-cli']
 export const workerBin = (stateDir: string): string => join(stateDir, 'worker-bin')
@@ -69,7 +67,7 @@ async function written(file: string): Promise<boolean> {
   if (!(await lstat(file)).isFile()) return false
   const head = (await readFile(file, 'utf8')).split('\n', 2).map(line => line.replace(/\r$/, ''))
   // 批处理垫片用 `rem` 标记自身，调度器用 `//` 行注释；`cmd` 与 node 都会忽略它们。
-  return [MARKER, ...LEGACY_MARKERS].flatMap(marker => [marker, `rem ${marker}`, `// ${marker}`]).some(marker => head.includes(marker))
+  return [MARKER].flatMap(marker => [marker, `rem ${marker}`, `// ${marker}`]).some(marker => head.includes(marker))
 }
 async function own(file: string, text: string, mode = 0o644): Promise<void> {
   let foreign = false
