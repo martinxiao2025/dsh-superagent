@@ -12,6 +12,7 @@ import type { GitCredential } from '../git-credentials/kind.ts'
 import type { FeishuCredential } from '../feishu-credentials/kind.ts'
 import { Versions } from './versions.ts'
 import { storeReads } from './store-read.ts'
+import { MAX_EFFECT_ATTEMPTS } from './effects.ts'
 
 /** 触发器在线程时间线上的位置，按时间戳排序，并以 `id` 作为并列时的决胜依据。 */
 export interface TimelinePlace { at: string; id: string }
@@ -431,17 +432,24 @@ export class Store implements Repositories {
     attempt: (due: number, kind: string, key: string, seq: number, generation: number): void => {
       this.db.prepare('UPDATE effect SET due = ? WHERE kind = ? AND key = ? AND seq = ? AND generation = ?').run(due, kind, key, seq, generation)
     },
-    /** 仅当序号与代数仍匹配时记录一次失败：递增尝试数、保存截断后的错误文本并按退避推迟。 */
+    /** 仅当序号与代数仍匹配时记录一次失败：递增尝试数、保存截断后的错误文本并按退避推迟；到期给死信哨兵即进入死信。 */
     fail: (error: string, due: number, kind: string, key: string, seq: number, generation: number): void => {
       this.db.prepare('UPDATE effect SET attempts = attempts + 1, error = ?, due = ? WHERE kind = ? AND key = ? AND seq = ? AND generation = ?')
         .run(error, due, kind, key, seq, generation)
     },
+    /** 重放一行死信（评审 C6）：清零尝试与错误、换代使残留的旧结算不再匹配、立即到期；保留载荷与队列位置。 */
+    replay: (kind: string, key: string, due: number): void => {
+      this.db.prepare(`UPDATE effect SET generation = generation + 1, attempts = 0, error = '', due = ? WHERE kind = ? AND key = ?`)
+        .run(due, kind, key)
+    },
     /** 汇总一个类别的等待数、最早入队时间、最大尝试数与最近一次失败文本，供健康上报。 */
-    stats: (kind: string): { waiting: number; since: string | null; attempts: number; error: string | null } => {
+    stats: (kind: string): { waiting: number; since: string | null; attempts: number; error: string | null; dead: number } => {
       const row = this.db.prepare(`SELECT COUNT(*) AS waiting, MIN(since) AS since, MAX(attempts) AS attempts,
-        (SELECT error FROM effect WHERE kind = ? AND attempts > 0 ORDER BY seq DESC LIMIT 1) AS error FROM effect WHERE kind = ?`).get(kind, kind)
+        SUM(CASE WHEN attempts >= ? THEN 1 ELSE 0 END) AS dead,
+        (SELECT error FROM effect WHERE kind = ? AND attempts > 0 ORDER BY seq DESC LIMIT 1) AS error FROM effect WHERE kind = ?`)
+        .get(MAX_EFFECT_ATTEMPTS, kind, kind) as { waiting: number; since: string | null; attempts: number; dead: number | null; error: string | null } | undefined
       return { waiting: Number(row?.waiting ?? 0), since: row?.since == null ? null : String(row.since),
-        attempts: Number(row?.attempts ?? 0), error: row?.error == null ? null : String(row.error) }
+        attempts: Number(row?.attempts ?? 0), dead: Number(row?.dead ?? 0), error: row?.error == null ? null : String(row.error) }
     },
   }
   /** 管理视图、编排工具和来源轮询的只读查询（见 `storeReads`）。 */

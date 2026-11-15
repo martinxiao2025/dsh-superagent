@@ -7,6 +7,16 @@ export { Later } from './later.ts'
 import { Later } from './later.ts'
 /** 某类副作用报告错误前允许的连续失败次数，与来源轮询的失败阈值一致。 */
 export const FAILURES_BEFORE_ERROR = 3
+/**
+ * 一行副作用连续失败这么多次后进入死信（评审 C6）：永久性故障（驱动配置损坏、来源被删、
+ * 清单格式变更）不再以退避间隔无限空转，保留行并入健康告警，等待人工重放或取消。
+ */
+export const MAX_EFFECT_ATTEMPTS = 10
+/**
+ * 死信行的到期时间哨兵（2100-01-01T00:00:00Z）：远超任何真实退避，分发永不出队。
+ * 重放（`replay` 或对同键重新 `enqueue`）清零尝试并立即到期，行即恢复。
+ */
+export const DEAD_LETTER_DUE = 4_102_444_800_000
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
 import type { HealthCategory } from '../infra/health.ts'
 import type { Store, EffectRow } from './store.ts'
@@ -89,6 +99,15 @@ export class Effects {
     this.store.effects.cancel(kind, key)
     this.store.afterCommit(() => { this.report(kind) })
   }
+  /**
+   * 重放一行死信（评审 C6）：保留载荷与队列位置，清零尝试并立即到期；行不存在时无操作。
+   * 面板/管理入口调用；对同键重新 `enqueue` 也具备同一重放语义（upsert 重置尝试与到期）。
+   */
+  replay(kind: EffectKind, key: string): void {
+    this.store.effects.replay(kind, key, this.now())
+    this.store.afterCommit(() => { this.report(kind) })
+    this.kick()
+  }
   start(): void { this.started = true; this.kick() }
   kick(): void {
     if (this.scheduled) return
@@ -160,8 +179,12 @@ export class Effects {
       this.store.effects.attempt(due, kind, row.key, row.seq, row.generation)
       this.wakeAt(due)
     } else {
+      // 死信终态（评审 C6）：达到最大尝试后把到期推到哨兵——分发永不再出队，
+      // 行与错误保留供健康展示与人工重放，而不是无限退避空转掩盖真实故障。
+      const dead = row.attempts + 1 >= MAX_EFFECT_ATTEMPTS
       const delay = Math.min(handler.retry[1], handler.retry[0] * 2 ** Math.min(row.attempts, 16))
-      this.store.effects.fail(String(failure.error).slice(0, 1000), this.now() + delay, kind, row.key, row.seq, row.generation)
+      this.store.effects.fail(String(failure.error).slice(0, 1000), dead ? DEAD_LETTER_DUE : this.now() + delay,
+        kind, row.key, row.seq, row.generation)
     }
     if (!this.stopped) this.report(kind)
   }
@@ -172,10 +195,12 @@ export class Effects {
   }
   private report(kind: EffectKind): void {
     const stats = this.store.effects.stats(kind)
-    const failing = stats.attempts >= FAILURES_BEFORE_ERROR && !this.handlers.get(kind)?.quiet
-    const detail = stats.waiting ? `${stats.waiting} waiting since ${stats.since}` : 'Nothing waiting'
+    const failing = (stats.attempts >= FAILURES_BEFORE_ERROR || stats.dead > 0) && !this.handlers.get(kind)?.quiet
+    // 死信单独点名（评审 C6）：数量进健康条目，面板据此提示人工重放。
+    const dead = stats.dead > 0 ? `${stats.dead} dead-lettered after ${MAX_EFFECT_ATTEMPTS} attempts (replay required); ` : ''
+    const waiting = stats.waiting ? `${stats.waiting} waiting since ${stats.since}` : 'Nothing waiting'
     this.health.get(kind)?.set(failing
-      ? { state: 'error', detail: `${detail}; the last failure: ${stats.error}`, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' }
-      : { state: 'ready', detail, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' })
+      ? { state: 'error', detail: `${dead}${waiting}; the last failure: ${stats.error}`, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' }
+      : { state: 'ready', detail: `${dead}${waiting}`, at: new Date(this.now()).toISOString(), category: CATEGORY[kind] ?? 'runtime' })
   }
 }

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { Effects, Later } from '../src/app/effects.ts'
+import { Effects, Later, MAX_EFFECT_ATTEMPTS } from '../src/app/effects.ts'
 import { Store } from '../src/app/store.ts'
 import { HealthBoard } from '../src/infra/health.ts'
 import { deferred } from './fixtures/async.ts'
@@ -199,6 +199,28 @@ it('reports a failure of the queue itself under its kind, until a dispatch of th
   effects.kick()
   await effects.idle()
   expect(health.relay).toMatchObject({ state: 'ready', detail: 'Nothing waiting' })
+})
+
+it('永久失败的副作用在第 MAX 次后退入死信：不再重试、健康点名、replay 重放（评审 C6）', async () => {
+  const run = vi.fn(async () => { throw new Error('driver config broken') })
+  effects.handle('notice', run, { retry: [1000, 2000] })
+  effects.enqueue('notice', 'stuck', { value: {}, summary: 'stuck' })
+  await effects.idle()
+  // 按退避推进时钟逐次重试到第 MAX_EFFECT_ATTEMPTS 次。
+  for (let failures = 0; failures < MAX_EFFECT_ATTEMPTS - 1; failures++) {
+    clock += Math.min(2000, 1000 * 2 ** failures); await effects.idle()
+  }
+  expect(run).toHaveBeenCalledTimes(MAX_EFFECT_ATTEMPTS)
+  // 死信：健康条目点名并转为 error，行保留；时钟再前进也不出队。
+  expect(health.notice).toMatchObject({ state: 'error' })
+  expect(String((health.notice as { detail?: string }).detail)).toContain('1 dead-lettered after 10 attempts')
+  clock += 10_000_000; await effects.idle()
+  expect(run).toHaveBeenCalledTimes(MAX_EFFECT_ATTEMPTS)
+  expect(effects.pending('notice', 'stuck')).toBe(true)
+  // 人工重放：清零尝试、立即到期，恢复执行并再次进入退避。
+  effects.replay('notice', 'stuck')
+  await effects.idle()
+  expect(run).toHaveBeenCalledTimes(MAX_EFFECT_ATTEMPTS + 1)
 })
 
 it('refuses a second handler for a kind', () => {

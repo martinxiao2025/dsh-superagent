@@ -28,6 +28,11 @@ export interface WorkspaceGcInput {
    * 实现按 repo 归属调用 git；缺省时跳过（元数据由 materializeWorkspace 的 prune 兜底）。
    */
   readonly removeWorktree?: (repo: string, directory: string) => Promise<void>
+  /**
+   * 目录删除成功后注销其工单来源登记（评审 E6）：登记表（worker-sources.json）随回收
+   * 收缩，陈旧映射不再参与新会话的祖先匹配；失败只记录错误，不回滚删除。
+   */
+  readonly forget?: (directory: string) => Promise<void>
 }
 
 /** 一次回收的结果；面板与调度健康条目据此报告。 */
@@ -130,6 +135,8 @@ export async function collectWorkspaces(input: WorkspaceGcInput): Promise<Worksp
         // 失败（镜像已删、目录不是 worktree）时退回 rm，不阻塞回收。
         if (input.removeWorktree && info.repo) await input.removeWorktree(info.repo, directory).catch(() => {})
         await remove(directory)
+        // 登记注销放在删除成功之后（评审 E6）：目录已消失，登记不再有意义。
+        if (input.forget) await input.forget(directory).catch(error => { report.errors.push(`${directory}: ${String(error instanceof Error ? error.message : error)}`) })
         report.removed.push(directory)
         remaining--
       } catch (error) {

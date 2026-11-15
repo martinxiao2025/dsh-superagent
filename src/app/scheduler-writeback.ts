@@ -24,7 +24,13 @@ export interface WritebackPayload {
 export interface WritebackContext {
   readonly host: SchedulerHost
   readonly registry: TaskSourceRegistry
+  /**
+   * 回写路径的仓库同步：与轮询共用的无损语义不同，这里允许在分叉时重置到远端
+   * （评审 S1）——本副作用仍在重试中，丢弃的只是自己未推送成功的提交，写入随后重放。
+   */
   readonly syncRepo: (projectId: string) => Promise<string>
+  /** 把回写产生的本地提交推送远端（评审 S1）；驱动声明 push 能力时在回写后调用。 */
+  readonly pushRepo?: (projectId: string) => Promise<void>
   /** 项目是否仍有任务在执行；回写需要同步工作副本，与 worker 的检出互斥。 */
   busy(projectId: string): boolean
   /** 项目是否正被轮询（评审 S9）：回写与轮询都要触碰同一份工作副本，必须互斥。 */
@@ -78,5 +84,14 @@ export class SchedulerWriteback {
       { signal: this.base.host.lifetime, syncRepo: () => this.base.syncRepo(payload.project),
         commands: this.base.host.commands.scope(projectRepoId(payload.project)),
         feishu: credential => this.base.host.feishuWiki?.(credential) ?? Promise.resolve(undefined) })
+    // 回写提交后推送远端（评审 S1）：驱动声明 push 才推送（飞书走 API，无 git 提交）。
+    // 推送失败随本副作用退避重试——下一次同步按 resetOnDivergence 重置并重放写入后重推，收敛。
+    if (driver.push && this.base.pushRepo) {
+      await driver.push(parsed.data,
+        { signal: this.base.host.lifetime, syncRepo: () => this.base.syncRepo(payload.project),
+          commands: this.base.host.commands.scope(projectRepoId(payload.project)),
+          feishu: credential => this.base.host.feishuWiki?.(credential) ?? Promise.resolve(undefined),
+          push: () => this.base.pushRepo!(payload.project) })
+    }
   }
 }

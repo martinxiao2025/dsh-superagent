@@ -3,11 +3,11 @@
  * 不经垫片与 `writeEnvironment`，逐条验证命令识别、记录选择（显式 → 祖先登记 → 唯一记录）、PATH 清洗与转发行为。
  * 假 CLI 一律经 `programSource` 生成，Windows 上走 `.cmd` 启动器，与产品的批处理启动分支一致。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WORKER_DISPATCH_BODY, ticketKey } from '../src/infra/worker-sources.ts'
+import { WORKER_DISPATCH_BODY, forgetTicketSource, recordTicketSource, ticketKey, writeWorkerRecords } from '../src/infra/worker-sources.ts'
 import { programSource, runProgram } from './fixtures/program.ts'
 
 // 测试套件并行运行时，子进程可能超过 5 秒的默认超时。
@@ -133,5 +133,33 @@ describe('worker dispatch script', () => {
     records({ acme: { kind: 'github', cli: missing } })
     const failure = await failureOf(['gh'])
     expect(failure).toEqual({ code: 1, stderr: `gh could not run ${missing}: spawnSync ${missing} ENOENT` })
+  })
+})
+
+/** 写侧登记表的生命周期（评审 E6）：目录消失的登记随重写自愈收缩，GC 删除后显式注销。 */
+describe('worker source registry', () => {
+  it('forgets ticket registrations whose directory disappeared and supports explicit removal', async () => {
+    const state = mkdtempSync(join(tmpdir(), 'worker-sources-'))
+    try {
+      const live = join(state, 'ticket-live')
+      const gone = join(state, 'ticket-gone')
+      mkdirSync(live, { recursive: true })
+      mkdirSync(gone, { recursive: true })
+      await recordTicketSource(state, live, 'acme')
+      await recordTicketSource(state, gone, 'acme')
+      // 目录被删（GC 或人工）：重写记录时自愈清掉悬空登记，文件不再单调膨胀。
+      rmSync(gone, { recursive: true, force: true })
+      await writeWorkerRecords(state, { acme: { kind: 'github', cli: 'x' } })
+      let saved = JSON.parse(readFileSync(join(state, 'worker-sources.json'), 'utf8')) as { tickets: Record<string, string> }
+      expect(saved.tickets).toEqual({ [ticketKey(live)]: 'acme' })
+      // GC 删除目录后的显式注销：登记立即消失，不再参与祖先匹配。
+      await forgetTicketSource(state, live)
+      saved = JSON.parse(readFileSync(join(state, 'worker-sources.json'), 'utf8')) as { tickets: Record<string, string> }
+      expect(saved.tickets).toEqual({})
+      // 幂等：不存在的键再次注销是空操作，不报错。
+      await expect(forgetTicketSource(state, live)).resolves.toBeUndefined()
+    } finally {
+      rmSync(state, { recursive: true, force: true })
+    }
   })
 })

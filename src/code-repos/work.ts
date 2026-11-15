@@ -1,7 +1,7 @@
 /** 代码仓库工作副本：按记录 ID 固定目录，任务来源读取清单前先同步。 */
 import { join, relative, sep } from 'node:path'
 import type { Commands } from '../infra/commands.ts'
-import { syncCode, type CodeSyncResult, type GitAuth } from './sync.ts'
+import { pushCode, syncCode, type CodeSyncResult, type GitAuth } from './sync.ts'
 
 /** 代码仓库工作副本目录；同一记录多次同步复用同一个目录。 */
 export const repoDirectory = (stateDir: string, repo: string): string => join(stateDir, 'repos', repo)
@@ -16,11 +16,27 @@ export interface RepoSyncInput {
   branch?: string
   /** 项目选择的 Git 凭据材料；为空时沿用仓库自身的认证配置。 */
   auth?: GitAuth
+  /** 回写路径专用（评审 S1）：分叉时重置到远端并依赖副作用重试重放写入；轮询保持无损语义。 */
+  resetOnDivergence?: boolean
 }
 
 /** 首次 clone、之后快进同步；失败时抛出带可读原因的错误。 */
 export async function syncRepoWorkCopy(input: RepoSyncInput): Promise<CodeSyncResult> {
   return syncCode({
+    commands: input.commands,
+    stateDir: input.stateDir,
+    codeSource: input.repo,
+    branch: input.branch ?? '',
+    directory: repoDirectory(input.stateDir, input.repo),
+    signal: input.signal,
+    ...(input.auth ? { auth: input.auth } : {}),
+    ...(input.resetOnDivergence ? { resetOnDivergence: true } : {}),
+  })
+}
+
+/** 推送工作副本分支到远端（评审 S1）：与同步共用定位与认证材料。 */
+export async function pushRepoWorkCopy(input: RepoSyncInput): Promise<void> {
+  await pushCode({
     commands: input.commands,
     stateDir: input.stateDir,
     codeSource: input.repo,

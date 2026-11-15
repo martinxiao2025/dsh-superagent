@@ -3,6 +3,7 @@
  * 工作单元会话的环境变量无法按工单注入，因此垫片与 git 凭据助手通过「当前目录的祖先登记」选择记录；
  * 准备命令的目录尚未登记，改用显式传入的 `DSH_SUPERAGENT_SOURCE`。
  */
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
@@ -55,11 +56,15 @@ async function write(stateDir: string, value: WorkerSources): Promise<void> {
   await rename(temporary, file)
 }
 
-/** 重写记录列表，保留工单登记，并清掉指向已删除记录的悬空登记。 */
+/**
+ * 重写记录列表，保留工单登记，并清掉两类悬空登记：指向已删除记录的，以及目录已消失的
+ * （评审 E6）——后者使登记表随工作区回收自愈收缩，而不是单调膨胀。
+ */
 export async function writeWorkerRecords(stateDir: string, records: Record<string, WorkerRecord>): Promise<void> {
   await serialized(stateDir, async () => {
     const current = await read(stateDir)
-    const tickets = Object.fromEntries(Object.entries(current.tickets).filter(([, id]) => id in records))
+    const tickets = Object.fromEntries(Object.entries(current.tickets)
+      .filter(([directory, id]) => id in records && existsSync(directory)))
     await write(stateDir, { clis: records, tickets })
   })
 }
@@ -69,6 +74,20 @@ export async function recordTicketSource(stateDir: string, directory: string, re
   await serialized(stateDir, async () => {
     const current = await read(stateDir)
     current.tickets[ticketKey(directory)] = recordId
+    await write(stateDir, current)
+  })
+}
+
+/**
+ * 注销工单目录的来源登记（评审 E6）：目录被工作区回收后不再参与祖先匹配——陈旧映射
+ * 会让复用旧路径的新会话选中已删除工单的记录，也使文件随工单数无界增长。
+ */
+export async function forgetTicketSource(stateDir: string, directory: string): Promise<void> {
+  await serialized(stateDir, async () => {
+    const current = await read(stateDir)
+    const key = ticketKey(directory)
+    if (!(key in current.tickets)) return
+    delete current.tickets[key]
     await write(stateDir, current)
   })
 }

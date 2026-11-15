@@ -42,6 +42,8 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   const effects: { kind: string; key: string; payload: unknown }[] = []
   let clock = Date.parse('2026-01-01T00:00:00.000Z')
   let created = 0
+  /** pushRepo 的调用记录（评审 S1）：回写成功且驱动声明 push 时按项目推送。 */
+  const pushed: string[] = []
   const settings = {
     projects,
     executor: { maxWorkers }, taskPolicy: {},
@@ -107,6 +109,8 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     executor: { slotsInUse: () => 0, projectsInUse: () => [] },
     commands: { scope: () => ({}) } as never, stateDir: 'C:/tmp', lifetime: new AbortController().signal,
     syncRepo: async () => 'C:/tmp/repo', now: () => clock,
+    // 回写路径的认证推送出口（评审 S1）：记录调用供断言；真实实现由 Runtime 装配凭据。
+    pushRepo: (projectId: string) => { pushed.push(projectId); return Promise.resolve() },
     // 固定 0.5 抖动：到期时间恰为间隔本身，时间推进断言保持确定。
     jitter: () => 0.5 }
   const scheduler = new ProjectScheduler(host)
@@ -119,7 +123,7 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
     }
   }
   // `reload` 模拟插件热加载：模块重新求值后，同一状态库上出现新的调度器实例。
-  return { scheduler, reload: () => new ProjectScheduler(host), driver, entries, tickets, effects, flush, advance: (ms: number) => { clock += ms }, settings }
+  return { scheduler, reload: () => new ProjectScheduler(host), driver, entries, tickets, effects, flush, pushed, advance: (ms: number) => { clock += ms }, settings }
 }
 
 /** 项目记录：每个项目自带一个内存任务来源；只有名称不同。 */
@@ -266,6 +270,27 @@ it('多工作项任务的回写按任务聚合：全部终态才写一次，状�
   expect(h.driver.written).toEqual([{ taskId: 'a1', status: 'failed' }])
   expect(h.entries.get(first!.id)).toMatchObject({ state: 'succeeded' })
   expect(h.entries.get(second!.id)).toMatchObject({ state: 'failed' })
+})
+
+it('回写成功后调用驱动 push：认证推送由宿主装配，与回写共享同一副作用（评审 S1）', async () => {
+  const h = setup({ a: project('a') })
+  // 驱动声明 push 能力：调度器在回写完成后于同一副作用内调用，推送出口来自宿主装配。
+  const contexts: string[] = []
+  ;(h.driver as TaskSourceDriver & { push?: unknown }).push = async (_config: unknown, ctx: { push?(): Promise<void> }) => {
+    contexts.push(ctx.push ? 'wired' : 'missing')
+    await ctx.push?.()
+  }
+  h.driver.tasks = [task('a1', 'A 一')]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const entry = [...h.entries.values()][0]!
+  h.tickets.get(entry.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  h.scheduler.observe(entry.ticketId!)
+  await h.flush()
+  expect(h.driver.written).toEqual([{ taskId: 'a1', status: 'done' }])
+  // 回写在先、推送在后，且推送出口已由宿主注入（真实实现带凭据与超时）。
+  expect(contexts).toEqual(['wired'])
+  expect(h.pushed).toEqual(['a'])
 })
 
 it('重启后从持久化队列恢复：启动中没有工单的条目重新排队', async () => {

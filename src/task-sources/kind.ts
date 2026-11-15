@@ -96,8 +96,14 @@ export interface TaskSourceWriteContext {
   feishu?(credential: string): Promise<FeishuWikiApi | undefined>
 }
 
-/** 推送上下文：与回写共用工作副本与命令入口。 */
-export type TaskSourcePushContext = TaskSourceWriteContext
+/**
+ * 推送上下文：与回写共用工作副本与命令入口。`push` 由调度器装配（带凭据、SSH 参数与
+ * git 超时，评审 S1）：驱动只负责声明推送能力并调用，认证材料不进任务来源层。
+ */
+export type TaskSourcePushContext = TaskSourceWriteContext & {
+  /** 应用层提供的认证推送；未装配时推送静默跳过（回到只提交本地的旧行为）。 */
+  push?(): Promise<void>
+}
 
 /** 把异常压成可读文本，用于预检结果的 `output`。 */
 export const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -135,8 +141,9 @@ export interface TaskSourceDriver<C extends Record<string, unknown> = Record<str
   /** 可选能力：把状态写回外部清单；默认只提交本地工作副本，不推送远端。 */
   writeback?(config: C, target: WriteTarget, status: string, ctx: TaskSourceWriteContext): Promise<void>
   /**
-   * 后续能力：把回写产生的本地提交推送到远端。
-   * 当前没有驱动实现，调度器不会调用；接口与健康度分类先留位，接入时只需在驱动内实现并在副作用中登记。
+   * 可选能力：把回写产生的本地提交推送到远端（评审 S1）。
+   * 调度器在回写成功后于同一副作用内调用（共享退避重试：推送被拒→同步按
+   * `resetOnDivergence` 重置→写入重放→再推送，最终收敛）；认证推送由上下文的 `push` 装配。
    */
   push?(config: C, ctx: TaskSourcePushContext): Promise<void>
 }

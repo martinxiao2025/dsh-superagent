@@ -97,6 +97,12 @@ export interface CodeSyncInput {
   remoteUrl?: string
   branch: string
   directory: string
+  /**
+   * 回写路径专用（评审 S1）：分叉时重置到远端而不是失败。仅当调用方能保证写入会重放——
+   * 回写副作用仍在退避重试中，被丢弃的只是本副作用自己尚未推送成功的提交，CAS 期望值
+   * 与重置后的清单状态一致，写入随后重放。轮询路径必须保持缺省的无损语义。
+   */
+  resetOnDivergence?: boolean
   signal: AbortSignal
   /** 项目选择的 Git 凭据材料；为空时沿用记录里的 SSH key 或本机助手。 */
   auth?: GitAuth
@@ -132,6 +138,10 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
         // 工作副本是纯镜像（执行发生在独立 worktree），远端变化时重建镜像而不是报错。
         const previous = (await git(['remote', 'get-url', 'origin']).catch(() => '')).trim()
         if (previous && previous !== remote) {
+          // 重建前先拆除挂在镜像上的工单 worktree（评审 E11）：它们是镜像登记的资源，
+          // 直接 rm 镜像会留下指向已消失 gitdir 的残破目录，复活工单的 materialize
+          // 校验将从此永久失败；逐个走 git 的拆除协议，单个失败不阻塞重建。
+          await detachWorktrees(git, input.directory)
           await rm(input.directory, { recursive: true, force: true })
           await mkdir(input.directory, { recursive: true })
           await git(['init', '--quiet'])
@@ -161,8 +171,14 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
       const ahead = Number((await git(['rev-list', '--count', `origin/${branch}..${branch}`])).trim() || '0')
       const behind = Number((await git(['rev-list', '--count', `${branch}..origin/${branch}`])).trim() || '0')
       if (ahead > 0 && behind > 0) {
-        throw new Error(`代码镜像与远端分叉：本地有 ${ahead} 个未推送的回写提交，远端另有 ${behind} 个新提交。`
-          + '请在镜像目录手工 rebase 或推送本地提交后重试（push 能力接入见优化计划 S1）')
+        if (!input.resetOnDivergence) {
+          throw new Error(`代码镜像与远端分叉：本地有 ${ahead} 个未推送的回写提交，远端另有 ${behind} 个新提交。`
+            + '请在镜像目录手工 rebase 或推送本地提交后重试（push 能力接入见优化计划 S1）')
+        }
+        // 回写路径（评审 S1 的收敛半边）：分叉说明远端在本轮回写提交之后又前进，推送已被拒。
+        // 重置到远端丢弃的只是本副作用自己未推送成功的提交——写入在本轮重试中重放
+        // （CAS 期望值与重置后的清单状态一致），随后重新提交并推送。
+        await git(['reset', '--hard', '--quiet', `origin/${branch}`])
       }
       await git(['checkout', '--quiet', branch])
       await git(['merge', '--ff-only', '--quiet', `origin/${branch}`])
@@ -178,6 +194,55 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   } finally {
     await auth.cleanup()
   }
+}
+
+/** 推送输入：定位材料与同步一致；`branch` 为空时推送工作副本当前检出的分支。 */
+export interface CodePushInput {
+  commands: Commands
+  stateDir: string
+  codeSource: string
+  branch?: string
+  directory: string
+  signal: AbortSignal
+  auth?: GitAuth
+}
+
+/**
+ * 把工作副本分支推送到远端（评审 S1 的收口半边）：回写提交不再只留在镜像本地，
+ * 「清单在仓库里共享」的产品承诺成立。远端在同步与推送之间前进会让 push 被拒——
+ * 错误上抛给回写副作用的退避重试；下一次同步按 `resetOnDivergence` 重置并重放写入后
+ * 再次推送，最终收敛。
+ */
+export async function pushCode(input: CodePushInput): Promise<void> {
+  const { signal } = input
+  const scoped = input.commands.scope(input.codeSource)
+  const source = scoped.source
+  if (source?.kind !== 'github' && source?.kind !== 'gitlab') throw new Error('代码仓库记录必须是 GitHub 或 GitLab')
+  const auth = input.auth ? await gitAuthArgs(input.auth) : { args: [] as string[], cleanup: async () => {} }
+  const ssh = auth.args.length ? auth.args : source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
+  const git = (args: string[]): Promise<string> => scoped.git(ssh.length ? [...ssh, ...args] : args, input.directory)
+  try {
+    // 分支优先取调用方指定；否则用镜像当前检出的分支（回写路径刚同步/提交过，指向正确），
+    // 不做网络探测——推送必须与镜像状态一致，而不是远端的默认分支。
+    const branch = input.branch?.trim() || (await git(['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '')).trim()
+    if (!branch || branch === 'HEAD') throw new Error('无法确定要推送的分支：工作副本不在命名分支上')
+    await git(['push', '--quiet', 'origin', branch])
+  } catch (error) {
+    if (signal.aborted) throw error
+    throw new Error(redactCredentials(errorText(error)))
+  } finally {
+    await auth.cleanup()
+  }
+}
+
+/** 列出并强制拆除镜像登记的全部附属 worktree（主工作树除外）；单个失败不阻塞重建。 */
+async function detachWorktrees(git: (args: string[]) => Promise<string>, main: string): Promise<void> {
+  const list = await git(['worktree', 'list', '--porcelain']).catch(() => '')
+  const directories = list.split(/\r?\n/)
+    .filter(line => line.startsWith('worktree '))
+    .map(line => line.slice('worktree '.length).trim())
+    .filter(directory => !samePath(directory, main))
+  for (const directory of directories) await git(['worktree', 'remove', '--force', directory]).catch(() => { /* 目录已消失或不属本镜像。 */ })
 }
 
 /**

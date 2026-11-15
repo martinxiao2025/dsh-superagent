@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { hasEmbeddedCredentials, probeRemote, redactCredentials, remoteOf, sshCommandOf, sshKeyFile, syncCode } from '../src/code-repos/sync.ts'
+import { hasEmbeddedCredentials, probeRemote, pushCode, redactCredentials, remoteOf, sshCommandOf, sshKeyFile, syncCode } from '../src/code-repos/sync.ts'
 import { repositoryOfRemote } from '../src/code-repos/kind.ts'
 import type { Commands } from '../src/infra/commands.ts'
 
@@ -228,5 +228,83 @@ describe('syncCode', () => {
     const { commands } = fake(undefined, () => '')
     await expect(syncCode({ commands, stateDir: temporary(), codeSource: 'feishu', branch: 'main', directory: temporary(),
       signal: new AbortController().signal })).rejects.toThrow('代码仓库记录必须是 GitHub 或 GitLab')
+  })
+
+  it('resets to the remote on divergence when the writeback path opts in（评审 S1）', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake(github, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return `${directory}\n`
+        if (args.includes('--verify') && args.some(arg => arg.startsWith('refs/heads/'))) return 'refs/heads/main'
+        if (args.includes('--verify')) return 'refs/remotes/origin/main'
+        return 'abc123'
+      }
+      if (name === 'remote') return args[1] === 'get-url' ? 'https://github.com/acme/widgets.git\n' : ''
+      if (name === 'for-each-ref') return 'origin/main'
+      if (name === 'rev-list') return args.includes('origin/main..main') ? '1' : '2'
+      return ''
+    })
+    // 回写路径专用：分叉时重置到远端自愈——写入由仍在重试的回写副作用重放，而不是无损失败。
+    const result = await syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal, resetOnDivergence: true })
+    expect(result).toMatchObject({ directory, empty: false })
+    expect(calls).toContainEqual(['reset', '--hard', '--quiet', 'origin/main'])
+    expect(calls).toContainEqual(['merge', '--ff-only', '--quiet', 'origin/main'])
+  })
+
+  it('detaches per-ticket worktrees before rebuilding the mirror on a remote change（评审 E11）', async () => {
+    const directory = temporary()
+    const ticketWorktree = join(directory, '..', 'ticket-1')
+    const { commands, calls } = fake(github, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return `${directory}\n`
+        return 'abc123'
+      }
+      if (name === 'remote') return args[1] === 'get-url' ? 'https://github.com/acme/old.git\n' : ''
+      if (name === 'worktree' && args[1] === 'list') return `worktree ${directory}\nworktree ${ticketWorktree}\n`
+      return ''
+    })
+    await syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal })
+    // 附属 worktree 走 git 拆除协议（主工作树除外）：rm 镜像不会留下残破的工单目录。
+    expect(calls).toContainEqual(['worktree', 'remove', '--force', ticketWorktree])
+    expect(calls.filter(args => args[0] === 'worktree' && args.includes('remove'))).toHaveLength(1)
+    expect(calls).toContainEqual(['worktree', 'list', '--porcelain'])
+  })
+})
+
+describe('pushCode', () => {
+  it('pushes the given branch of the work copy（评审 S1）', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake(github, () => '')
+    await pushCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'dev', directory,
+      signal: new AbortController().signal })
+    expect(calls.filter(args => args.includes('rev-parse'))).toEqual([])
+    expect(calls).toContainEqual(['push', '--quiet', 'origin', 'dev'])
+  })
+
+  it('falls back to the checked-out branch and carries the SSH command for SSH records（评审 S1）', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake({ ...github, auth: 'ssh' }, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse' && args.includes('--abbrev-ref')) return 'main\n'
+      return ''
+    })
+    await pushCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', directory,
+      signal: new AbortController().signal })
+    // 分支缺省时取镜像当前检出的分支（不做网络探测）；SSH 记录带上私钥命令。
+    expect(calls).toContainEqual(['-c', expect.stringMatching(/^core\.sshCommand=/) as unknown as string,
+      'rev-parse', '--abbrev-ref', 'HEAD'])
+    expect(calls).toContainEqual(['-c', expect.stringMatching(/^core\.sshCommand=/) as unknown as string,
+      'push', '--quiet', 'origin', 'main'])
+  })
+
+  it('refuses to push when no named branch can be determined', async () => {
+    const directory = temporary()
+    const { commands } = fake(github, () => 'HEAD\n')
+    await expect(pushCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', directory,
+      signal: new AbortController().signal })).rejects.toThrow('无法确定要推送的分支')
   })
 })

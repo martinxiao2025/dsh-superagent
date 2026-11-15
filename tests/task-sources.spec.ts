@@ -163,6 +163,16 @@ describe('excel task source', () => {
     // 工作副本干净，后续快进同步不会被脏文件阻塞。
     expect(run(['merge', '--ff-only', 'HEAD'], root)).toBeDefined()
   })
+
+  it('push 委托给调度器装配的认证推送出口（评审 S1）', async () => {
+    const config = excelTaskSource.schema.parse({ file: 'tasks/backlog.csv' })
+    const pushed: string[] = []
+    await excelTaskSource.push!(config, { push: async () => { pushed.push('pushed') } })
+    expect(pushed).toEqual(['pushed'])
+    // 出口未装配时静默跳过（未接入 push 的部署回到只提交本地的旧行为）。
+    await excelTaskSource.push!(config, {})
+    expect(pushed).toEqual(['pushed'])
+  })
 })
 
 describe('feishu wiki task source', () => {

@@ -16,7 +16,8 @@ import { TaskListError, type RawTask } from './tasks.ts'
 import { writeTaskStatusAt } from './writeback.ts'
 import {
   errorText, repoCheck, TaskRepoError,
-  type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps, type TaskSourceWriteContext,
+  type TaskSourceDriver, type TaskSourcePushContext, type TaskSourceRunContext, type TaskSourceVerifyDeps,
+  type TaskSourceWriteContext,
 } from './kind.ts'
 
 /** Excel 任务来源配置：清单是项目仓库内的相对路径，其余按 010 标准格式固定。 */
@@ -133,5 +134,13 @@ export const excelTaskSource: TaskSourceDriver<ExcelTaskSourceConfig> = {
       await commitWorkCopy((args, cwd) => ctx.commands!.git(args, cwd), directory, file,
         `chore: record task ${target.taskId} as ${status}`)
     }
+  },
+  /**
+   * 回写提交后推送远端（评审 S1）：本地提交不再滞留镜像，「清单在仓库里共享」成立。
+   * 认证推送由调度器在上下文装配（SSH 参数与凭据助手在应用层）；推送被拒随回写副作用
+   * 退避重试——下一次同步按 `resetOnDivergence` 重置并重放写入后再次推送。
+   */
+  async push(_config: ExcelTaskSourceConfig, ctx: TaskSourcePushContext): Promise<void> {
+    await ctx.push?.()
   },
 }

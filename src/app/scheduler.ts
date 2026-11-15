@@ -45,8 +45,15 @@ export interface SchedulerHost {
   readonly lifetime: AbortSignal
   /** 任务来源驱动注册表；由组合根显式传入（评审 P1-9：调度器不隐式依赖模块单例）。 */
   readonly registry: TaskSourceRegistry
-  /** 同步项目代码仓库并返回工作副本目录；由组合根显式传入。 */
+  /** 同步项目代码仓库并返回工作副本目录；由组合根显式传入（轮询路径，分叉时无损失败）。 */
   readonly syncRepo: (projectId: string) => Promise<string>
+  /**
+   * 回写路径的仓库同步（评审 S1）：分叉时重置到远端并依赖副作用重试重放写入。
+   * 缺省退回 `syncRepo`（未接入 push 的部署维持无损语义）。
+   */
+  readonly syncRepoForWrite?: (projectId: string) => Promise<string>
+  /** 把回写产生的本地提交推送远端（评审 S1）；驱动声明 push 能力时在回写副作用内调用。 */
+  readonly pushRepo?: (projectId: string) => Promise<void>
   /** 按 Git 凭据 ID 取一次同步材料；项目未选择凭据时返回 undefined。 */
   readonly gitAuth?: (credential: string) => GitAuth | undefined
   /** 按飞书凭据 ID 取知识库读取能力；飞书知识库任务来源使用。 */
@@ -106,7 +113,8 @@ export class ProjectScheduler {
     this.registry = host.registry
     this.syncRepo = host.syncRepo
     this.jitter = host.jitter ?? Math.random
-    this.writeback = new SchedulerWriteback({ host, registry: this.registry, syncRepo: this.syncRepo,
+    this.writeback = new SchedulerWriteback({ host, registry: this.registry, syncRepo: host.syncRepoForWrite ?? this.syncRepo,
+      ...(host.pushRepo ? { pushRepo: projectId => host.pushRepo!(projectId) } : {}),
       busy: projectId => this.busy(projectId),
       polling: projectId => this.reconcile.polling(projectId),
       sourceConfig: (fields, config, feishuCredential) => this.sourceConfig(fields, config, feishuCredential) })

@@ -4,7 +4,7 @@
  * 都经由这里取入口，路径规则（`<stateDir>/repos/<repo>`）只在 `work.ts` 定义一次；
  * 跨文件不再各自拼接路径或直接 import 同步实现。
  */
-export { repoDirectory, syncRepoWorkCopy, commitWorkCopy, type RepoSyncInput } from './work.ts'
+export { repoDirectory, syncRepoWorkCopy, pushRepoWorkCopy, commitWorkCopy, type RepoSyncInput } from './work.ts'
 export { readRepositoryPath } from './read.ts'
 export { probeRemote, remoteOf, sshKeyFile, sshCommandOf, hasEmbeddedCredentials, redactCredentials, type RemoteRefs, type GitAuth,
   type CodeSyncResult } from './sync.ts'
