@@ -467,11 +467,20 @@ function updateSheet(xml: string, shared: readonly string[],
   const titleIndex = column(title)
   const statusIndex = column(status)
   if (statusIndex < 0) throw new TaskFileError(`任务清单缺少状态列：${status}`)
-  const match = rows.slice(1).find(row => {
+  // 行定位（评审 S6）：单元格 trim 后比较（表格软件常见前后空格会让精确匹配永久失败）；
+  // ID 列可用且命中时优先按 ID（标题可重复，其他行的同名标题不参与），否则按标题兜底；
+  // 选定键命中多于一行时显式拒绝而不是写错行。
+  const rowValues = (row: RegExpMatchArray): (column: number) => string => {
     const values = new Map(rawCells(row[2]!).map(cell => [cell.index, cellValue(attributes(cell.attrs), cell.body, shared)]))
-    const value = (column: number): string => column < 0 ? '' : values.get(column) ?? ''
-    return (idIndex >= 0 && value(idIndex) === options.target.taskId) || (titleIndex >= 0 && value(titleIndex) === options.target.taskTitle)
-  })
+    return (column: number): string => column < 0 ? '' : (values.get(column) ?? '').trim()
+  }
+  const candidates = rows.slice(1).map(row => ({ row, value: rowValues(row) }))
+  const taskId = options.target.taskId.trim()
+  const taskTitle = options.target.taskTitle.trim()
+  const byId = idIndex >= 0 ? candidates.filter(({ value }) => value(idIndex) === taskId) : []
+  const chosen = byId.length ? byId : candidates.filter(({ value }) => titleIndex >= 0 && value(titleIndex) === taskTitle)
+  if (chosen.length > 1) throw new TaskFileError(`任务清单中「${options.target.taskId}」匹配到 ${chosen.length} 行，回写被拒绝；请修正清单使目标行唯一`)
+  const match = chosen[0]?.row
   if (!match) throw new TaskFileError(`任务清单中找不到任务：${options.target.taskId}`)
   // CAS（评审 C3）：期望状态给出且清单行已不处于该状态时拒绝写入——状态可能已被人工修改。
   if (options.expectedStatus !== undefined) {

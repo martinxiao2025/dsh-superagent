@@ -61,8 +61,16 @@ export async function writeTaskStatusAt(
   const titleIndex = header.findIndex(name => name.trim() === columns.title)
   const statusIndex = header.findIndex(name => name.trim() === columns.status)
   if (statusIndex < 0) throw new Error(`任务清单缺少状态列：${columns.status}`)
-  const row = body.find(cells => (idIndex >= 0 && cells[idIndex] === target.taskId)
-    || (titleIndex >= 0 && cells[titleIndex] === target.taskTitle))
+  // 行定位（评审 S6）：单元格 trim 后比较——表格软件常见的前后空格会让精确匹配永久失败，
+  // 回写副作用在退避里无限空转；ID 列可用且命中时优先按 ID（标题可重复，同名标题不参与），
+  // 否则按标题兜底；选定键命中多于一行时显式拒绝而不是写错行。
+  const cell = (cells: readonly string[], index: number): string => index >= 0 ? (cells[index] ?? '').trim() : ''
+  const taskId = target.taskId.trim()
+  const taskTitle = target.taskTitle.trim()
+  const byId = idIndex >= 0 ? body.filter(cells => cell(cells, idIndex) === taskId) : []
+  const chosen = byId.length ? byId : body.filter(cells => titleIndex >= 0 && cell(cells, titleIndex) === taskTitle)
+  if (chosen.length > 1) throw new Error(`任务清单中「${target.taskId}」匹配到 ${chosen.length} 行，回写被拒绝；请修正清单使目标行唯一`)
+  const row = chosen[0]
   if (!row) throw new Error(`任务清单中找不到任务：${target.taskId}`)
   // CAS（评审 C3）：期望状态给出且清单行已不处于该状态时拒绝写入——状态可能已被人工修改。
   if (expectedStatus !== undefined && row[statusIndex]?.trim() !== expectedStatus.trim()) {

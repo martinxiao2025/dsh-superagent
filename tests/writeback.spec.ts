@@ -57,6 +57,30 @@ describe('text writeback', () => {
     rmSync(directory_, { recursive: true, force: true })
   })
 
+  it('trims cell padding when locating the row and prefers the id over duplicate titles（评审 S6）', async () => {
+    const file = join(directory(), 'backlog.csv')
+    // 单元格带前后空格（表格软件常见）：不 trim 会永久找不到任务，回写无限退避。
+    writeFileSync(file, 'task_id,title,status\n T-1 , 修复登录 , todo\n', 'utf8')
+    await writeTaskStatusAt(file, columns, target, 'done')
+    expect(readFileSync(file).toString('utf8')).toContain(' T-1 , 修复登录 ,done')
+    // ID 优先：目标 ID 命中一行，另一行标题同名但 ID 不同——不应让定位产生歧义。
+    writeFileSync(file, 'task_id,title,status\nT-1,修复登录,todo\nT-9,修复登录,todo\n', 'utf8')
+    await writeTaskStatusAt(file, columns, target, 'done')
+    expect(readFileSync(file).toString('utf8')).toContain('T-1,修复登录,done')
+    expect(readFileSync(file).toString('utf8')).toContain('T-9,修复登录,todo')
+  })
+
+  it('rejects the write when the chosen key matches more than one row（评审 S6）', async () => {
+    const file = join(directory(), 'backlog.csv')
+    // 无 ID 列且标题重名：写第一行等于写错行，显式拒绝交给人工。
+    writeFileSync(file, 'title,status\n修复登录,todo\n修复登录,todo\n', 'utf8')
+    await expect(writeTaskStatusAt(file, columns, target, 'done')).rejects.toThrow('匹配到 2 行')
+    // ID 列存在但 ID 本身重复（脏数据）：同样拒绝。
+    writeFileSync(file, 'task_id,title,status\nT-1,甲,todo\nT-1,乙,todo\n', 'utf8')
+    await expect(writeTaskStatusAt(file, columns, target, 'done')).rejects.toThrow('匹配到 2 行')
+    expect(readFileSync(file).toString('utf8')).not.toContain('done')
+  })
+
   it('rejects the write when the current status no longer matches the expected one (CAS)', async () => {
     // 回归（评审 C3）：人工在结算间隙把状态改成别的值时，回写被拒绝而不是无提示覆盖。
     const file = join(directory(), 'backlog.csv')
@@ -120,5 +144,16 @@ ${sheets.map((_, index) => `<Relationship Id="rId${index + 1}" Type="http://sche
     const file = join(directory(), 'backlog.xlsx')
     writeFileSync(file, workbook([{ name: 'tasks', rows: [['task_id', 'title', 'status'], ['T-2', '别的任务', 'todo']] }]))
     await expect(writeTaskStatusAt(file, columns, target, 'done')).rejects.toThrow('找不到任务')
+  })
+
+  it('trims padded cells and rejects ambiguous rows the same way as text lists（评审 S6）', async () => {
+    const file = join(directory(), 'backlog.xlsx')
+    writeFileSync(file, workbook([{ name: 'tasks', rows: [['task_id', 'title', 'status'], [' T-1 ', ' 修复登录 ', 'todo']] }]))
+    await writeTaskStatusAt(file, columns, target, 'done')
+    const table = await readStandardTable(file)
+    expect(table.table.rows[0]?.values['status']).toBe('done')
+    const ambiguous = join(directory(), 'backlog.xlsx')
+    writeFileSync(ambiguous, workbook([{ name: 'tasks', rows: [['task_id', 'title', 'status'], ['T-1', '甲', 'todo'], ['T-1', '乙', 'todo']] }]))
+    await expect(writeTaskStatusAt(ambiguous, columns, target, 'done')).rejects.toThrow('匹配到 2 行')
   })
 })
