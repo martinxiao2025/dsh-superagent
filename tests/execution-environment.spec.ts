@@ -1,7 +1,8 @@
 /** 执行环境按工单来源记录注入变量：其他记录不进入该工单，同名变量不再互相覆盖。 */
 import { describe, expect, it } from 'vitest'
 import type { Trigger } from '../src/core/index.ts'
-import { environmentOf, projectDirectory, projectDirectoryName, ticketDirectoryName } from '../src/app/execution-environment.ts'
+import { environmentOf } from '../src/app/execution-environment.ts'
+import { projectDirectory, projectDirectoryName, ticketDirectoryName } from '../src/execution-paths.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'

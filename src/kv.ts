@@ -11,9 +11,9 @@ export type Key<V> = string & { readonly __value?: V }
 export type Family<V, A extends unknown[]> = ((...name: A) => Key<V>) & { readonly prefix: string }
 /** 定义单个类型化 KV 键；外部来源插件用 `record` 和 `family` 为自己的键指定类型。 */
 export const record = <V>(key: string) => key as Key<V>
-/** 定义 KV 键族，其键以 `:`（或自定义 `format`）连接 `prefix` 和名称各部分。 */
-export function family<V, A extends unknown[] = [string]>(prefix: string, format = (...name: A) => name.join(':')): Family<V, A> {
-  return Object.assign((...name: A) => `${prefix}${format(...name)}` as Key<V>, { prefix })
+/** 定义 KV 键族，其键以 `:` 连接 `prefix` 和名称各部分。 */
+export function family<V, A extends unknown[] = [string]>(prefix: string): Family<V, A> {
+  return Object.assign((...name: A) => `${prefix}${name.join(':')}` as Key<V>, { prefix })
 }
 
 export const KV = {
@@ -31,9 +31,6 @@ export const KV = {
   runtime: { masterId: record<string>('master-id') },
   /** 会话：每个会话工作过的提示词修订号，按从旧到新排列；最后一项（`.at(-1)`）是其活动修订号。 */
   sessions: { prompts: family<number[], [session: string]>('session-prompts:') },
-  /** Schema 11 迁移：导入到效果表中的遗留主会话队列。 */
-  queues: { relays: record<{ id: string; text: string }[]>('relay-queue'), unsubscribed: record<string[]>('subscription-results'),
-    prompts: record<number | null>('prompt-notification'), settings: record<number | null>('settings-notification') },
   /** 按来源解析的显示名称，把有名称的 ID（例如飞书会话 ID）映射到其显示名称。 */
   sources: { labels: family<Record<string, string>, [source: string]>('source-labels:') },
   /**

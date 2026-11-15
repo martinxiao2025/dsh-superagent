@@ -19,9 +19,6 @@ import { ticketExecution, launchQueued } from './launch.ts'
 import { TRANSIENT_TRIES, transient } from './idle.ts'
 import { deliverQueued } from './delivery.ts'
 import { install as installWorkers, resume as resumeWorkers, shutdown as shutdownWorkers, stop as lifecycleStop } from './lifecycle.ts'
-// 运行时与行为快照测试仍从本门面导入这两个符号；`WorkerSlots` 是执行器级的并发基础设施，保留在此。
-export { ticketExecution } from './launch.ts'
-export { transient } from './idle.ts'
 
 const now = (): string => new Date().toISOString()
 /** `DshExecutor` 使用的宿主依赖。 */

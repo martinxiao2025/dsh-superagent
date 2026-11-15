@@ -127,7 +127,7 @@ export class Store implements Repositories {
   /**
    * 在 `path` 处打开或创建 SQLite 数据库：空库建当前基线并写入 `SCHEMA_VERSION`。
    * @param report - 接收 `afterCommit` 回调抛出的错误，且不会使已提交的事务失败。
-   * @throws 当数据库模式不是 `SCHEMA_VERSION`（14）时抛出，提示备份并用 `reset` 从空基线重新开始；此时数据库文件保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
+   * @throws 当数据库模式不是 `SCHEMA_VERSION`（当前 15）时抛出，提示备份并用 `reset` 从空基线重新开始；此时数据库文件保持不变，并关闭 SQLite 句柄，使同一进程中的后续尝试可以打开它。
    */
   constructor(path: string, private readonly report: (error: unknown) => void = () => {}) {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
@@ -598,5 +598,3 @@ export class Store implements Repositories {
       Number(this.db.prepare("DELETE FROM outbox WHERE id = ? AND value ->> '$.status' = 'pending'").run(id).changes) > 0,
   }
 }
-export { key, threadKey }
-export type { ChannelRef }

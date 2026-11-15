@@ -12,7 +12,6 @@ import { ticketTools } from './definitions/ticket.ts'
 import { readTool, type Tool } from './tool.ts'
 
 export type { MainToolsHost } from './host.ts'
-export { routed } from './host.ts'
 /** 构建主会话的工具；`agent` 将提示词预览资源限定到该会话。 */
 export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }

@@ -43,8 +43,6 @@ export function feishuTrigger(record: string, input: unknown, botId: string, bot
     meta: { chatId: event.chat_id, messageId: event.message_id, direct, mentioned, ...(event.root_id ? { rootId: event.root_id } : {}),
       ...(event.parent_id ? { parentId: event.parent_id } : {}), ...(event.thread_id ? { threadId: event.thread_id } : {}) } }
 }
-export const feishuParent = (trigger: Trigger): string | undefined =>
-  typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.source, trigger.meta.parentId) : undefined
 export function feishuRef(trigger: Trigger): FeishuRef | undefined {
   const meta = trigger.meta as { chatId?: string; messageId?: string }
   if (!meta.chatId || !meta.messageId) return undefined

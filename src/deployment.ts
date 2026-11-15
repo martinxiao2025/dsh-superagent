@@ -15,9 +15,9 @@ import { SetupError } from './setup.ts'
 // `RepoAuth` 与其 zod schema 都留在本文件：schema 属于配置层，叶子层只有它的类型形态。
 import type { Deployment as DeploymentShape, Machine as MachineShape, ResolvedGithubSource, ResolvedGitlabSource,
   ResolvedFeishuSource, ResolvedSource } from './deployment-types.ts'
-import { firstSource, isGithubSource, isGitlabSource, isFeishuSource, sourceOf } from './deployment-types.ts'
+import { firstSource, sourceOf } from './deployment-types.ts'
 export type { ResolvedGithubSource, ResolvedGitlabSource, ResolvedFeishuSource, ResolvedSource }
-export { firstSource, isGithubSource, isGitlabSource, isFeishuSource, sourceOf }
+export { firstSource, sourceOf }
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
 /** Windows 写法的盘符或 UNC 根路径，或 POSIX 根路径；相对路径两者都不以之开头。 */
@@ -131,11 +131,9 @@ export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
 }
 
 // ResolvedGithubSource / ResolvedGitlabSource / ResolvedFeishuSource / ResolvedSource / Deployment
-// 与三个守卫函数都已上移到 ./deployment-types.ts 并在文件头具名再导出，保持既有导入路径不变。
+// 已上移到 ./deployment-types.ts 并在文件头具名再导出，保持既有导入路径不变。
 /** 实例地址的站点主机名；留空时使用 `fallback`。定义在 `infra/host.ts`（零依赖叶子），此处具名再导出保持既有导入路径。 */
 export { hostOf } from './infra/host.ts'
-/** 实例地址的网页基地址；留空时使用 `fallback`。 */
-export const webBaseOf = (instanceUrl: string, fallback: string): string => instanceUrl || fallback
 /** 探测 CLI 时只在自建实例上设置 `GH_HOST` / `GITLAB_HOST`。 */
 const hostVariable = (name: string, instanceUrl: string): Record<string, string> | undefined =>
   instanceUrl ? { [name]: hostOf(instanceUrl, '') } : undefined

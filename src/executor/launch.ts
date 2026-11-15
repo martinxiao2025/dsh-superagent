@@ -19,7 +19,7 @@ import type { WorkerContext } from './dsh.ts'
 /** 工作区准备命令的最大运行时长。 */
 export const PREPARE_TIMEOUT_MS = 10 * 60_000
 /** 工单消息中内联任务分配文本的字符上限；更长的文本通过其资源读取。 */
-export const ASSIGNMENT_CHARS = 1500
+const ASSIGNMENT_CHARS = 1500
 /**
  * 启动期间工单的工作区准备命令失败时抛出的内部错误。
  * DshExecutor 捕获它并立即把工单标记为失败，而不是自动重试，因为已存在的目录会被视为已准备，
@@ -168,8 +168,8 @@ export async function launch(w: WorkerContext, ticket: Ticket, assignment: Assig
       ...(read ? { assignment_chars: chars, assignment_read: read } : {}), ...(card ? { trigger: card } : {}),
       ...(batch.length ? { batch } : {}), ...retried })
   const requestId = later ? `assignment:${ticket.id}:${assignment.id}` : first
+  // `prompt` 的 accepted 回调无条件执行（含去重命中），assignmentStarted 只在那里登记。
   await host.sessions.prompt(sessionId, requestId, text, 'queue',
     () => { if (!current()) throw new Error('Launch authorization changed before worker delivery') },
     () => { host.engine.assignmentStarted(ticket.id, assignment.id) })
-  host.engine.assignmentStarted(ticket.id, assignment.id)
 }

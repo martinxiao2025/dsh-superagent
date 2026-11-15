@@ -324,7 +324,7 @@ export class Engine {
    * 策略发生变化：`effects` 中的每个未结束工单都会被告知该变化对它的影响，进行中的评估会在新版本下重新开始。
    */
   policyChanged(from: string, to: string, effects: ReadonlyMap<string, PolicyEffect> = new Map()): void {
-    this.repo.atomic(() => { this.inputs.policyChanged(from, to, effects); this.evals.policyChanged(from, to) })
+    this.repo.atomic(() => { this.inputs.policyChanged(from, to, effects); this.evals.policyChanged() })
   }
 
   /** 引擎当前使用的时钟；测试可注入固定时间。 */

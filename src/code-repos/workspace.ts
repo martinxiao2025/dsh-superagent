@@ -26,8 +26,7 @@ async function nonEmpty(directory: string): Promise<boolean> {
   try {
     const info = await stat(directory)
     if (!info.isDirectory()) return true
-    const entries = await import('node:fs/promises').then(fs => fs.readdir(directory))
-    return entries.length > 0
+    return (await readdir(directory)).length > 0
   } catch {
     return false
   }

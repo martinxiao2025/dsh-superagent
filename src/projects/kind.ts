@@ -6,9 +6,6 @@ import { LIMITS } from '../limits.ts'
 import { BudgetSchema } from '../settings/schema.ts'
 import { TaskSourceKindSchema } from '../task-sources/kind.ts'
 
-/** 项目标识：与来源记录使用同一套命名规则。 */
-export const ProjectIdSchema = z.string().trim().regex(/^[a-z][a-z0-9-]*$/, '项目 ID')
-
 /** 项目内嵌的代码仓库配置：类型与配置一起保存，不再引用独立的仓库记录。 */
 export const ProjectRepoSchema = z.object({
   /** 仓库类型；GitHub 与 GitLab 只负责克隆、同步与凭据，不产生任务。 */

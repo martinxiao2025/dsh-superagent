@@ -21,13 +21,13 @@ export function SetupMessage({ problem, lead }: { problem: Pick<SetupProblem, 'c
     {problem.values.output && <span className="dt-detail dt-mono dt-clamp">{problem.values.output}</span>}
   </>
 }
-export function Section({ title, count, children, action, hint, badge, icon }: {
-  title: string; count?: number | string; children: ReactNode; action?: ReactNode; hint?: string; badge?: ReactNode; icon?: IconName
+export function Section({ title, count, children, action, hint, icon }: {
+  title: string; count?: number | string; children: ReactNode; action?: ReactNode; hint?: string; icon?: IconName
 }) {
   return <section className="dt-section">
     <h2 className="dt-section-title">
       {icon && <span className="dt-section-icon"><Icon name={icon} size={14} /></span>}<span className="dt-section-name">{title}</span>
-      {count !== undefined && <span className="dt-count">{count}</span>}{hint && <InfoTip text={hint} />}{badge}
+      {count !== undefined && <span className="dt-count">{count}</span>}{hint && <InfoTip text={hint} />}
       {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
     </h2>
     {children}

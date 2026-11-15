@@ -2,7 +2,6 @@
 import { STAGES, type Stage } from '../core/stages.ts'
 import { bundledSkills, promptFile } from './skill-files.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-export { textPage } from './cards.ts'
 
 /** Built-in host-delivery and tool-usage rules shared by all Sessions; a team may override them (`builtInParts`). */
 export const sharedPrompt = promptFile('shared')
@@ -26,8 +25,6 @@ export const mainAdmissionPolicy = promptFile('admission')
 
 const handoff = { shared: promptFile('handoff'), orchestrator: promptFile('handoff-orchestrator'), worker: promptFile('handoff-worker') }
 export const handoffPolicy = (role: 'orchestrator' | 'worker'): string => `${handoff.shared}\n${handoff[role]}`
-
-export const autoMergeThreshold = (lines: number): string => `改动少于 ${lines} 行（新增数加删除数）；`
 
 /** Retains message content while omitting streamed chunks, usage accounting, and reasoning blocks. */
 export function transcriptEntry(event: SessionEvent) {

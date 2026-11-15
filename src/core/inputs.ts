@@ -18,7 +18,7 @@ export class Inputs extends EnginePart {
   /** 把工单订阅到某个线程；此后该线程上的触发器会作为输入到达工单，若此前仅为上下文，则变成工单自己的线程。 */
   subscribe(ticketId: string, ref: ThreadRef): void {
     const thread = this.thread(ref)
-    if (!thread.subscriptions.includes(ticketId)) { thread.subscriptions.push(ticketId); this.emit('thread.subscribed', { threadKey: thread.key, ticketId }) }
+    if (!thread.subscriptions.includes(ticketId)) thread.subscriptions.push(ticketId)
     if (thread.context?.includes(ticketId)) thread.context = thread.context.filter(id => id !== ticketId)
     this.repo.threads.save(thread)
   }

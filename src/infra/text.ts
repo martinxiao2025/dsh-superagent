@@ -17,7 +17,6 @@ export function checkedImText(text: string): string {
 export const fill = (template: string, values: Record<string, string>): string => template.replace(/\{(\w+)\}/g, (_, name: string) => values[name] ?? '')
 /** 用于 GitHub 登录名和仓库名的大小写不敏感比较。 */
 export const sameName = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
-export const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 /**
  * 统一脱敏：URL 内嵌凭据、Authorization/Bearer 头（含带引号键与带引号值）、令牌型查询参数与私钥块。
  * CLI 输出与错误消息在进入日志、工单或面板之前统一调用，避免凭据经诊断文本泄漏。

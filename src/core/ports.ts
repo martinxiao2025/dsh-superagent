@@ -1,5 +1,5 @@
 /** 核心所依赖的端口。来源、策略、评估者、执行器和渠道均与具体项目相关。 */
-import type { Assignment, ChannelRef, Decision, DecisionKind, Mandate, MandateBasis, Strength, Thread, Ticket, TicketEndBy, TicketOutcome, Trigger }
+import type { Assignment, ChannelRef, Decision, Mandate, MandateBasis, Strength, Thread, Ticket, TicketEndBy, TicketOutcome, Trigger }
   from './model.ts'
 import type { Reason } from './reasons.ts'
 
@@ -82,23 +82,16 @@ export interface Outbox {
   withdraw(id: string): void
 }
 
-/** 变更之后引擎按事件类型汇报的内容。 */
+/** 变更之后引擎按事件类型汇报的内容；只保留运行时实际消费的事件。 */
 export interface DomainEvents {
   'trigger.received': { triggerId: string; threads: string[] }
-  'eval.started': { evalId: string; threadKey: string; triggerIds: string[]; strength: Strength }
-  'decision.recorded': { decisionId: string; kind: DecisionKind; threadKey: string }
-  'ticket.created': { ticketId: string; decisionId: string; strength: Strength }
   'ticket.resumed': { ticketId: string; triggerId: string }
   'ticket.ended': { ticketId: string; by: TicketEndBy; outcome: TicketOutcome; reason?: string }
-  'assignment.started': { ticketId: string; assignmentId: string }
-  'assignment.ended': { ticketId: string; assignmentId: string; reason: string }
-  'thread.subscribed': { threadKey: string; ticketId: string }
   /** 人丢弃了每个工单的订阅，或某工单的执行器丢弃了自己的订阅，理由为 `reason`。 */
   'thread.unsubscribed': { threadKey: string; ticketId: string; by: 'person' | 'executor'; reason?: string }
   'trigger.requeued': { triggerId: string }
   /** 人的后续消息已到达某些工单，旧版本同时把它排入评估，现已离开队列。 */
   'trigger.followup': { triggerId: string }
-  'policy.changed': { from: string; to: string }
 }
 export type DomainEvent = { [K in keyof DomainEvents]: { type: K; at: string; data: DomainEvents[K] } }[keyof DomainEvents]
 

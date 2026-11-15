@@ -81,9 +81,6 @@ export interface Deployment extends Machine {
   readonly sources: Readonly<Record<string, ResolvedSource>>
 }
 
-export const isGithubSource = (source: ResolvedSource | undefined): source is ResolvedGithubSource => source?.kind === 'github'
-export const isGitlabSource = (source: ResolvedSource | undefined): source is ResolvedGitlabSource => source?.kind === 'gitlab'
-export const isFeishuSource = (source: ResolvedSource | undefined): source is ResolvedFeishuSource => source?.kind === 'feishu'
 /** 某条来源记录已解析的来源；记录不存在或尚未解析时为 undefined。 */
 export const sourceOf = (deployment: Deployment | undefined, id: string): ResolvedSource | undefined => deployment?.sources[id]
 /** 某一类型的第一条已解析来源记录；工作单元垫片和通用工具只使用这一条。 */

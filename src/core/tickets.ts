@@ -45,7 +45,6 @@ export class Tickets extends EnginePart {
     for (const triggerId of triggerIds) for (const ref of this.repo.triggers.get(triggerId)?.threads ?? []) this.inputs.subscribe(id, ref)
     if (outcome.acknowledgement && primary) this.replies.acknowledgeAccepted(id, primary, outcome.acknowledgement)
     this.defer(() => this.options.executor.start(this.require(id), assignment))
-    this.emit('ticket.created', { ticketId: id, decisionId, strength: mandate.strength })
   }
   /**
    * 代表某人停止工单，并结束所有进行中的任务分配。
@@ -179,6 +178,5 @@ export class Tickets extends EnginePart {
   }
   private endAssignment(ticket: Ticket, assignment: Assignment, reason: string): void {
     assignment.state = 'ended'; assignment.endedAt = this.now(); assignment.endedReason = reason
-    this.emit('assignment.ended', { ticketId: ticket.id, assignmentId: assignment.id, reason })
   }
 }

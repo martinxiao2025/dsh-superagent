@@ -3,12 +3,10 @@
  * 阶段是记录而非硬状态机：前进不强制（worker 可以回退或重复某阶段），准确性由阶段聚焦提示词保证。
  * 每个阶段可自由配置模型（`settings.models.stages`），会话的每个模型请求按当前阶段覆盖路由。
  */
-import { z } from 'zod'
 
 /** 六个规范阶段；顺序即交付的自然次序，但引擎不强制前进。 */
 export const STAGES = ['investigate', 'design', 'implement', 'verify', 'review', 'deliver'] as const
 export type Stage = (typeof STAGES)[number]
-export const StageSchema = z.enum(STAGES)
 /** 阶段的模型可见名称与一句话职责；注入阶段地图与阶段聚焦提示词。 */
 export const STAGE_BRIEFS: Readonly<Record<Stage, string>> = {
   investigate: '调查：读代码与上下文，弄清现状与根因，产出结论与方案输入',

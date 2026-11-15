@@ -5,8 +5,6 @@ import type { Settings } from '../policy.ts'
 import type { Localized } from '../fields.ts'
 import type { VariableSpec } from '../sources/kind.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
-// 执行目录树的纯函数在零依赖叶子层（executor 共用）；此处具名再导出保持既有导入路径。
-export { executionRoot, projectDirectoryName, projectDirectory, ticketDirectoryName } from '../execution-paths.ts'
 
 /** 由执行器注册的变量；`ticket` 条目仅在有工单时填充。 */
 export const EXECUTOR_VARIABLES: readonly (VariableSpec & { ticket?: true })[] = [

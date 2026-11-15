@@ -31,7 +31,7 @@ export class Assignments extends EnginePart {
   constructor(options: EngineOptions, private readonly tickets: Tickets, private readonly replies: Replies,
     private readonly follows: Follows, private readonly requeues: Requeues) { super(options) }
 
-  /** 将未结束的任务分配标记为运行中，在未结束的工单上排队投递等待中的未投递输入，并发出 `assignment.started`。 */
+  /** 将未结束的任务分配标记为运行中，在未结束的工单上排队投递等待中的未投递输入。 */
   started(ticketId: string, assignmentId: string): void {
     const ticket = this.require(ticketId)
     const assignment = ticket.assignments.find(item => item.id === assignmentId)
@@ -40,7 +40,6 @@ export class Assignments extends EnginePart {
     ticket.updatedAt = this.now()
     this.repo.tickets.save(ticket)
     if (liveTicket(ticket) && ticket.undelivered.length) this.defer(() => this.options.executor.deliver(ticket, assignment))
-    this.emit('assignment.started', { ticketId, assignmentId })
   }
   /**
    * 在工单当前运行的任务分配上把 `inputIds` 标记为已投递，并清除此前 `delivery` 的失败记录；若已不再运行则忽略。

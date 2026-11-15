@@ -112,7 +112,6 @@ export class Evals extends EnginePart {
     for (const trigger of triggers) {
       this.repo.triggers.saveDisposition(trigger.id, { ...(this.repo.triggers.disposition(trigger.id) ?? { fanout: [], at }), evalId })
     }
-    this.emit('eval.started', { evalId, threadKey: thread.key, triggerIds: thread.evaluating.triggerIds, strength: strongest.strength })
     this.defer(() => this.options.assessor.request(this.candidateOf(thread)))
   }
   /** 持有 `triggerId` 的评估所产生的候选；没有评估持有时为 undefined。 */
@@ -210,10 +209,9 @@ export class Evals extends EnginePart {
     if (held?.evaluating?.triggerIds.length === 1) this.finish(held, held.evaluating, { kind: 'ignore', reason: [reason] })
     else if (held) this.reassess(held, { ...reason, triggerId }, [triggerId])
   }
-  /** 在新版策略下重新开始进行中的评估，并通知策略已变化。 */
-  policyChanged(from: string, to: string): void {
+  /** 在新版策略下重新开始进行中的评估。 */
+  policyChanged(): void {
     for (const thread of this.repo.threads.active()) if (thread.evaluating) this.reassess(thread, { code: 'policyChanged' })
-    this.emit('policy.changed', { from, to })
   }
   /** 以 `reason` 把线程的评估记为 unavailable 结束，并把除 `without` 外的触发器插到其他触发器之前排队等待新评估。 */
   private reassess(thread: Thread, reason: Reason, without: string[] = []): Decision {
@@ -330,7 +328,6 @@ export class Evals extends EnginePart {
       const disposition = this.repo.triggers.disposition(id) ?? { fanout: [], at }
       this.repo.triggers.saveDisposition(id, { ...disposition, evalId: evaluation.id, decisionId: decision.id })
     }
-    this.emit('decision.recorded', { decisionId: decision.id, kind: decision.kind, threadKey: thread.key })
     return decision
   }
 }

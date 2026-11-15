@@ -166,8 +166,8 @@ export class ProjectScheduler {
         // 与定时检查一致：一轮失败记在调度级错误上，不向调用方抛出。
         if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
       } finally {
-        this.reportHealth(settings)
-        this.reportAlerts(settings)
+        this.reportHealth()
+        this.reportAlerts()
       }
     })
   }
@@ -292,8 +292,8 @@ export class ProjectScheduler {
         // 单次检查失败不终止周期任务；具体项目的错误已记录在 `errors` 中。
         if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
       } finally {
-        this.reportHealth(settings)
-        this.reportAlerts(settings)
+        this.reportHealth()
+        this.reportAlerts()
       }
     })
   }
@@ -331,8 +331,8 @@ export class ProjectScheduler {
     }
   }
 
-  /** 把轮询错误、队列规模与工作区回收结果汇总到调度健康条目；`settings` 由调用链传入时不再重复读取。 */
-  private reportHealth(settings?: Settings): void {
+  /** 把轮询错误、队列规模与工作区回收结果汇总到调度健康条目。 */
+  private reportHealth(): void {
     // 停止过程中数据库可能已经关闭；健康上报不是关键路径，跳过即可。
     if (!this.host.health || this.host.lifetime.aborted) return
     try {
@@ -353,7 +353,7 @@ export class ProjectScheduler {
    * 逐项目的轮询失败（连续或最近一轮），与写回副作用积压（条目在退避中反复失败）。
    * 仅在故障出现或消失的轮次注入，不重复打扰；健康条目仍承载完整细节。
    */
-  private reportAlerts(settings: Settings): void {
+  private reportAlerts(): void {
     if (!this.host.alert || this.host.lifetime.aborted) return
     try {
       for (const [projectId, message] of this.errors) {
