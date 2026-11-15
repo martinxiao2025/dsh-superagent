@@ -32,9 +32,9 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
     const status: StartupStatus = { phase, detail, stateDir: machine.stateDir, ...error === undefined ? {} : { error: startupError(error) } }
     mount.set(status)
     recordStartup(machine.stateDir, { ...status, at: new Date().toISOString(), pid: process.pid,
-      listen: { host: ctx.webServer.host, port: ctx.webServer.port } })
+      listen: { host: ctx.webServer.host, port: ctx.webServer.port ?? 0 } })
   }
-  record('http-registered', `管理路由已挂载：/orchestrator/api（${ctx.webServer.host}:${ctx.webServer.port}）`)
+  record('http-registered', `管理路由已挂载：/orchestrator/api（${ctx.webServer.host}:${ctx.webServer.port ?? 0}）`)
   let runtime: Runtime | undefined
   try {
     const lock = await acquireStateLock(machine.stateDir, { onWait: elapsed => {

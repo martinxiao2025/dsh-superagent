@@ -50,13 +50,17 @@ import { FeishuCredentials } from '../feishu-credentials/service.ts'
 import { feishuProbe } from '../feishu-credentials/probe.ts'
 import { httpWikiApi, larkWikiApi, type FeishuWikiApi, type FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import { httpImApi, larkImApi, type FeishuImApi, type FeishuImReader } from '../task-sources/feishu-im-api.ts'
+import { taskSources } from '../task-sources/index.ts'
+import { syncRepoWorkCopy } from '../code-repos/port.ts'
+import { projectRepoId } from '../projects/kind.ts'
+import { withGitTimeout } from '../infra/git-timeout.ts'
 import { feishuSettings } from '../sources/feishu.ts'
 import { health, type Health } from '../infra/health.ts'
 import type { SourceContext, SourceHost } from '../sources/host.ts'
 import type { SourceAdapter } from '../sources/kind.ts'
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
-import { ProjectScheduler } from './scheduler.ts'
+import { POLL_CONCURRENCY, ProjectScheduler } from './scheduler.ts'
 import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
@@ -306,16 +310,23 @@ export class Runtime extends Service implements SourceHost {
         if (event.type === 'ticket.ended') this.scheduler.observe(event.data.ticketId)
       } })
     // 调度与工作区回收共用健康看板：错误按 `schedule` / `workspace` 分类暴露给面板。
+    // 任务来源注册表与仓库同步显式传入（调度器不再隐式回退到模块单例与默认实现，评审 P1-9）。
     const scheduleHealth = board.claim('schedule', { state: 'starting', detail: '', category: 'schedule' })
     const scheduler = new ProjectScheduler({ store, settings: () => store.settings(),
       engine: { schedule: input => engine.schedule(input), stopTicket: (id, reason) => engine.stopTicket(id, reason) },
       executor: { slotsInUse: () => executor.slotsInUse(), projectsInUse: () => executor.projectsInUse() },
       effects: this.effects, commands: this.commands, stateDir: this.machine.stateDir, lifetime: this.lifetime,
+      registry: taskSources, syncRepo: projectId => this.syncProjectRepo(projectId),
       feishuWiki: credential => this.wikiOf(credential),
       feishuIm: credential => this.imOf(credential), gitAuth: id => this.gitCredentials.authOf(id),
-      health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces() })
+      health: scheduleHealth, collectWorkspaces: () => this.reclaimWorkspaces(),
+      // 调度告警走主会话的后台通知管道：同名通知合并、恢复时再次注入，不唤醒智能体。
+      alert: (name, message) => this.sessions.notify(`schedule:${name}`, { schedule_alert: name, detail: message }, `Scheduler alert: ${name}`) })
     // 回写是持久化副作用：失败按退避重试，状态进入 `effects` 健康条目；项目已被删除时不静默丢弃。
     this.effects.handle('writeback', payload => this.scheduler.writeBackNow(payload), { retry: [5_000, 600_000] })
+    // 项目轮询也是持久化副作用：单项目串行（键去重）、全局有限并发；慢项目不再阻塞其他项目的轮询与建单。
+    // 轮询失败记录在项目上并按调度健康暴露，故不重复计入 effects 健康（quiet）。
+    this.effects.handle('poll', (_payload, projectId) => this.scheduler.pollNow(projectId), { limit: () => POLL_CONCURRENCY, quiet: true })
     // 若过去一小时内曾出现评估因不可用而失败，则在每次轮次更新 `evals` 健康条目。
     const evals = board.claim('evals', { state: 'ready', detail: 'No unavailable Eval in the last hour' })
     const evaluateDue = () => { engine.evaluateDue(); evals.set(evalsHealth(store)) }
@@ -467,6 +478,23 @@ export class Runtime extends Service implements SourceHost {
       : `${report.removed.length} reclaimed, ${report.kept} kept, ${report.unknown} unknown, ${report.scanned} scanned`
         + (report.errors.length ? `; ${report.errors.join('; ')}` : '')
     this.workspaceHealth.set({ state: report.errors.length ? 'error' : 'ready', detail, at: report.at, category: 'workspace' })
+  }
+  /**
+   * 同步项目代码仓库的工作副本，返回其目录；由项目调度器显式传入（轮询、回写共用）。
+   * 工作副本跟随项目选定的分支：清单轮询、回写与执行 worktree 都落在同一分支上；
+   * 未选择分支时留空，按远端默认分支检出。项目可用 gitTimeoutSeconds 放宽 git 类命令的超时（大仓库首次 clone）。
+   */
+  private async syncProjectRepo(projectId: string): Promise<string> {
+    const project = this.store.settings().projects[projectId]
+    const repoId = projectRepoId(projectId)
+    const auth = project?.gitCredential ? this.gitCredentials.authOf(project.gitCredential) : undefined
+    const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
+    const scoped = this.commands.scope(repoId)
+    const commands = gitTimeout ? withGitTimeout(scoped, gitTimeout) : scoped
+    const result = await syncRepoWorkCopy({ commands, stateDir: this.machine.stateDir, repo: repoId,
+      branch: project?.execution.branch, signal: this.lifetime, ...(auth ? { auth } : {}) })
+    if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repoId}`)
+    return result.directory
   }
   /**
    * 重置状态目录：先停止运行时（关闭数据库并释放锁），备份后清空插件拥有的条目，再重启插件。

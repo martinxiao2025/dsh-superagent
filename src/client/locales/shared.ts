@@ -38,6 +38,7 @@ export const sharedText = {
   'health.notice': ['给主 Session 的通知', 'Notices to the main Session'],
   'health.reply': ['发往渠道的消息', 'Messages to Channels'],
   'health.writeback': ['任务状态回写', 'Task status writebacks'],
+  'health.poll': ['项目任务来源轮询', 'Project task source polls'],
   'health.push': ['任务状态推送', 'Task status pushes'],
   'health.worker': ['执行器事件处理', 'Executor event handling'],
   'health.evals': ['未完成的评估', 'Unavailable Evals'],

@@ -135,6 +135,17 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 - 模板不预填业务数据；示例行在校验时会被识别为普通任务，因此默认注释掉（放在 `_meta` 的 `example` 键里）。
 - **清单缺失时自动创建初始版本**：字段验证与首轮轮询发现仓库中没有清单文件时，按扩展名写标准模板（`.xlsx` 用完整模板工作簿，`.csv`/`.tsv` 写全部标准表头行）并提交进工作副本，项目从验证或第一次轮询起就可用。
 
+### 4.3 Excel 任务驱动的项目自举
+
+用本插件管理「本插件自己的开发」时，仓库自带标准清单（`tasks/backlog.csv`），任务来源指向它即可闭环：
+
+1. 把 [examples/project-seed.json](../examples/project-seed.json) 复制到工作目录，替换占位符（仓库、凭据、prepare）。
+2. 用管理 API 创建项目：`POST /orchestrator/api/projects`，请求体即该 JSON（字段缺省值见 [009 第 4 章](009-authoritative-project-design.md)）。
+3. 首个轮询点起，清单里 `status` 为 `pendingStatuses`（种子示例为 `todo`/`blocked`）的行按全局 FIFO 出队建单；工单结束后 `status` 列按 `doneStatus`/`failedStatus` 回写并提交进仓库。
+4. 标准枚举与 `taskPolicy` 的关系：`pendingStatuses`/`doneStatus`/`failedStatus` 只能取 010 §1.3 的五个枚举值；示例种子把完成/失败直接定为 `done`/`cancelled`，回写无需语义映射。
+
+本仓库的 `tasks/backlog.csv` 就是按此路径运行的工作清单：插件自身后续的迭代任务（架构升级、提示词优化、文档收敛）以清单行驱动，与它管理外部项目的方式完全一致——吃自己的狗粮，也是对标准格式最直接的回归验证。
+
 ## 5. 边界处理
 
 | 场景 | 处理 |

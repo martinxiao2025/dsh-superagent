@@ -46,8 +46,10 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
     } })
   const accounts = setup.accounts
   // 远程浏览器（`memory` 模式）为只读；`unavailable` 表示 `dsh-superagent` 仍在启动中。
-  const readOnlyHint = !form ? t('deploymentNoForms') : snapshot?.mode === 'memory' ? t('deploymentReadOnly')
-    : snapshot?.status === 'loading' ? t('loading') : snapshot?.status === 'unavailable' ? t('deploymentUnavailable')
+  // 宿主文档不可写（例如远程浏览器的 memory 模式）优先于条目状态：配置表单加载中或不可用时说明原因。
+  const readOnlyHint = !form ? t('deploymentNoForms')
+    : snapshot?.status === 'loading' ? t('loading')
+    : snapshot?.status === 'unavailable' ? (snapshot.writable ? t('deploymentUnavailable') : t('deploymentReadOnly'))
     : !editable ? t('deploymentReadOnly') : undefined
   const limit = (key: typeof MACHINE_LIMITS[number], label: string) => <Field label={label}>
     <Input type="number" min={LIMITS[key].min} max={LIMITS[key].max} step={1} value={draft.value[key]} disabled={!editable}

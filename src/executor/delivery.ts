@@ -5,7 +5,7 @@
  */
 import { liveTicket, runningAssignment, type Assignment, type Ticket, type TicketInput } from '../core/index.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { Later } from '../app/effects.ts'
+import { Later } from '../app/later.ts'
 import { capped, inputMessage, inputResource, workerSessionId } from './format.ts'
 import type { WorkerContext } from './dsh.ts'
 

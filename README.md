@@ -41,7 +41,7 @@ dsh-superagent 是面向 GitHub 仓库的主动式编码智能体，以 [DeepSee
 pnpm dev
 ```
 
-脚本会构建、生成开发覆盖层并启动 `dsh web`，就绪后打印面板 URL；开发实例的状态目录隔离在检出内的 `.dsh-dev-state`，与桌面版生产实例互不影响。改代码后 `pnpm build` 并重启 `pnpm dev`。dsh CLI 不在 PATH 时用 `--dsh <路径>` 或 `DSH_CLI` 环境变量指定。在真实 profile 上验证时改用桌面版重挂载回路（`dsh plugin --profile <名称> add link:<检出路径>`）。
+脚本会构建、生成开发覆盖层并启动 `dsh web`，就绪后打印面板 URL；开发实例的状态目录隔离在检出内的 `.dsh-dev-state`，与桌面版生产实例互不影响。改代码后 `pnpm build` 并重启 `pnpm dev`。dsh CLI 不在 PATH 时用 `--dsh <路径>` 或 `DSH_CLI` 环境变量指定。在真实 profile 上验证时改用桌面版重挂载回路（`pnpm build` 后用插件管理器对 `dsh-superagent` 条目禁用再启用，或 `dsh plugin --profile <名称> add link:<检出路径>`），并用 `node scripts/verify-live.mjs` 做只读实机核验——详见 [006 部署 · 开发与调试](docs/006-deployment.md)。
 
 ## 许可证
 

@@ -1,13 +1,20 @@
 # dsh-superagent 插件包层：插入主插件及其各会话运行的智能体预设。profile
 # 提供 `dsh-superagent` 条目的 stateDir（参见 docs/006-deployment.md 和 examples/profile.cordis.patch.yml）；没有
 # stateDir 时插件拒绝启动。来源（GitHub / GitLab / 飞书）是插件内的用户数据，由管理面板增删启停，不再有独立的插件开关。
+#
+# 预设间共享的会话策略（shell 超时、任务等待、压缩）在两个预设里各自内联为相同行：
+# 两个预设各自挂载为独立的 PresetTree，同 id 行跨预设不冲突。不要尝试用 `cordis:include`
+# 行引用包内文件来去重——bundle 补丁行拼进 profile 的根 include 树挂载，预设挂载时
+# include 的相对路径按 profile 目录解析，包内文件永远找不到（真机 2026-11-15 实测）；
+# 也不要用 YAML 合并键（Loader 的 JSON_SCHEMA 不展开，静默丢字段）或整行锚点
+# （structuredClone 复制同 id 行，同树内条目按 id 索引会互相覆盖）。
 - insert:
     - id: dsh-superagent
       name: dsh-superagent
     # 每个执行器会话的智能体预设（src/app/sessions.ts 中的 WORKER_PRESET）；主会话有自己的预设，见下方。
     # 它是 DSH 的 `standard` 预设，只保留执行器需要的内容，并让前台命令在 5 秒后转入后台任务，
     # 因此长命令不会挡住人的消息，会话会在下一步接收它。省略了：向人提问、展示、计划模式、
-    # 插件管理器与市场、调度、目标、工作流、web fetch，以及分叉子代理（它们会在该预设下运行）；
+    # 插件管理器与市场、调度、目标、工作流，以及分叉子代理（它们会在该预设下运行）；
     # 派生的子代理在 `standard` 下运行，其 shell 只在 60 秒后把命令转入后台任务，因为子代理结束时其任务会被终止。
     # 预设行没有可在预设选择器中隐藏它的设置，因此其名称和说明会写明它面向谁。
     - id: dsh-superagent-worker-preset
@@ -28,7 +35,7 @@
               maxBytes: 65536
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
-          # 前台命令最多等待 5 秒，随后 shell 工具把它转入后台任务。
+          # 前台命令最多等待 5 秒，随后 shell 工具把它转入后台任务；主会话保留同一组行。
           - id: shell
             name: cordis:group
             group: true

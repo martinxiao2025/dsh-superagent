@@ -2,14 +2,21 @@
 import { LIMITS } from './limits.ts'
 import { accessSync, constants, statSync } from 'node:fs'
 import { delimiter, extname, isAbsolute, join } from 'node:path'
-import type { Volatile } from '@deepseek-ai/cordis'
 import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
+import type { Volatile } from '@deepseek-ai/cordis'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
 import { spawnArgv } from './infra/commands.ts'
 import { hostOf } from './infra/host.ts'
 import { SetupError } from './setup.ts'
+// 已解析来源与部署形态的权威定义在零依赖叶子层；这里导入并具名再导出，保持既有导入路径不变。
+// `RepoAuth` 与其 zod schema 都留在本文件：schema 属于配置层，叶子层只有它的类型形态。
+import type { Deployment as DeploymentShape, Machine as MachineShape, ResolvedGithubSource, ResolvedGitlabSource,
+  ResolvedFeishuSource, ResolvedSource } from './deployment-types.ts'
+import { firstSource, isGithubSource, isGitlabSource, isFeishuSource, sourceOf } from './deployment-types.ts'
+export type { ResolvedGithubSource, ResolvedGitlabSource, ResolvedFeishuSource, ResolvedSource }
+export { firstSource, isGithubSource, isGitlabSource, isFeishuSource, sourceOf }
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
 /** Windows 写法的盘符或 UNC 根路径，或 POSIX 根路径；相对路径两者都不以之开头。 */
@@ -39,8 +46,7 @@ export const Config = s.object({
     .description('Back up and clear the state directory before starting, then start from an empty baseline. Takes effect once per start.'),
 })
 export type DeploymentConfig = ReturnType<typeof Config>
-export interface Machine {
-  stateDir: string
+export interface Machine extends MachineShape {
   promptMaxChars: Volatile<number>
   admissionContextMaxPages: Volatile<number>
   admissionContextTimeoutMs: Volatile<number>
@@ -52,6 +58,7 @@ export interface Machine {
   gitlabHost: Volatile<string>
   workspaceRetentionDays: Volatile<number>
 }
+export interface Deployment extends DeploymentShape {}
 const MOVED: Record<string, string> = {
   repository: 'on each GitHub Source record', branchPrefix: 'in the prepare command of the Execution settings', github: 'on each GitHub Source record',
   feishu: 'on each Feishu Source record', author: 'prompt text', repositoryPath: 'in the prepare command of the Execution settings',
@@ -122,72 +129,8 @@ export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
   gitlab: ['instanceUrl', 'project', 'cli', 'auth', 'remote', 'sshKey'],
 }
 
-/** 已解析的 GitHub 来源记录：一个记录一个智能体账号和一个仓库。 */
-export interface ResolvedGithubSource {
-  readonly id: string
-  readonly kind: 'github'
-  /** 站点根地址；空表示 github.com。 */
-  readonly instanceUrl: string
-  readonly cli: string
-  readonly repository: string
-  readonly login: string
-  readonly noreply: string
-  /** 远端认证方式；`ssh` 时不使用 CLI。 */
-  readonly auth: RepoAuth
-  /** 覆盖默认远端地址；空表示按认证方式推导。 */
-  readonly remote: string
-  /** SSH 私钥路径；空表示使用本机默认 SSH 配置。 */
-  readonly sshKey: string
-  /** 项目选择的 Git 凭据 ID；仅项目仓库来源携带。 */
-  readonly gitCredential?: string
-}
-/** 已解析的 GitLab 来源记录。 */
-export interface ResolvedGitlabSource {
-  readonly id: string
-  readonly kind: 'gitlab'
-  readonly instanceUrl: string
-  readonly cli: string
-  readonly project: string
-  readonly projectId: number
-  readonly login: string
-  /** GitLab 的数字用户 ID。 */
-  readonly userId: number
-  /** 远端认证方式；`ssh` 时不使用 CLI。 */
-  readonly auth: RepoAuth
-  readonly remote: string
-  readonly sshKey: string
-  /** 项目选择的 Git 凭据 ID；仅项目仓库来源携带。 */
-  readonly gitCredential?: string
-}
-/** 已解析的飞书来源记录：一个记录一个机器人。 */
-export interface ResolvedFeishuSource {
-  readonly id: string
-  readonly kind: 'feishu'
-  readonly instanceUrl: string
-  readonly cli: string
-  readonly appId: string
-  readonly brand: 'feishu' | 'lark'
-  readonly botId: string
-  readonly name: string
-}
-export type ResolvedSource = ResolvedGithubSource | ResolvedGitlabSource | ResolvedFeishuSource
-
-/** 机器设置加上按记录 ID 索引的已解析来源；同一类型可以有多条记录。 */
-export interface Deployment extends Machine {
-  readonly sources: Readonly<Record<string, ResolvedSource>>
-}
-
-export const isGithubSource = (source: ResolvedSource | undefined): source is ResolvedGithubSource => source?.kind === 'github'
-export const isGitlabSource = (source: ResolvedSource | undefined): source is ResolvedGitlabSource => source?.kind === 'gitlab'
-export const isFeishuSource = (source: ResolvedSource | undefined): source is ResolvedFeishuSource => source?.kind === 'feishu'
-/** 某条来源记录已解析的来源；记录不存在或尚未解析时为 undefined。 */
-export const sourceOf = (deployment: Deployment | undefined, id: string): ResolvedSource | undefined => deployment?.sources[id]
-/** 某一类型的第一条已解析来源记录；工作单元垫片和通用工具只使用这一条。 */
-export function firstSource<K extends ResolvedSource['kind']>(deployment: Deployment | undefined, kind: K): Extract<ResolvedSource, { kind: K }> | undefined {
-  if (!deployment) return undefined
-  for (const source of Object.values(deployment.sources)) if (source.kind === kind) return source as Extract<ResolvedSource, { kind: K }>
-  return undefined
-}
+// ResolvedGithubSource / ResolvedGitlabSource / ResolvedFeishuSource / ResolvedSource / Deployment
+// 与三个守卫函数都已上移到 ./deployment-types.ts 并在文件头具名再导出，保持既有导入路径不变。
 /** 实例地址的站点主机名；留空时使用 `fallback`。定义在 `infra/host.ts`（零依赖叶子），此处具名再导出保持既有导入路径。 */
 export { hostOf } from './infra/host.ts'
 /** 实例地址的网页基地址；留空时使用 `fallback`。 */

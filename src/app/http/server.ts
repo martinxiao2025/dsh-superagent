@@ -71,8 +71,8 @@ export function registerHttp(ctx: Context, resolve: () => HttpHost | undefined, 
 export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | undefined), status?: () => StartupStatus): () => void {
   const resolve = typeof source === 'function' ? source : () => source
   const state = status ?? ((): StartupStatus => ({ phase: 'ready', detail: '', stateDir: resolve()?.machine.stateDir ?? '' }))
-  // 端口在请求时读取：插件初始化阶段 Web 服务器可能尚未监听。
-  const listen = (): Listen => ({ host: ctx.webServer.host, port: ctx.webServer.port })
+  // 端口在请求时读取：插件初始化阶段 Web 服务器可能尚未监听（0.2.2 起 `port` 在绑定前为 undefined）。
+  const listen = (): Listen => ({ host: ctx.webServer.host, port: ctx.webServer.port ?? 0 })
   // 运行时只创建一次；缓存它的路由表，避免每个请求重建。
   let cached: { runtime: HttpHost; table: Routes } | undefined
   const tableFor = (runtime: HttpHost): Routes => {
@@ -81,7 +81,7 @@ export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | 
   }
   const dispose = ctx.webServer.register({ kind: 'prefix', path: '/orchestrator/api', handler: async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
-    if (!sameOrigin(req, ctx.webServer.port)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+    if (!sameOrigin(req, ctx.webServer.port ?? 0)) { json(res, 403, { error: 'Same-origin management request required' }); return }
     const method = req.method ?? 'GET'
     // 前缀按路径边界匹配 `/orchestrator/api`，其余 `/orchestrator/*` 交给宿主的页面路由。
     const path = url.pathname.slice('/orchestrator/api'.length).replace(/^\//, '')

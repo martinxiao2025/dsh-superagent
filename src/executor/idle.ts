@@ -4,7 +4,7 @@
  */
 import { latestReport, liveTicket, runningAssignment, waitsForPerson, type Assignment, type Ticket } from '../core/index.ts'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { Later } from '../app/effects.ts'
+import { Later } from '../app/later.ts'
 import { collectJob, killJobs, runningJobs, stopSubagents, untilQuiet } from './background.ts'
 import { workerSessionId, workerReportText } from './format.ts'
 import type { WorkerContext } from './dsh.ts'

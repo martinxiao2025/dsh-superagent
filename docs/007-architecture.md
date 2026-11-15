@@ -258,7 +258,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 ## 依赖规则
 
 - **显式、狭窄的依赖。** 每个类收到一个接口，指明它使用的内容，大多是其他类的 `Pick` 类型：核心类使用 `ExecutorHost`、`AssessorHost`、`SessionsHost`、`SettingsHost`、`SetupHost`、`PassesHost` 和 `OutboxHost`，胶水层使用 `HttpHost`、`MainToolsHost`、`ExecutorToolsHost`、`ResourceHost`、`LinkHost` 和 `SourceContextDeps`，Engine 则以调用它的角色 `Pick` 形式出现。Runtime 只在此类接口背后传递自身。内置适配器由主插件在 `src/index.ts` 注册，接入 `SourceHost`（registry 与逐记录上下文）；适配器代码只能看到该记录的 `SourceContext`。
-- **谁能导入什么。** 除 Node 的哈希外，`src/core` 不导入自身之外的任何内容，也不做 I/O。`src/sources` 不从 `src/app` 导入任何内容。面板只从宿主侧导入类型（含 `src/fields.ts` 的字段规范与 `src/infra/health.ts` 的健康类型），以及 `src/admission.ts`、`src/limits.ts`、`src/setup.ts`、`src/navigation.ts`、`src/infra/health.ts`、`src/core/errors.ts`、`src/core/reasons.ts` 的普通值和 `src/app/api.ts` 的过滤列表。
+- **谁能导入什么。** 除 Node 的哈希外，`src/core` 不导入自身之外的任何内容，也不做 I/O。`src/sources` 不从 `src/app` 导入任何内容。`src/executor` 不值级依赖 `src/app`，除零依赖叶子 `src/app/later.ts`（`Later` 信号）；执行目录纯函数由 `src/execution-paths.ts` 叶子承载，executor 与 app 共同导入。`src/infra` 只从零依赖叶子 `src/deployment-types.ts` 导入部署类型（deployment ↔ infra 无值级环，类型权威在叶子层）。`src/app/scheduler.ts` 的任务来源注册表与仓库同步由 Runtime 显式传入，不回退到模块单例。以上方向由 `tests/architecture.spec.ts` 静态守卫持续锁定。面板只从宿主侧导入类型（含 `src/fields.ts` 的字段规范与 `src/infra/health.ts` 的健康类型），以及 `src/admission.ts`、`src/limits.ts`、`src/setup.ts`、`src/navigation.ts`、`src/infra/health.ts`、`src/core/errors.ts`、`src/core/reasons.ts` 的普通值和 `src/app/api.ts` 的过滤列表。
 - **每种状态只有一个写入者。** 每种状态只有一个写入者，其他部分读取它或向该写入者询问。
 
   | 状态 | 写入者 |
@@ -296,6 +296,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/startup.ts` | 启动记录与状态目录锁：`recordStartup` 写 `startup.json` 并轮转 `startup.prev.json`，`startupError` 折叠异常，`acquireStateLock` 在锁竞争时等待重试 |
 | `src/app/admin-mount.ts` | `AdminMount`：Runtime 创建之前挂载 `/orchestrator/api`，初始化失败时用启动状态回答健康探针与 503 |
 | `src/deployment.ts` | 插件 `Config` 和 `Machine`；`resolveGithubSource`、`resolveGitlabSource` 和 `resolveFeishuSource` 按记录解析仓库、项目和账号，每个 CLI 按执行器 shell 的方式运行；`SETUP_FIELDS` 列出各类型安装读取的字段。代码不指名任何人、账号或组织。`hostOf` 由 `infra/host.ts` 具名再导出 |
+| `src/deployment-types.ts` | 部署类型的零依赖叶子：已解析来源记录（`ResolvedSource` 族）、`Machine`/`Deployment` 形态与守卫函数；infra 与 executor 从这里导入，断开 deployment ↔ infra 的模块环 |
 | `src/setup.ts` | 安装问题：`SetupError`，带错误码、修复它的位置，以及日志、主会话和面板共享的英文文本 |
 | `src/policy.ts` | 策略聚合出口：设置架构、评估校验与门禁的三层实现经此处具名再导出，保持宿主与测试的导入路径不变 |
 | `src/settings/schema.ts` | 设置 schema 叶子层：评估规则、来源策略、评估与执行器配置、来源记录以及完整设置快照的类型 |
@@ -379,6 +380,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/role-models.ts` | 解析评估和执行器模型，并用角色的模型初始化新会话 |
 | `src/app/assessment.ts` | MasterAssessor、评估架构，以及 `orchestrator_eval` 回答的窗口 |
 | `src/app/execution-environment.ts` | 执行环境：其变量、工单的值、目录根以及提示词段落的各行，由 `src/app/prompts.ts` 填入其模板 |
+| `src/execution-paths.ts` | 执行目录树的零依赖叶子：`executionRoot`、项目与工单目录名的纯函数；executor 与 app 共用，避免 executor 反向依赖 app |
+| `src/app/later.ts` | `Later` 信号错误的零依赖叶子：副作用处理器报告"稍后重试"；executor、scheduler 与 Effects 共用 |
 | `src/app/source-context.ts` | `sourceContextOf`：每个来源 kind 的 `SourceContext` |
 | `src/app/links.ts` | `sourceLink`、触发器消息的页面，以及 `candidateCard` |
 | `src/app/cards.ts` | 供模型使用的触发器、工单、线程和决定的紧凑卡片，工单卡片状态的封闭集合 `TICKET_STATES`，以及 `textPage` |

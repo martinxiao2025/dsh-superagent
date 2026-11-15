@@ -119,7 +119,15 @@ const THREAD_DECISIONS = 5
 const triggerLine = (trigger: Trigger) => ({ trigger_id: trigger.id, actor: trigger.actor.id, human: trigger.human, at: trigger.at,
   preview: preview(trigger.text), chars: trigger.text.length, read: `trigger/${trigger.id}` })
 async function transcript(host: ResourceHost, ticketId: string) {
-  return (await host.context.sessionController.inspect(workerSessionId(ticketId) as SessionId)).events
+  // 0.2.2 起 `inspect` 已被 `events` 分页取代：一页足够覆盖执行器会话的转写读取。
+  // 线上的 `SessionWireEvent.type` 是宽泛 string；转写读取只认三种消息事件，逐条收窄后再交给 transcriptEntry。
+  const page = await host.context.sessionController.events({ address: { kind: 'session', sessionId: workerSessionId(ticketId) as SessionId } },
+    new AbortController().signal)
+  return page.records.flatMap(record => {
+    const event = record.event
+    return event.type === 'user/message' || event.type === 'tool/result' || event.type === 'assistant/message'
+      ? [event as unknown as Parameters<typeof transcriptEntry>[0]] : []
+  })
 }
 
 const ROUTES: readonly Route[] = [

@@ -88,9 +88,12 @@ function writeOverlay() {
 /** 等开发实例的插件就绪：轮询 .dsh-dev-state/startup.json 的端口并探健康接口。 */
 async function waitReady(timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs
+  let lastPhase = ''
   while (Date.now() < deadline) {
     try {
       const entry = JSON.parse(readFileSync(join(STATE_DIR, 'startup.json'), 'utf8'))
+      // 启动阶段变化时打印一次，让失败在等待期内就可见（locked/failed 及其 detail）。
+      if (entry.phase && entry.phase !== lastPhase) { lastPhase = entry.phase; console.log(`Plugin startup: ${entry.phase}${entry.detail ? ` — ${entry.detail}` : ''}`) }
       if (entry.listen?.port && await healthy(entry.listen.port)) return entry
     } catch { /* 尚未写出启动记录 */ }
     await sleep(1_000)
@@ -146,7 +149,13 @@ async function main() {
   process.on('SIGINT', () => stopping('SIGINT'))
   process.on('SIGTERM', () => stopping('SIGTERM'))
   const entry = await waitReady()
-  if (!entry) fail('120 秒内开发实例未就绪；上方是 dsh web 的输出，另见 .dsh-dev-state/startup.json 的 phase/detail。')
+  if (!entry) {
+    // 就绪失败时把启动记录的阶段与错误打印出来，而不是只报超时（官方实践：启动诊断优先于日志猜测）。
+    try {
+      const record = JSON.parse(readFileSync(join(STATE_DIR, 'startup.json'), 'utf8'))
+      fail(`120 秒内开发实例未就绪。启动记录：phase=${record.phase} detail=${record.detail}${record.error ? ` error=${record.error.message ?? JSON.stringify(record.error)}` : ''}`)
+    } catch { fail('120 秒内开发实例未就绪，且 .dsh-dev-state/startup.json 不存在或不可读；上方是 dsh web 的输出。') }
+  }
   // 带 token 的面板 URL 可能晚于就绪到达；最多再等 5 秒拿完整地址。
   for (let index = 0; index < 10 && !panel.includes('token='); index++) await sleep(500)
   console.log('DEV_WEB_READY')

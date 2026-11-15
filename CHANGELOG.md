@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### DSH 最佳实践对齐批次（2026-11-15）
+
+按 DSH 官方插件实践（dsh-doc practices/compositions/tool-design）逐条对照后的优化与完善；
+全部 1363 例测试通过，`pnpm check`（typecheck + test + build）全绿。
+
+- **升级 DSH 至 0.2.2-rc.3**：`engines.dsh` 与全部 `@deepseek-ai/*` 依赖升级
+  （cordis 4.1.0、schemastery 3.19.0、zod 4.6.6）；`webServer.port` 在绑定前为 undefined、
+  `sessionController.inspect` 被 `events` 分页取代、`ConfigFormSnapshot.mode` 移除（可写性由 `writable` 表达）、
+  `installModelSelection` 改为仅装在智能体上下文——四处 API 变更全部跟进。
+- **模型预算重试投影化**（011 §9.2）：重试等待状态改为 DSH 会话投影单元
+  （`modelRetryProjectionDefinition`，宿主专用无 wire 块）：注册表随已提交事件增量折叠，
+  支持投影缓存检查点；`Sessions` 注册后不再手写 `session/event` 监听与快照重放
+  （`RetryHealth` 类保留为可选服务缺失时的回退与单测面）。
+- **会话装饰双 owner**：每个受管会话的提示词、技能、工具与限制注册包进一个
+  `agent.ctx.effect()`（await 等待注册完成），智能体释放时 Cordis 自动拆除；
+  插件卸载路径保留自有 disposer——两条拆除路径共用同一 LIFO 收尾。
+- **Effects 精确唤醒**：`Later` 重试的再调度由 2 秒轮次心跳改为最近到期行的
+  精确 `setTimeout`，重试延迟贴近设定值、心跳空转减少；`drain` 时清理定时器。
+- **调度告警出口**（011 §6-2 部分关闭）：连续轮询失败与写回积压经调度器 `alert` 出口
+  注入主会话（复用 `notify` 管道：同名通知合并、恢复时再次注入，不唤醒智能体）；
+  面板语言包新增 `health.poll`。
+- **分层收口（011 P1-9 关闭）**：部署类型权威下沉零依赖叶子 `deployment-types.ts`
+  （infra 只看叶子，deployment ↔ infra 值级环断开）；`Later` 与执行目录纯函数分别下沉
+  `app/later.ts`、`execution-paths.ts`（executor 不再反向依赖 app，仅剩 later 叶子）；
+  `scheduler` 的 `registry`/`syncRepo` 改为宿主必传，删除模块单例回退；
+  `tests/architecture.spec.ts` 静态守卫同步收紧。
+- **轮询并发模型（011 P1-5 关闭）**：项目轮询改造为持久化副作用 `poll`（键为项目 ID，
+  单项目串行由键去重保证；全局并发由 Effects 处理器 `limit` 决定）——tick 只投递到期轮询，
+  慢项目（大仓库首次 clone）不再阻塞其他项目的轮询、建单与回写；手动 `scan` 保留同步语义。
+- **预设补丁与 include 锚定规则（真机验证修复）**：最初尝试把两个预设共享的 shell/任务等待/
+  压缩配置抽到 `presets-shared.yml` 由 `cordis:include` 引用；桌面版真机启动失败——bundle 补丁行
+  拼进 profile 的根 include 树挂载，预设挂载时 include 的相对路径按 **profile 目录**解析，包内文件
+  永远找不到。已回退为两个预设各自内联相同行（两个预设是独立的 PresetTree，同 id 行跨预设无冲突），
+  并在补丁文件头记录该锚定规则与不可行的去重手段（合并键静默丢字段、整行锚点复制同 id 条目）。
+- **主题令牌审计**：面板 CSS 引用的 35 个 `--dsw-*` 令牌与宿主主题包实际定义逐一比对，
+  全部存在，无需 fallback。
+- 007 模块表补充三个新叶子文件；011 §9.2 关闭记录同步。
+
+### 开发调试与实机验证批次（2026-11-15）
+
+对照 DSH 官方插件开发实践（plugin-development / verification）更新脚本与文档：
+
+- **新增 [scripts/verify-live.mjs](../scripts/verify-live.mjs)（实机验证）**：把官方实践第 4 步
+  「读安装结果 → 验证已安装能力」收敛为一条只读命令——等就绪、核对全部健康条目 ready、
+  抽查 queue/prompts/overview 接口、报告落盘 `.artifacts/verify-live-<profile>.json`；
+  多实例并存时取最新 startup.json（打印候选），pid 已死的残留记录自动过滤；
+  退出码 0/1 便于脚本化。已在桌面实例与开发实例上实测通过。
+- **[scripts/dev-web.mjs](../scripts/dev-web.mjs) 就绪诊断**：启动阶段每次变化实时打印
+  （`locked`/`failed` 与 detail），超时失败打印启动记录的阶段、详情与异常摘要，不再只报超时。
+- **006「开发与调试」按官方实践重写**：两条实机回路明确为「推荐：开发实例」与
+  「真实 profile：重挂载 + 热启用」；新增热启用步骤（插件管理器 disable→enable，
+  `application: applied` 为生效权威信号，不重启宿主应用、不中断会话）与
+  「实机验证（verify-live）」一节；实测陷阱补充 include 锚定规则（预设内 include 按
+  profile 目录解析，包内文件引用不到，共享行只能内联）；安装命令的 DSH 版本钉更新为 0.2.2-rc.3。
+- **README** 开发节同步热启用与 verify-live 用法。
+
 ### 开发调试清理（2026-11-14）
 
 - **巨石测试拆分收尾**（011 §9.2 第 9 项最后一项）：`core-engine.spec.ts`（1614 行 / 113 例）按主题

@@ -1,8 +1,10 @@
 /**
  * 表示某个副作用当前无法运行，例如处理已暂停或所有执行器槽位已满。
  * Effects 会在初始重试延迟后重新调度该行且不增加失败计数，DshExecutor 会在启动和投递处理器中抛出它。
+ * 权威定义在 `./later.ts`（零依赖叶子，executor 与 scheduler 共用）；此处具名再导出保持既有导入路径。
  */
-export class Later extends Error {}
+export { Later } from './later.ts'
+import { Later } from './later.ts'
 /** 某类副作用报告错误前允许的连续失败次数，与来源轮询的失败阈值一致。 */
 export const FAILURES_BEFORE_ERROR = 3
 import type { HealthBoard, HealthEntry } from '../infra/health.ts'
@@ -24,6 +26,8 @@ export interface EffectPayloads {
   reply: Record<string, never>
   /** 把任务结果写回外部清单；键由队列条目、状态与尝试次数决定，重复投递幂等。 */
   writeback: { project: string; task: string; taskTitle: string; status: string }
+  /** 轮询一个项目的任务来源；键为项目 ID（单项目串行由键去重保证），载荷为空。 */
+  poll: Record<string, never>
 }
 export type EffectKind = keyof EffectPayloads
 interface Handler<K extends EffectKind> {
@@ -42,7 +46,7 @@ type Options<K extends EffectKind> = Partial<Pick<Handler<K>, 'limit' | 'retry' 
 type Row = EffectRow
 type Task = { kind: EffectKind; key: string; done: Promise<void> }
 /** 面板用于区分故障来源的子系统；未列出的副作用归入运行时。 */
-const CATEGORY: Partial<Record<EffectKind, HealthCategory>> = { writeback: 'writeback', reply: 'communication' }
+const CATEGORY: Partial<Record<EffectKind, HealthCategory>> = { writeback: 'writeback', reply: 'communication', poll: 'schedule' }
 
 /**
  * 基于 SQLite 的持久化队列，在命令事务内持久化副作用，并在提交后分发。
@@ -59,6 +63,8 @@ export class Effects {
   /** 副作用仅在 `start` 与 `drain` 之间运行；在 `start` 之前入队的行会等待，例如初始化尚未完成时。 */
   private started = false
   private stopped = false
+  /** 距离最近一次 `Later` 重试的精确唤醒定时器；让重试延迟贴近设定值，而不依赖轮次心跳。 */
+  private wake?: { timer: ReturnType<typeof setTimeout>; due: number }
   constructor(private readonly store: Store, private readonly board: Pick<HealthBoard, 'claim'>, private readonly now = () => Date.now()) {
     this.seq = store.effects.maxSeq()
   }
@@ -89,6 +95,20 @@ export class Effects {
     this.scheduled = true
     queueMicrotask(() => { this.scheduled = false; this.dispatch() })
   }
+  /**
+   * 为最近一次 `Later` 重试安排一次精确唤醒：`attempt` 在推迟行之后调用，把该行的到期时间交给这里。
+   * 到期即触发一次分发；更早入队或完成的行会让下一次分发重新计算。`drain` 之后不再安排。
+   */
+  private wakeAt(due: number): void {
+    if (this.stopped) return
+    const current = this.wake
+    if (current && current.due <= due) return
+    if (current) clearTimeout(current.timer)
+    const delay = Math.max(0, due - this.now())
+    this.wake = { due, timer: setTimeout(() => { this.wake = undefined; this.kick() }, delay) }
+    // Node 会把超过约 2^31-1 毫秒的超时当作 1 毫秒处理；这些行没有精确唤醒，退回心跳。
+    if (delay > 2_147_000_000) { clearTimeout(this.wake.timer); this.wake = undefined }
+  }
   /** 当 `kind`（或任意类别）没有副作用在运行，且没有可启动的副作用（未到期或 `limit()` 无余量）时完成。 */
   async idle(kind?: EffectKind): Promise<void> {
     for (;;) {
@@ -101,6 +121,7 @@ export class Effects {
   /** 停止启动新的副作用并等待运行中的完成；等待中的行保留在 SQLite 中供下次启动使用。 */
   async drain(): Promise<void> {
     this.stopped = true
+    if (this.wake) { clearTimeout(this.wake.timer); this.wake = undefined }
     await Promise.allSettled([...this.tasks].map(task => task.done))
   }
   private dispatch(): void {
@@ -135,7 +156,9 @@ export class Effects {
     // 关闭时不改动运行中的行，使其在下次启动时重试。
     else if (this.stopped) return
     else if (failure.error instanceof Later) {
-      this.store.effects.attempt(this.now() + handler.retry[0], kind, row.key, row.seq, row.generation)
+      const due = this.now() + handler.retry[0]
+      this.store.effects.attempt(due, kind, row.key, row.seq, row.generation)
+      this.wakeAt(due)
     } else {
       const delay = Math.min(handler.retry[1], handler.retry[0] * 2 ** Math.min(row.attempts, 16))
       this.store.effects.fail(String(failure.error).slice(0, 1000), this.now() + delay, kind, row.key, row.seq, row.generation)

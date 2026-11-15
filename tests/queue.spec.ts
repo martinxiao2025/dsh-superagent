@@ -114,6 +114,8 @@ function setup(projects: Record<string, unknown>, maxWorkers = 2) {
   const flush = async () => {
     for (const effect of effects.splice(0)) {
       if (effect.kind === 'writeback') await scheduler.writeBackNow(effect.payload as never)
+      // 轮询副作用：与 Runtime 注册的 `poll` 处理器一致，按项目 ID 调用 pollNow。
+      if (effect.kind === 'poll') await scheduler.pollNow(effect.key)
     }
   }
   // `reload` 模拟插件热加载：模块重新求值后，同一状态库上出现新的调度器实例。
@@ -320,11 +322,13 @@ it('runOnStart 决定启动时是否立即轮询', async () => {
   h.scheduler.start()
   await new Promise(resolve => setTimeout(resolve, 10))
   h.scheduler.stop()
+  await h.flush()
   const projects = [...h.entries.values()].map(entry => entry.project)
   expect(projects).toEqual(['b'])
   // 间隔到期后，未在启动时轮询的项目仍会按周期轮询。
   h.advance(5 * 60_000)
   await (h.scheduler as unknown as { tick(startup?: boolean): Promise<void> }).tick()
+  await h.flush()
   expect([...h.entries.values()].map(entry => entry.project).sort()).toEqual(['a', 'b'])
 })
 
@@ -391,6 +395,26 @@ it('队列快照暴露下次轮询时间与最近错误', async () => {
   ;(h.driver as unknown as { list(): Promise<never> }).list = async () => { throw new Error('task source disabled') }
   await h.scheduler.poll('a')
   expect(h.scheduler.snapshot().projects[0]).toMatchObject({ id: 'a', lastError: expect.stringContaining('disabled') })
+})
+
+it('轮询失败与写回积压经 alert 注入主会话，恢复后注入恢复通知', async () => {
+  const alerts: { name: string; message: string }[] = []
+  const h = setup({ a: project('a') })
+  ;(h.scheduler as unknown as { host: { alert(name: string, message: string): void } }).host.alert =
+    (name: string, message: string) => { alerts.push({ name, message }) }
+  // 首轮扫描失败：注入告警；持续失败不重复注入。告警在 scan/tick 的轮次收尾触发。
+  ;(h.driver as unknown as { list(): Promise<never> }).list = async () => { throw new Error('task source disabled') }
+  await h.scheduler.scan()
+  await h.scheduler.scan()
+  expect(alerts).toEqual([{ name: 'schedule:poll:a', message: expect.stringContaining('disabled') }])
+  // 恢复后注入恢复通知。
+  ;(h.driver as unknown as { list(): Promise<RawTask[]> }).list = async () => { h.driver.tasks = [task('a1', 'A 一')]; return h.driver.tasks }
+  await h.scheduler.scan()
+  expect(alerts).toHaveLength(2)
+  expect(alerts[1]).toMatchObject({ name: 'schedule:poll:a', message: expect.stringContaining('polling again') })
+  // 之后恢复正常：不再注入。
+  await h.scheduler.scan()
+  expect(alerts).toHaveLength(2)
 })
 
 it('手动重试、取消与清空排队项', async () => {

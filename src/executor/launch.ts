@@ -11,8 +11,8 @@ import { runAsWorker, shellArgv, verifyDirectory } from '../infra/environment.ts
 import { recordTicketSource } from '../infra/worker-sources.ts'
 import { materializeWorkspace, removeWorkspace } from '../code-repos/workspace.ts'
 import { projectRepoId } from '../projects/kind.ts'
-import { executionRoot, projectDirectory, ticketDirectoryName } from '../app/execution-environment.ts'
-import { Later } from '../app/effects.ts'
+import { executionRoot, projectDirectory, ticketDirectoryName } from '../execution-paths.ts'
+import { Later } from '../app/later.ts'
 import { batchLine, batchOf, capped, RETRIED, workerSessionId, WorktreeNameSchema } from './format.ts'
 import type { WorkerContext } from './dsh.ts'
 

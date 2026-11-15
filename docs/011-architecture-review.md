@@ -280,16 +280,22 @@
 
 ### 9.2 剩余任务（按建议顺序）
 
-1. **轮询并发模型**（P1-5 剩余）：项目轮询改造成 `Effects` 任务（单项目串行、全局有限并发），
-   tick 只负责到期投递；git 类命令单独超时；到期时间加 ±10% 抖动。
+1. **轮询并发模型**（P1-5 剩余）：**已于 2026-11-15 关闭**——项目轮询改造为持久化副作用 `poll`
+   （键为项目 ID，单项目串行由键去重保证；全局并发由 Effects 处理器 `limit` 决定，与手动扫描同值），
+   tick 只投递到期轮询，慢项目（大仓库首次 clone）不再阻塞其他项目的轮询、建单与回写；
+   git 类命令单独超时（`gitTimeoutMs` + 项目级 `execution.gitTimeoutSeconds`）；到期时间含 ±10% 抖动。
 2. **凭据注入收尾**（P1-10 剩余）：确认 worker 会话默认不继承 git 凭据、目录级 helper 彻底移除；
    Windows 私钥用 DPAPI/ACL 收紧（`chmod 0600` 在 Windows 无效）。
-3. **分层与依赖环**（P1-9）：宿主类型下沉 `core/ports`，断开 `deployment ↔ infra` 与 `executor → app`；
-   `scheduler` 改为必传 `repoSync`/`registry`；CI 加 dependency-cruiser 规则。
-4. **告警与通知**（§6-2）：连续轮询失败、写回积压、凭据过期的出口；现有通知只覆盖工单结束。
+3. **分层与依赖环**（P1-9）：**已于 2026-11-15 关闭**——部署类型权威下沉零依赖叶子
+   `src/deployment-types.ts`（infra 只看叶子，deployment ↔ infra 值级环断开）；`Later` 信号与执行目录
+   纯函数分别下沉 `src/app/later.ts`、`src/execution-paths.ts`（executor 不再反向依赖 app，仅剩 later 叶子）；
+   `scheduler` 的 `registry`/`syncRepo` 改为宿主必传（Runtime 显式装配，删除模块单例回退）；
+   依赖规则由 `tests/architecture.spec.ts` 静态守卫持续执行（dependency-cruiser 等价规则）。
+4. **告警与通知**（§6-2）：**部分关闭（2026-11-15）**——连续轮询失败与写回积压经调度器
+   `alert` 出口注入主会话（同名通知合并、恢复时再次注入，不唤醒智能体）；凭据过期出口仍缺。
 5. **可观测性**（P2-2 剩余）：结构化事件（project/task/ticket/command/durationMs）、请求 ID、
    最小指标（排队数、运行数、失败率、写回积压）。
-6. **配置粒度**（P2-1 剩余）：超时按命令类别拆分并允许项目覆盖；tick 间隔与抖动进配置；`prepare` 移到项目级。
+6. **配置粒度**（P2-1 剩余）：超时按命令类别拆分并允许项目覆盖（git 类已拆分）；tick 间隔与抖动进配置；`prepare` 移到项目级。
 7. **飞书回写**：飞书文档与群消息来源的终态回写目标未定义（Excel/CSV/TSV 已闭环）。
 8. **速率限制**（§6-4）：GitHub/GitLab fetch 与飞书 OpenAPI 的退避/令牌桶。
 9. **测试策略**（P2-3 剩余）：队列/调度补「真实 Engine + 临时 stateDir」集成用例；Windows 跳过项

@@ -108,7 +108,7 @@
 在还没有 `superagent` profile 的机器上运行一次以下代码块：
 
 ```sh
-npm install -g @deepseek-ai/dsh@0.2.1-rc.3
+npm install -g @deepseek-ai/dsh@0.2.2-rc.3
 git clone <this repository> dsh-superagent && cd dsh-superagent
 pnpm install && pnpm build
 dsh superagent --from-default-profile web --dump-config > /dev/null
@@ -148,7 +148,7 @@ dsh plugin --profile superagent add /path/to/dsh-superagent-0.2.0.tgz
 
 ## 开发与调试
 
-官方文档（[第一个插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)、[打包与安装](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）没有内置「调试模式」开关；官方调试面是 **Web UI + `--patch` 开发覆盖层**。回路只有两条：单测（`pnpm check`）与实机（下文推荐回路），开发迭代一律先单测后实机；备选方法只在推荐回路覆盖不了的场景使用。
+官方文档（[第一个插件](https://deepseek-harness.github.io/deepseek-harness/develop/basic/)、[打包与安装](https://deepseek-harness.github.io/deepseek-harness/develop/basic/publish)）没有内置「调试模式」开关；官方调试面是 **Web UI + `--patch` 开发覆盖层**。回路只有三条：单测（`pnpm check`）与下文两条实机回路，开发迭代一律先单测后实机；每次实机变更后按「实机验证」做只读核验，`application: applied` 与验证结果决定改动是否生效，日志和进程列表不算。
 
 ### 推荐回路：Web UI 可视化调试（默认选择）
 
@@ -162,22 +162,34 @@ pnpm dev
 
 - 面板（概览/项目/触发/评估/执行/设置）就是可视化调试面；改完代码 `pnpm build` 后重启即可生效。
 - 开发实例的 `stateDir` 隔离在检出内的 `.dsh-dev-state`，不与桌面版实例争生产状态目录的锁，可长期与生产并行。
+- 等待期即诊断：启动阶段每次变化（`locked`/`failed` 及其 `detail`）会实时打印；超时失败时打印启动记录的阶段、详情与异常摘要，而不是只报超时。
 - 排查插件为什么没加载/没生效：`dsh --profile web --dump-config --patch .artifacts/dev.cordis.patch.yml` 看合成后的层。
-- 实测陷阱（覆盖层设计已避开）：把插件以 `link:` 装进 web profile 会让运行时的需求校验崩溃（`undefined.startsWith`，peer 不随 link 解析）；tgz 安装在 Windows 上因跨盘符号链接权限失败（EPERM）；覆盖层只写主插件不写预设会在主会话组合时报 `Unknown agent preset`。
+- 实测陷阱（覆盖层设计已避开）：把插件以 `link:` 装进 web profile 会让运行时的需求校验崩溃（`undefined.startsWith`，peer 不随 link 解析）；tgz 安装在 Windows 上因跨盘符号链接权限失败（EPERM）；覆盖层只写主插件不写预设会在主会话组合时报 `Unknown agent preset`；预设 `plugins` 内的 `cordis:include` 相对路径按 **profile 目录**解析（bundle 补丁行拼进根 include 树后丢失包锚点），包内文件引用不到——共享行只能内联（2026-11-15 桌面版实测）。
 
-### 备选：桌面版重挂载回路
+### 真实 profile 回路：重挂载 + 热启用
 
-需要在**真实 profile**（真实凭据、真实仓库）上验证时使用：`pnpm build` 后重新执行安装命令，插件管理器会重挂载新产物：
+需要在**真实 profile**（真实凭据、真实仓库）上验证时使用。产物更新与插件重启是两步，都在**不重启宿主应用、不中断已有会话**的前提下完成：
 
-```sh
-dsh plugin --profile <名称> add link:<本检出的绝对路径>
-```
+1. **更新产物**：`pnpm build`（link 安装指向检出，产物即生效）；tgz 安装则重新 `dsh plugin --profile <名称> add /path/to/<包>.tgz`。
+2. **重载插件**：宿主进程内的模块缓存需要一次 fiber 重启才会重新导入模块。用 DeepSeek Harness 插件管理器对 `dsh-superagent` 条目先禁用再启用（两次 `application: applied` 即生效），或命令行 `dsh plugin --profile <名称> ...`。禁用会停止运行时并释放状态目录锁，启用即以新产物重新初始化——**不要重启整个桌面应用**：那会中断所有会话（包括正在调试的智能体）。
+3. **验证**：运行 `node scripts/verify-live.mjs [--profile <名称>]`，它等就绪、核对全部健康条目、抽查只读接口并落盘报告（见下文「实机验证」）。
 
-也可用应用的插件管理器界面（**Plugins** > **Add plugin**）装载本地目录。注意宿主对 patch 文件的变更有约 30–90 秒延迟，且**条目消失会被插件管理器正式化为卸载**（自动改写 profile 的 `package.json`，见「卸载与清理」）——不要用删条目来试探重载。
+注意宿主对 patch 文件的变更有约 30–90 秒延迟，且**条目消失会被插件管理器正式化为卸载**（自动改写 profile 的 `package.json`，见「卸载与清理」）——不要用删条目来试探重载；插件管理器里 disable/enable 的返回结果（`applied` / `restart-required`）才是改动是否生效的权威信号。
 
 ### 直连实测（管理 API）
 
 针对运行中的实例做只读检查时直连管理 API：端口读状态目录 `startup.json` 的 `listen.port`（插件重挂载会换端口，每次请求前重读），接口只监听回环地址且要求 `x-orchestrator-request: 1` 请求头。[tests/fixtures/direct-connect.ts](../tests/fixtures/direct-connect.ts) 的 `DirectConnect` 客户端封装了端口发现、请求头、等待就绪与证据落盘，临时实测脚本直接复用它（Node 用 `--experimental-transform-types` 运行 .ts）；其行为由 `tests/direct-connect.spec.ts` 覆盖。实测脚本按需放在工作目录，不入库。
+
+### 实机验证（verify-live）
+
+[scripts/verify-live.mjs](../scripts/verify-live.mjs) 把「读安装结果 → 验证已安装能力」收敛成一条只读命令，两条实机回路共用：
+
+```sh
+node scripts/verify-live.mjs                     # 生产/桌面实例（~/.dsh/state/superagent），自动发现
+node scripts/verify-live.mjs --profile web --state-dir .dsh-dev-state   # 开发实例（pnpm dev）
+```
+
+它依次核对：启动记录（`phase/pid/端口/stateDir`，端口漂移自动跟随）→ 健康就绪 → **全部健康条目 `ready`**（逐项列出，任何非 ready 项指明名字与详情）→ 抽查 `queue`/`prompts`/`overview` 只读接口的形状 → 报告落盘 `.artifacts/verify-live-<profile>.json`。退出码 0 = 全部就绪；它不启动、不停止、不修复任何东西——修复走 `scripts/dsh-superagent.mjs` 的服务命令或插件管理器。
 
 ### 已评估、未采用的调试工具
 

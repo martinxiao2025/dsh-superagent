@@ -1,0 +1,38 @@
+{
+  "$comment": "Excel 任务驱动项目的种子配置示例（POST /orchestrator/api/projects 的请求体）。复制到工作目录，替换占位符后用管理 API 创建项目；字段说明见 docs/009-authoritative-project-design.md 第 4 章与 docs/010-task-format.md。",
+  "name": "<项目名，例如 widgets>",
+  "enabled": true,
+  "codeRepo": {
+    "kind": "github",
+    "config": {
+      "repository": "<owner/name>",
+      "auth": "https"
+    }
+  },
+  "taskSource": {
+    "kind": "excel",
+    "config": {
+      "file": "tasks/backlog.csv"
+    }
+  },
+  "gitCredential": "<Git 凭据记录 ID；留空则沿用本机 gh/SSH 登录态>",
+  "execution": {
+    "directory": "",
+    "branch": "",
+    "prepare": "pnpm install --frozen-lockfile",
+    "gitTimeoutSeconds": 600
+  },
+  "schedule": {
+    "intervalMinutes": 30,
+    "runOnStart": true
+  },
+  "retry": {
+    "maxRetries": 2,
+    "retryBackoffSeconds": 60
+  },
+  "taskPolicy": {
+    "pendingStatuses": ["todo", "blocked"],
+    "doneStatus": "done",
+    "failedStatus": "cancelled"
+  }
+}

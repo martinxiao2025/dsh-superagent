@@ -8,10 +8,9 @@ import type { Engine } from '../core/index.ts'
 import { key } from '../core/ids.ts'
 import type { Settings } from '../policy.ts'
 import type { Commands } from '../infra/commands.ts'
-import { withGitTimeout } from '../infra/git-timeout.ts'
-import { syncRepoWorkCopy, type GitAuth } from '../code-repos/port.ts'
+import type { GitAuth } from '../code-repos/port.ts'
 import { projectRepoId } from '../projects/kind.ts'
-import { taskSources, type TaskSourceRegistry } from '../task-sources/index.ts'
+import type { TaskSourceRegistry } from '../task-sources/index.ts'
 import type { FeishuWikiReader } from '../task-sources/feishu-api.ts'
 import type { FeishuImReader } from '../task-sources/feishu-im-api.ts'
 import type { Store } from './store.ts'
@@ -44,10 +43,10 @@ export interface SchedulerHost {
   readonly commands: Commands
   readonly stateDir: string
   readonly lifetime: AbortSignal
-  /** 任务来源驱动注册表；默认使用内置注册表。 */
-  readonly registry?: TaskSourceRegistry
-  /** 同步项目代码仓库并返回工作副本目录；默认走 `syncRepoWorkCopy`。 */
-  readonly syncRepo?: (projectId: string) => Promise<string>
+  /** 任务来源驱动注册表；由组合根显式传入（评审 P1-9：调度器不隐式依赖模块单例）。 */
+  readonly registry: TaskSourceRegistry
+  /** 同步项目代码仓库并返回工作副本目录；由组合根显式传入。 */
+  readonly syncRepo: (projectId: string) => Promise<string>
   /** 按 Git 凭据 ID 取一次同步材料；项目未选择凭据时返回 undefined。 */
   readonly gitAuth?: (credential: string) => GitAuth | undefined
   /** 按飞书凭据 ID 取知识库读取能力；飞书知识库任务来源使用。 */
@@ -58,6 +57,11 @@ export interface SchedulerHost {
   readonly onChange?: () => void
   /** 调度健康条目；轮询、建单与工作区回收的结果写在这里，面板据 `category` 区分调度故障。 */
   readonly health?: { set(health: Health): void }
+  /**
+   * 告警出口：把需要人注意的调度故障注入主会话（同名通知合并，恢复时再次注入）。
+   * 由 Runtime 用 Sessions.notify 实现；缺省为空操作（单测与不装配主会话的场景）。
+   */
+  readonly alert?: (name: string, message: string) => void
   /** 回收过期的执行工作区；实现必须跳过运行中或仍被未结束工单引用的目录。 */
   readonly collectWorkspaces?: () => Promise<void>
   /** 到期时间的抖动随机源；返回 [0,1)。测试可注入固定值。 */
@@ -69,8 +73,8 @@ export interface SchedulerHost {
 const TICK_MS = 15_000
 /** 工作区回收的间隔；与保留期无关，保留期由实现按工单结束时间判断。 */
 const GC_INTERVAL_MS = 60 * 60_000
-/** 一轮检查内并行轮询的项目数上限；单项目内部仍串行，忙项目由 busy 检测推迟。 */
-const POLL_CONCURRENCY = 4
+/** 一轮检查内并行轮询的项目数上限；单项目内部仍串行，忙项目由 busy 检测推迟。副作用 `poll` 处理器的全局并发上限同值。 */
+export const POLL_CONCURRENCY = 4
 /** 到期时间的抖动幅度：±10%，避免启用的项目在同一秒集中打远端。 */
 const POLL_JITTER = 0.1
 
@@ -93,10 +97,14 @@ export class ProjectScheduler {
   private readonly writeback: SchedulerWriteback
   /** 到期时间的抖动随机源；测试可注入固定值，使时间断言确定。 */
   private readonly jitter: () => number
+  /** 上一轮已告警的项目故障；故障消失后的下一轮会注入恢复通知。 */
+  private readonly alerted = new Map<string, string>()
+  /** 已告警的写回积压数量；积压清空后注入恢复通知。 */
+  private writebackAlerted = 0
 
   constructor(private readonly host: SchedulerHost) {
-    this.registry = host.registry ?? taskSources
-    this.syncRepo = host.syncRepo ?? (projectId => this.defaultSync(projectId))
+    this.registry = host.registry
+    this.syncRepo = host.syncRepo
     this.jitter = host.jitter ?? Math.random
     this.writeback = new SchedulerWriteback({ host, registry: this.registry, syncRepo: this.syncRepo,
       busy: projectId => this.busy(projectId),
@@ -147,6 +155,7 @@ export class ProjectScheduler {
         if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
       } finally {
         this.reportHealth(settings)
+        this.reportAlerts(settings)
       }
     })
   }
@@ -179,6 +188,14 @@ export class ProjectScheduler {
   /** 副作用处理器：把状态写回任务来源；失败抛出，由 `Effects` 退避重试并上报健康度。 */
   async writeBackNow(payload: WritebackPayload): Promise<void> {
     return this.writeback.writeBackNow(payload)
+  }
+
+  /** `poll` 副作用处理器：轮询一个项目的任务来源（键去重保证单项目串行）；失败记录在该项目上，由下一次到期重试。 */
+  async pollNow(projectId: string): Promise<void> {
+    if (this.host.lifetime.aborted) return
+    try { await this.reconcile.poll(projectId) } catch (error) {
+      this.fail(projectId, String(error instanceof Error ? error.message : error))
+    }
   }
 
   /** 队列快照：面板读取；活动条目全量附带，终态条目按最新在前分页，计数由 SQL 汇总。 */
@@ -236,8 +253,9 @@ export class ProjectScheduler {
   }
 
   /**
-   * 定时检查；与手动 `scan` 共用执行链，已有检查在跑时直接并入那一轮，
-   * 避免同一项目被并发轮询。
+   * 定时检查；与手动 `scan` 共用执行链，已有检查在跑时直接并入那一轮。
+   * 轮询本身是持久化副作用（`poll`，键为项目 ID）：tick 只投递到期项目，慢项目（大仓库首次 clone）
+   * 不再阻塞同批其他项目、建单与回写；全局并发由 Effects 处理器的 limit 决定（Runtime 注册）。
    */
   private async tick(startup = false): Promise<void> {
     return this.runExclusive(async () => {
@@ -245,15 +263,15 @@ export class ProjectScheduler {
       const settings = this.host.settings()
       try {
         await this.dispatch.recover()
-        const due: string[] = []
         for (const [id, project] of Object.entries(settings.projects)) {
           if (!project.enabled) continue
           const next = this.nextPoll.get(id)
           // 启动时只轮询 `runOnStart` 的项目；之后按各自的下次轮询时间到期执行。
           if (startup ? !project.schedule.runOnStart : next !== undefined && next > this.now()) continue
-          due.push(id)
+          // 推进下次轮询时间并投递轮询副作用；同项目已有等待行时合并（键去重），运行中的一轮自然完成。
+          this.nextPoll.set(id, this.nextPollOf(project.schedule.intervalMinutes * 60_000))
+          this.host.effects.enqueue('poll', id, {})
         }
-        await this.pollProjects(due, settings)
         for (const entry of this.host.store.queue.active().filter(queueInFlight)) this.dispatch.settle(entry, this.dispatch.ticketOf(entry))
         this.dispatch.retire()
         this.dispatch.pump(settings)
@@ -263,6 +281,7 @@ export class ProjectScheduler {
         if (!this.host.lifetime.aborted) this.errors.set('', String(error instanceof Error ? error.message : error))
       } finally {
         this.reportHealth(settings)
+        this.reportAlerts(settings)
       }
     })
   }
@@ -270,7 +289,7 @@ export class ProjectScheduler {
   /**
    * 一轮检查内并行轮询一批项目：全局并发上限 `POLL_CONCURRENCY`，慢项目（大仓库 clone）
    * 不再阻塞其他项目的轮询与建单。单项目串行由忙检测保证：项目有任务在跑时 poll 会推迟，
-   * 且同一轮内每个项目只出现一次。
+   * 且同一轮内每个项目只出现一次。手动 `scan` 保留同步语义，等待本轮全部轮询完成。
    */
   private async pollProjects(projectIds: readonly string[], settings: Settings): Promise<void> {
     let index = 0
@@ -315,6 +334,35 @@ export class ProjectScheduler {
       this.host.health.set({ state: failures.length ? 'error' : 'ready', detail: failures.length ? `${summary}; ${failures.join('; ')}` : summary,
         at: new Date(this.now()).toISOString(), category: 'schedule' })
     } catch { /* 关闭或数据库不可读时保持上一条健康状态。 */ }
+  }
+
+  /**
+   * 需要人注意的调度故障经 `host.alert` 注入主会话（同名通知合并，恢复后注入恢复通知）：
+   * 逐项目的轮询失败（连续或最近一轮），与写回副作用积压（条目在退避中反复失败）。
+   * 仅在故障出现或消失的轮次注入，不重复打扰；健康条目仍承载完整细节。
+   */
+  private reportAlerts(settings: Settings): void {
+    if (!this.host.alert || this.host.lifetime.aborted) return
+    try {
+      for (const [projectId, message] of this.errors) {
+        if (!projectId || this.alerted.has(projectId)) continue
+        this.alerted.set(projectId, message)
+        this.host.alert(`schedule:poll:${projectId}`, `The task source for project ${projectId} keeps failing: ${message}`)
+      }
+      for (const [projectId, message] of [...this.alerted]) {
+        if (this.errors.has(projectId)) continue
+        this.alerted.delete(projectId)
+        this.host.alert(`schedule:poll:${projectId}`, `Project ${projectId} is polling again; the earlier failure was: ${message}`)
+      }
+      const backlog = this.host.store.effects.stats('writeback').waiting
+      if (backlog >= 3 && backlog !== this.writebackAlerted) {
+        this.writebackAlerted = backlog
+        this.host.alert('schedule:writeback', `${backlog} task results are waiting to be written back to their task sources; they retry with backoff`)
+      } else if (backlog === 0 && this.writebackAlerted > 0) {
+        this.writebackAlerted = 0
+        this.host.alert('schedule:writeback', 'The writeback backlog has cleared')
+      }
+    } catch { /* 数据库不可读时跳过本轮告警。 */ }
   }
 
   /** 项目被删除后清理它的全部队列记录，并停止仍在执行的工单；由设置删除入口调用。 */
@@ -393,20 +441,6 @@ export class ProjectScheduler {
     return { ...config, ...injected }
   }
 
-  private async defaultSync(projectId: string): Promise<string> {
-    const project = this.host.settings().projects[projectId]
-    const repoId = projectRepoId(projectId)
-    const auth = project?.gitCredential ? this.host.gitAuth?.(project.gitCredential) : undefined
-    // 工作副本跟随项目选定的分支：清单轮询、回写与执行 worktree 都落在同一分支上；
-    // 未选择分支时留空，按远端默认分支检出。项目可用 gitTimeoutSeconds 放宽 git 类命令的超时（大仓库首次 clone）。
-    const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
-    const scoped = this.host.commands.scope(repoId)
-    const commands = gitTimeout ? withGitTimeout(scoped, gitTimeout) : scoped
-    const result = await syncRepoWorkCopy({ commands, stateDir: this.host.stateDir, repo: repoId,
-      branch: project?.execution.branch, signal: this.host.lifetime, ...(auth ? { auth } : {}) })
-    if (result.empty) throw new Error(`代码仓库为空，没有分支或提交：${repoId}`)
-    return result.directory
-  }
 
   private fail(projectId: string, message: string): void {
     this.errors.set(projectId, message)

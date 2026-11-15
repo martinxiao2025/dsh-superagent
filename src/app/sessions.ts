@@ -12,7 +12,7 @@ import type { HealthEntry } from '../infra/health.ts'
 import { AgentDelivery, messageId } from './delivery.ts'
 import type { Effects } from './effects.ts'
 import type { Variable } from './execution-environment.ts'
-import { RetryHealth } from './retry-health.ts'
+import { RetryHealth, modelRetryProjectionDefinition, type BudgetRetryStatus } from './retry-health.ts'
 import { initializeRoleModel } from './role-models.ts'
 import { bundledSkills } from './skill-files.ts'
 import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
@@ -102,6 +102,19 @@ export class Sessions {
   /** 已装饰的智能体及其注册的释放器和技能作用域，直到该智能体被释放或 `Sessions.dispose()` 运行。 */
   private readonly bindings = new Map<Agent, SessionBinding>()
   private readonly retryHealth = new RetryHealth()
+  /**
+   * 模型预算重试的投影句柄；`sessionProjections` 服务可用时由 `install()` 注册。
+   * 注册后重试等待由注册表随已提交事件驱动，`get`/`list` 读取投影状态而不再依赖手写监听。
+   */
+  private retryProjection?: { stateOf(session: unknown): { active?: { status: BudgetRetryStatus } } | undefined; dispose(): Promise<void> }
+  /** 投影不可用时的回退：手写 RetryHealth 中某会话的活跃状态。 */
+  private retryStatusOf(sessionId: string): BudgetRetryStatus | undefined {
+    if (this.retryProjection) {
+      const session = this.ctx.agents.get(sessionId as SessionId)?.session
+      return session ? this.retryProjection.stateOf(session)?.active?.status : undefined
+    }
+    return this.retryHealth.get(sessionId)
+  }
   private readonly ctx: Context
   /** 注册有序的 `relay` 和 `notice` 副作用处理器，将内容投递到主会话。 */
   constructor(private readonly host: SessionsHost) {
@@ -115,7 +128,8 @@ export class Sessions {
   install(): void {
     const ctx = this.ctx
     ctx.on('agent/disposed', ({ agent }) => {
-      this.release(agent)
+      const binding = this.bindings.get(agent)
+      if (binding) this.teardownBinding(agent, binding)
       this.retryHealth.clear(agent.id); this.updateModelHealth()
     })
     ctx.on('session/event', (session, event) => {
@@ -126,6 +140,15 @@ export class Sessions {
       this.updateModelHealth()
     })
     ctx.on('agent/created', async ({ agent }) => { await this.decorate(agent); return undefined })
+    // 模型预算重试等待优先交给 DSH 的会话投影注册表驱动：注册宿主专用单元后，注册表随已提交事件
+    // 增量折叠（含检查点缓存），`Sessions` 只读取当前状态。可选服务：缺失时保留手写的 RetryHealth 路径。
+    ctx.inject(['sessionProjections'], child => {
+      child.effect(async () => {
+        const registry = child.get('sessionProjections') as { register(definition: unknown): Promise<{ stateOf(session: unknown): { active?: { status: BudgetRetryStatus } } | undefined; dispose(): Promise<void> }> }
+        this.retryProjection = await registry.register(modelRetryProjectionDefinition)
+        return () => { this.retryProjection?.dispose().catch(() => {}); this.retryProjection = undefined }
+      }, 'dsh-superagent: model retry projection')
+    })
     // 在 DSH 的 Web UI 中于首次轮次之前打开会话时，可能会为其选择默认预设：再次选择我们的预设。
     // 首次轮次之后 DSH 会拒绝任何选择，因此保持原样。
     ctx.inject(['agentPresets'], child => {
@@ -223,11 +246,17 @@ export class Sessions {
   }
   /** 返回 `sessionId` 的活动模型预算重试状态（`{ model_retry }`）供状态列表使用；未在等待时返回 `{}`。 */
   modelRetry(sessionId: string | undefined) {
-    const retry = sessionId ? this.retryHealth.get(sessionId) : undefined
+    const retry = sessionId ? this.retryStatusOf(sessionId) : undefined
     return retry ? { model_retry: retry } : {}
   }
   private updateModelHealth(): void {
-    const retries = this.retryHealth.list()
+    // 投影注册后，聚合同样读取投影状态；未装饰会话的状态由注册表按日志给出，无需会话事件监听。
+    const retries: BudgetRetryStatus[] = this.retryProjection
+      ? this.ctx.agents.list().flatMap(agent => {
+        const status = this.retryProjection!.stateOf(agent.session)?.active?.status
+        return status ? [status] : []
+      })
+      : this.retryHealth.list()
     this.host.health.set(retries.length
       ? { state: 'error', detail: retries.slice(0, 5).map(item => `${item.sessionId}: ${item.provider} is over its model budget; retried ${item.attempts} times, waiting since ${item.since}; the model and retry policy are unchanged`).join('; ') + (retries.length > 5 ? `; ${retries.length - 5} more Sessions` : ''), at: retries.at(-1)!.lastAt }
       : { state: 'ready', detail: 'No managed Session is waiting on a model budget retry' })
@@ -242,11 +271,25 @@ export class Sessions {
     const master = agent.id === host.masterId
     const ticket = master ? undefined : this.ticketOf(agent)
     if (!master && !ticket) { this.limitSubagent(agent); return }
+    const workerTicket = ticket as Ticket
     const binding: SessionBinding = { disposers: [] }
     this.bindings.set(agent, binding)
     this.retryHealth.restore(agent.id, agent.session.snapshotEvents())
     if (agent.status === 'idle') this.retryHealth.clear(agent.id)
     this.updateModelHealth()
+    // 双 owner：全部注册包进一个 agent.ctx.effect()，智能体释放时 Cordis 自动拆除其 effect；
+    // 同时保留 binding.disposers 供本插件卸载（Sessions.dispose()）时直接拆除——卸载插件不会经过 agent.ctx。
+    // effect 的 wrapper 是 PromiseLike：await 它会等待异步注册体完成，保证 ensure() 返回时工具与守卫已就位。
+    try {
+      await agent.ctx.effect(() => this.registerDecorations(agent, binding, master, workerTicket), 'dsh-superagent: session decorations')
+    } catch (error) {
+      this.ctx.logger.warn('dsh-superagent could not decorate a Session: %s', String(error))
+      this.teardownBinding(agent, binding)
+    }
+  }
+  /** 在智能体上下文上注册提示词、技能、工具与限制；由 `agent.ctx.effect` 持有，返回其拆除器。 */
+  private async registerDecorations(agent: Agent, binding: SessionBinding, master: boolean, ticket: Ticket): Promise<() => void> {
+    const host = this.host
     // 禁用变量插值，以保留团队提示词中的字面 ${{ ... }} 表达式。
     binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-superagent-policy', order: 9999, interpolate: false, text: context => {
       const version = this.promptFor(agent, context.signal !== undefined)
@@ -262,8 +305,8 @@ export class Sessions {
     })
     binding.disposers.push(() => { skillScope.dispose().catch((error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release a skill scope: %s', String(error)) }) })
     await skillScope
-    // 若智能体在等待技能作用域期间被释放，则退出。
-    if (this.bindings.get(agent) !== binding) return
+    // 若智能体在等待技能作用域期间被释放，则退出；其 effect 拆除器仍会返回，由 Cordis 立即结算。
+    if (this.bindings.get(agent) !== binding) return () => this.teardownBinding(agent, binding)
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
     if (master) {
@@ -273,6 +316,7 @@ export class Sessions {
       // 执行器会话保留其已有的配置文件工作工具（DSH 要求这些工具已知）；其自身工具不会被遮蔽。
       binding.disposers.push(...this.workOnly(agent, ticket!.id))
     }
+    return () => this.teardownBinding(agent, binding)
   }
   /**
    * 会话是否运行路由器预设：以 DSH 的预设注册表最近的选择为准（在注册表没有 `presetForSession` 的 DSH 上，
@@ -350,10 +394,9 @@ export class Sessions {
     if (revisions.at(-1) !== version.revision) store.set(KV.sessions.prompts(agent.id), bound)
     return version
   }
-  /** 按相反顺序（LIFO）释放 `agent` 的注册；释放其技能作用域也会释放其技能。 */
-  private release(agent: Agent): void {
-    const binding = this.bindings.get(agent)
-    if (!binding) return
+  /** 按相反顺序（LIFO）拆除 `agent` 的注册；拆除其技能作用域也会释放其技能。智能体释放与插件卸载共用此路径。 */
+  private teardownBinding(agent: Agent, binding: SessionBinding): void {
+    if (this.bindings.get(agent) !== binding) return
     this.bindings.delete(agent)
     binding.skills?.dispose()
     for (const dispose of binding.disposers.splice(0).reverse()) {
@@ -361,5 +404,5 @@ export class Sessions {
     }
   }
   /** 释放 `Sessions` 在所有已装饰智能体上注册的提示词部分、技能和工具。 */
-  dispose(): void { for (const agent of [...this.bindings.keys()]) this.release(agent) }
+  dispose(): void { for (const agent of [...this.bindings.keys()]) { const binding = this.bindings.get(agent); if (binding) this.teardownBinding(agent, binding) } }
 }

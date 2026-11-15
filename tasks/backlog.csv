@@ -1,0 +1,5 @@
+task_id,title,status,description,priority,owner,acceptance,depends_on,tags,updated_at
+1,初始化配置完善:种子项目示例与清单自举,todo,提供 examples/project-seed.json 与 010 文档自举说明;仓库自带 tasks/backlog.csv 作为插件自身的任务清单,P0,,清单可被 excel 驱动读取且行级校验通过,,init,
+2,架构自我迭代升级机制,todo,版本对照/升级指南/verify-live 闭环;插件可基于任务清单驱动后续迭代,P1,,升级文档与脚本可执行,1,architecture,
+3,验证插件设计并优化提示词,todo,对照 tool-design.md 审查工具定义;优化软件开发场景提示词,P1,,提示词变更后主会话与执行器行为符合预期,1,prompts,
+4,文档清理合并,todo,合并 009/011 已定案内容到 007;文档编号连续且无重复,P2,,文档表无重复行且引用路径存在,2;3,docs,
