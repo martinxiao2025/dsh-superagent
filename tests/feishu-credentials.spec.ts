@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { UserError } from '../src/core/index.ts'
 import type { FeishuCredential } from '../src/feishu-credentials/kind.ts'
-import { FeishuCredentials, classifyFeishuError, type FeishuCredentialRepository } from '../src/feishu-credentials/service.ts'
+import { FeishuCredentials, classifyFeishuError } from '../src/feishu-credentials/service.ts'
+import type { CredentialRepository } from '../src/secrets/credential-service.ts'
 import { SecretVault } from '../src/secrets/vault.ts'
 
 const temporary = (): string => mkdtempSync(join(tmpdir(), 'dsh-feishu-credential-'))
@@ -14,7 +15,7 @@ function setup(referenced: string[] = []) {
   const stateDir = temporary()
   const vault = new SecretVault(stateDir)
   const records = new Map<string, FeishuCredential>()
-  const repository: FeishuCredentialRepository = { get: id => records.get(id), list: () => [...records.values()],
+  const repository: CredentialRepository<FeishuCredential> = { get: id => records.get(id), list: () => [...records.values()],
     save: value => { records.set(value.id, value) }, remove: id => { records.delete(id) } }
   const probe = vi.fn(async (input: { spaceId?: string }) => ({ nodes: input.spaceId ? 2 : 0 }))
   const credentials = new FeishuCredentials({ credentials: repository, vault, references: () => referenced, probe,

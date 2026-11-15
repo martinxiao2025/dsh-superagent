@@ -1,16 +1,14 @@
-/** 飞书凭据设置：与 Git 凭据相互独立，界面只显示掩码与指纹；「消息接入」页承载消息来源配置。 */
-import { useEffect, useState } from 'react'
+/** 飞书凭据设置：与 Git 凭据相互独立，界面只显示掩码与指纹；卡片与列表用凭据基座的共享组件，「消息接入」页承载消息来源配置。 */
+import { useState } from 'react'
 import type { FeishuCredentialInput, FeishuCredentialView } from '../feishu-credentials/kind.ts'
-import type { SourceCheck } from '../setup.ts'
-import { mergeChecks } from './checks.tsx'
-import { Button, Input, SegmentedControl, Tag } from './controls.tsx'
-import { CredentialChecks, CredentialVerifyModal, credentialDraftOf, credentialInputOf,
-  type CredentialVerifyWords } from './credential-form.tsx'
+import { Input, SegmentedControl } from './controls.tsx'
+import { CredentialCardsSection, credentialDraftOf, credentialInputOf,
+  type CredentialDomain, type CredentialVerifyWords } from './credential-form.tsx'
 import { usePanel } from './provider.tsx'
 import { Field, useSettings } from './settings-kit.tsx'
 import { SourceSettings } from './source.tsx'
-import { errorText, type T } from './text.ts'
-import { ConfirmButton, Hint } from './widgets.tsx'
+import { Hint } from './widgets.tsx'
+import { type T } from './text.ts'
 
 /** 表单草稿；用 type 别名（而非 interface）以满足凭据基座的字符串记录约束。 */
 type Draft = {
@@ -66,71 +64,28 @@ function CredentialFields({ draft, edit, disabled }: { draft: Draft; edit: (next
   </div>
 }
 
-/** 已保存凭据：默认只显示概要，编辑时才展开表单。 */
-function CredentialCard({ record, changed }: { record: FeishuCredentialView; changed: () => Promise<void> }) {
-  const { t, call, notify } = usePanel()
-  const [draft, setDraft] = useState<Draft>(() => draftOf(record))
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
-  const [busy, setBusy] = useState(false)
-  const [checking, setChecking] = useState(false)
-  const [open, setOpen] = useState(false)
-  const [verifyOpen, setVerifyOpen] = useState(false)
-  const [verifyError, setVerifyError] = useState('')
-  /** 用已保存凭据验证身份；每次验证都从空结果开始，填写 spaceId 时一并检查知识库权限。 */
-  const check = async (spaceId: string) => {
-    setChecking(true); setChecks({}); setVerifyError('')
-    try {
-      const result = await call('POST feishu-credentials/verify', { body: { id: record.id,
-        ...spaceId ? { spaceId } : {} } })
-      setChecks(mergeChecks({}, result.checks))
-    } catch (failure) {
-      setVerifyError(errorText(failure)); notify(errorText(failure))
-    } finally { setChecking(false) }
-  }
-  const save = async () => {
-    setBusy(true)
-    try {
-      const { revision } = await call('PUT feishu-credentials/:id', { id: record.id, body: { value: inputOf(draft),
-        revision: record.revision } })
-      notify(t('credentialSaved', { name: record.name, revision: String(revision) }))
-      setOpen(false)
-      await changed()
-    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
-  }
-  return <div className="dt-card">
-    <div className="dt-row-main">
-      <div className="dt-row-title">
-        <span className="dt-card-title">{record.name}</span><Tag>{record.id}</Tag>
-        <Tag>{record.mode === 'app' ? t('feishuModeApp') : t('feishuModeCli')}</Tag>
-        {!record.configured && <Tag>{t('credentialUnconfigured')}</Tag>}
-      </div>
-      <div className="dt-row-buttons">
-        <Button variant="outline" size="sm" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-          {open ? t('close') : t('edit')}
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => { setChecks({}); setVerifyError(''); setVerifyOpen(true) }}>{t('verify')}</Button>
-        <ConfirmButton label={t('credentialDelete')} title={t('credentialDeleteTitle')}
-          message={t('credentialDeleteConfirm', { name: record.name })} icon="trash" variant="outline"
-          onConfirm={async () => {
-            await call('DELETE feishu-credentials/:id', { id: record.id })
-            notify(t('credentialDeleted', { name: record.name }))
-            await changed()
-          }} />
-      </div>
-    </div>
-    <p className="dt-hint">{record.mode === 'app' ? record.hint || t('credentialNoMaterial') : record.cli}
-      {' · '}{t('credentialFingerprint', { fingerprint: record.fingerprint || '—' })}</p>
-    <CredentialChecks fields={VERIFY_FIELDS} checks={checks} />
-    {open && <form className="dt-form" onSubmit={event => { event.preventDefault(); void save() }}>
-      <CredentialFields draft={draft} edit={next => setDraft(current => ({ ...current, ...next }))} disabled={busy} />
-      <div className="dt-row-buttons">
-        <Button variant="primary" type="submit" disabled={busy || !draft.name.trim()}>{t('save')}</Button>
-        <Button variant="outline" onClick={() => setOpen(false)}>{t('cancel')}</Button>
-      </div>
-    </form>}
-    <CredentialVerifyModal open={verifyOpen} error={verifyError} words={verifyWords(t)} onClose={() => setVerifyOpen(false)}
-      onVerify={spaceId => { void check(spaceId) }} fields={VERIFY_FIELDS} checks={checks} busy={checking} />
-  </div>
+/** 飞书凭据域：卡片与列表的差异注入——补充查询是可选的知识库 spaceId，名称在场即可验证/创建。 */
+const feishuDomain: CredentialDomain<FeishuCredentialView, Draft> = {
+  listWords: t => ({ addTitle: t('feishuCredentialAddTitle'), addHint: t('feishuCredentialAddHint'), none: t('feishuCredentialNone') }),
+  cardWords: (t, record) => ({ kindTag: record.mode === 'app' ? t('feishuModeApp') : t('feishuModeCli'),
+    summary: record.mode === 'app' ? record.hint || t('credentialNoMaterial') : record.cli }),
+  verifyWords,
+  verifyFields: VERIFY_FIELDS,
+  emptyDraft: EMPTY,
+  draftOf,
+  inputOf,
+  fields: (draft, edit, disabled) => <CredentialFields draft={draft} edit={edit} disabled={disabled} />,
+  canSave: draft => !!draft.name.trim(),
+  canVerify: draft => !!draft.name.trim(),
+  canCreate: draft => !!draft.name.trim(),
+  list: async call => (await call('GET feishu-credentials')).credentials,
+  verifySaved: async (call, record, spaceId) =>
+    (await call('POST feishu-credentials/verify', { body: { id: record.id, ...spaceId ? { spaceId } : {} } })).checks,
+  verifyDraft: async (call, draft, spaceId) =>
+    (await call('POST feishu-credentials/verify', { body: { value: inputOf(draft), ...spaceId ? { spaceId } : {} } })).checks,
+  save: (call, record, draft) => call('PUT feishu-credentials/:id', { id: record.id, body: { value: inputOf(draft), revision: record.revision } }),
+  create: (call, draft) => call('POST feishu-credentials', { body: { value: inputOf(draft) } }),
+  remove: (call, record) => call('DELETE feishu-credentials/:id', { id: record.id }),
 }
 
 /** 飞书凭据设置页：「凭据」与「消息接入」两页；消息来源（消息工单入口）在后者配置，与凭据身份同处一个域。 */
@@ -151,66 +106,7 @@ export function FeishuCredentialSettings({ initialTab, focus }: { initialTab?: s
   </>
 }
 
-/** 凭据列表：默认显示概要，由「新增」按钮展开新增区块。 */
+/** 凭据列表：共享卡片/列表区块，域注入表单与调用。 */
 function CredentialList() {
-  const { t, call, notify } = usePanel()
-  const [items, setItems] = useState<FeishuCredentialView[] | null>(null)
-  const [adding, setAdding] = useState(false)
-  const [draft, setDraft] = useState<Draft>(EMPTY)
-  const [busy, setBusy] = useState(false)
-  const [checking, setChecking] = useState(false)
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
-  const [verifyOpen, setVerifyOpen] = useState(false)
-  const [verifyError, setVerifyError] = useState('')
-  const load = async () => setItems((await call('GET feishu-credentials')).credentials)
-  useEffect(() => { load().catch(failure => notify(errorText(failure))) }, [])
-  /** 收起新增区块并清空草稿与预检结果。 */
-  const closeAdd = () => { setAdding(false); setVerifyOpen(false); setDraft(EMPTY); setChecks({}); setVerifyError('') }
-  /** 用草稿凭据验证身份；每次验证都从空结果开始，填写 spaceId 时一并检查知识库权限。 */
-  const verify = async (spaceId: string) => {
-    setChecking(true); setChecks({}); setVerifyError('')
-    try {
-      const result = await call('POST feishu-credentials/verify', { body: { value: inputOf(draft),
-        ...spaceId ? { spaceId } : {} } })
-      setChecks(mergeChecks({}, result.checks))
-    } catch (failure) {
-      setVerifyError(errorText(failure)); notify(errorText(failure))
-    } finally { setChecking(false) }
-  }
-  const create = async () => {
-    setBusy(true)
-    try {
-      const { id } = await call('POST feishu-credentials', { body: { value: inputOf(draft) } })
-      notify(t('credentialAdded', { id }))
-      setDraft(EMPTY)
-      setChecks({})
-      setAdding(false)
-      await load()
-    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
-  }
-  return <>
-    <div className="dt-row-buttons dt-add-trigger">
-      <Button variant="primary" disabled={adding} onClick={() => setAdding(true)}>{t('credentialNew')}</Button>
-    </div>
-    {adding && <div className="dt-source-add" role="group" aria-label={t('feishuCredentialAddTitle')}>
-      <div className="dt-row-main">
-        <div className="dt-row-title"><span className="dt-card-title">{t('feishuCredentialAddTitle')}</span></div>
-        <p className="dt-hint">{t('feishuCredentialAddHint')}</p>
-      </div>
-      <CredentialFields draft={draft} edit={next => setDraft(current => ({ ...current, ...next }))} disabled={busy} />
-      <div className="dt-row-buttons">
-        <Button variant="outline" disabled={!draft.name.trim()}
-          onClick={() => { setChecks({}); setVerifyError(''); setVerifyOpen(true) }}>{t('verify')}</Button>
-        <Button variant="primary" disabled={busy || !draft.name.trim()} onClick={() => { void create() }}>{t('credentialNew')}</Button>
-        <Button variant="outline" onClick={closeAdd}>{t('cancel')}</Button>
-      </div>
-      <CredentialChecks fields={VERIFY_FIELDS} checks={checks} />
-      <CredentialVerifyModal open={verifyOpen} error={verifyError} words={verifyWords(t)} onClose={() => setVerifyOpen(false)}
-        onVerify={spaceId => { void verify(spaceId) }} fields={VERIFY_FIELDS} checks={checks} busy={checking} />
-    </div>}
-    <div className="dt-cards">
-      {items === null ? <Hint>{t('loading')}</Hint> : items.length === 0 ? <Hint>{t('feishuCredentialNone')}</Hint>
-        : items.map(record => <CredentialCard key={`${record.id}:${record.revision}`} record={record} changed={load} />)}
-    </div>
-  </>
+  return <CredentialCardsSection domain={feishuDomain} />
 }

@@ -494,12 +494,7 @@ export class Runtime extends Service implements SourceHost {
    * 丢弃的只是自己未推送成功的提交，写入随后重放；轮询路径保持无损失败。
    */
   private async syncProjectRepo(projectId: string, options: { resetOnDivergence?: boolean } = {}): Promise<string> {
-    const project = this.store.projects.get(projectId)
-    const repoId = projectRepoId(projectId)
-    const auth = project?.gitCredential ? this.gitCredentials.authOf(project.gitCredential) : undefined
-    const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
-    const scoped = this.commands.scope(repoId)
-    const commands = gitTimeout ? withGitTimeout(scoped, gitTimeout) : scoped
+    const { commands, repoId, project, auth } = this.projectRepoContext(projectId)
     const result = await syncRepoWorkCopy({ commands, stateDir: this.machine.stateDir, repo: repoId,
       branch: project?.execution.branch, signal: this.lifetime, ...(auth ? { auth } : {}),
       ...(options.resetOnDivergence ? { resetOnDivergence: true } : {}) })
@@ -509,14 +504,19 @@ export class Runtime extends Service implements SourceHost {
 
   /** 把回写产生的本地提交推送远端（评审 S1）：与同步共用凭据、超时与作用域。 */
   private async pushProjectRepo(projectId: string): Promise<void> {
+    const { commands, repoId, project, auth } = this.projectRepoContext(projectId)
+    await pushRepoWorkCopy({ commands, stateDir: this.machine.stateDir, repo: repoId,
+      branch: project?.execution.branch, signal: this.lifetime, ...(auth ? { auth } : {}) })
+  }
+
+  /** 项目仓库的命令上下文（同步与推送共用）：项目凭据、按项目的 git 超时与仓库作用域命令。 */
+  private projectRepoContext(projectId: string) {
     const project = this.store.projects.get(projectId)
     const repoId = projectRepoId(projectId)
     const auth = project?.gitCredential ? this.gitCredentials.authOf(project.gitCredential) : undefined
     const gitTimeout = project?.execution.gitTimeoutSeconds ? project.execution.gitTimeoutSeconds * 1000 : undefined
     const scoped = this.commands.scope(repoId)
-    const commands = gitTimeout ? withGitTimeout(scoped, gitTimeout) : scoped
-    await pushRepoWorkCopy({ commands, stateDir: this.machine.stateDir, repo: repoId,
-      branch: project?.execution.branch, signal: this.lifetime, ...(auth ? { auth } : {}) })
+    return { project, repoId, auth, commands: gitTimeout ? withGitTimeout(scoped, gitTimeout) : scoped }
   }
   /**
    * 重置状态目录：先停止运行时（关闭数据库并释放锁），备份后清空插件拥有的条目，再重启插件。

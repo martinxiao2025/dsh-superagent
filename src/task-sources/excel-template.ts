@@ -1,27 +1,13 @@
 /** 010 标准工作簿模板：tasks 表只放表头，_meta 表记录版本与示例，生成的 xlsx 可直接提交到仓库。 */
-import { createZip } from './table.ts'
+import { columnName, createZip, encodeXml } from './table.ts'
 import { META_SHEET, STANDARD_COLUMNS, TASK_FORMAT_VERSION, TASK_SHEET } from './excel-format.ts'
 
 /** 面板下载与命令生成使用的文件名。 */
 export const TASK_TEMPLATE_FILENAME = 'tasks-template.xlsx'
 
-/** 转义 XML 文本与属性值。 */
-const xml = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-/** 列序号转列字母。 */
-function columnName(index: number): string {
-  let value = index + 1, name = ''
-  while (value > 0) {
-    const remainder = (value - 1) % 26
-    name = String.fromCharCode(65 + remainder) + name
-    value = Math.floor((value - 1) / 26)
-  }
-  return name
-}
-
 /** 一行内联字符串；模板不依赖 sharedStrings，任何表格软件都能直接打开。 */
 function row(number: number, values: readonly string[]): string {
-  const cells = values.map((value, index) => `<c r="${columnName(index)}${number}" t="inlineStr"><is><t>${xml(value)}</t></is></c>`)
+  const cells = values.map((value, index) => `<c r="${columnName(index)}${number}" t="inlineStr"><is><t>${encodeXml(value)}</t></is></c>`)
   return `<row r="${number}">${cells.join('')}</row>`
 }
 

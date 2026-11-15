@@ -85,6 +85,15 @@ export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | 
     // 前缀按路径边界匹配 `/orchestrator/api`，其余 `/orchestrator/*` 交给宿主的页面路由。
     const path = url.pathname.slice('/orchestrator/api'.length).replace(/^\//, '')
     const runtime = resolve()
+    // 就绪后按路由表派发并回包；健康探针（无查询参数）与其余接口共用这一段。
+    const dispatch = async (ready: HttpHost, query: Record<string, string>): Promise<void> => {
+      try {
+        await ready.ready
+        const route = match(tableFor(ready), method, path.split('/'))
+        if (!route) throw new RouteError(404, 'Unknown operation')
+        json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
+      } catch (error) { json(res, ...failure(error)) }
+    }
     // 健康探针先于同源校验：监控工具的 GET health 不带同源头也应可用（它只暴露运行状态，不含任何管理能力）。
     if (method === 'GET' && path === 'health') {
       if (!runtime) {
@@ -93,12 +102,7 @@ export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | 
           problem: null, listen: listen(), machine: { stateDir }, sources: [] })
         return
       }
-      try {
-        await runtime.ready
-        const route = match(tableFor(runtime), method, path.split('/'))
-        if (!route) throw new RouteError(404, 'Unknown operation')
-        json(res, 200, await route.run({ params: route.params as never, query: {}, body: maxBytes => readBody(req, maxBytes) }))
-      } catch (error) { json(res, ...failure(error)) }
+      await dispatch(runtime, {})
       return
     }
     if (!sameOrigin(req, ctx.webServer.port ?? 0)) { json(res, 403, { error: 'Same-origin management request required' }); return }
@@ -108,13 +112,7 @@ export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | 
       json(res, 503, { error: detail || 'dsh-superagent is not ready', code: 'startupPending', phase, detail, stateDir })
       return
     }
-    try {
-      await runtime.ready
-      const route = match(tableFor(runtime), method, path.split('/'))
-      if (!route) throw new RouteError(404, 'Unknown operation')
-      const query = Object.fromEntries(url.searchParams)
-      json(res, 200, await route.run({ params: route.params as never, query, body: maxBytes => readBody(req, maxBytes) }))
-    } catch (error) { json(res, ...failure(error)) }
+    await dispatch(runtime, Object.fromEntries(url.searchParams))
   } })
   return () => { dispose() }
 }

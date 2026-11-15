@@ -4,22 +4,17 @@ import { isAbsolute } from 'node:path'
 import { UserError } from '../core/index.ts'
 import { SecretVault, fingerprint, mask, type SecretMaterial } from '../secrets/vault.ts'
 import { credentialCheck, type CredentialCheck } from '../secrets/check.ts'
-import { CredentialService } from '../secrets/credential-service.ts'
+import { CredentialService, type CredentialRepository } from '../secrets/credential-service.ts'
+import { redact as redactText } from '../infra/text.ts'
 import { GitCredentialInputSchema, GitCredentialSchema, type GitCredential, type GitCredentialInput,
   type GitCredentialView } from './kind.ts'
 import type { GitAuth } from '../code-repos/sync.ts'
 
-/** 记录层只依赖最小读写接口，便于用内存实现测试。 */
-export interface GitCredentialRepository {
-  get(id: string): GitCredential | undefined
-  list(): GitCredential[]
-  save(value: GitCredential): void
-  remove(id: string): void
-}
 /** 远端探测：测试注入假实现，生产环境用 `git ls-remote`。 */
 export type GitProbe = (input: { remote: string; kind: 'ssh' | 'https'; material: SecretMaterial }) => Promise<{ branches: number }>
 export interface GitCredentialsOptions {
-  credentials: GitCredentialRepository
+  /** 记录层只依赖共享骨架的最小读写接口（`CredentialRepository`），便于用内存实现测试。 */
+  credentials: CredentialRepository<GitCredential>
   vault: SecretVault
   /** 项目对凭据的引用；删除时据此拒绝。 */
   projects: () => Record<string, { gitCredential?: string }>
@@ -76,8 +71,9 @@ function hint(kind: 'ssh' | 'https', material: SecretMaterial): string {
   if (kind === 'ssh') return KEY_PATTERN.test(material.privateKey ?? '') ? 'private key' : ''
   return mask(material.token ?? '')
 }
+/** 探测错误的单源脱敏：URL 内嵌凭据等由 `infra/text.ts` 统一遮蔽后进入校验输出。 */
 function redact(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).replace(/\/\/[^/@\s]+@/g, '//***@')
+  return redactText(error instanceof Error ? error.message : String(error))
 }
 
 /** Git 凭据服务：元数据写入 SQLite，材料写入加密存储；校验端点与飞书凭据各自独立。 */

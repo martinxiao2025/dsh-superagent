@@ -89,10 +89,7 @@ export class UsageMeter {
   }
   /** 工单的生效预算：项目 `execution.budget` 优先，否则全局 `executor.budget`；未配置返回 undefined。 */
   budgetOf(ticketId: string): { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined {
-    const ticket = this.host.store.tickets.get(ticketId)
-    const projectId = ticket?.execution?.project
-    return (projectId ? this.host.store.projects.get(projectId)?.execution.budget : undefined)
-      ?? this.host.store.settings().executor.budget
+    return effectiveBudget(this.host.store, ticketId)
   }
   /** 一个工单的预算用量比例（0–∞）：对每个配置的维度求比值取最大；无预算时为 0。 */
   private ratioOf(ticketId: string): { ratio: number; sum: NonNullable<ReturnType<Store['usage']['sumTicket']>> } {
@@ -135,6 +132,14 @@ export class UsageMeter {
     return this.ratioOf(ticketId).ratio >= SOFT
   }
 }
+/** 工单的生效预算：项目 `execution.budget` 优先，否则全局 `executor.budget`；未配置返回 undefined。`UsageMeter` 与 usage 资源共用这一回退链。 */
+export function effectiveBudget(store: Pick<Store, 'tickets' | 'projects' | 'settings'>, ticketId: string):
+  { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined {
+  const ticket = store.tickets.get(ticketId)
+  const projectId = ticket?.execution?.project
+  return (projectId ? store.projects.get(projectId)?.execution.budget : undefined) ?? store.settings().executor.budget
+}
+
 /** 用量合计的一句话形态。 */
 function describe(sum: NonNullable<ReturnType<Store['usage']['sumTicket']>>): string {
   const parts = [`input ${sum.input + sum.cacheRead + sum.cacheWrite}`, `output ${sum.output}`, `requests ${sum.requests}`]

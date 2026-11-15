@@ -11,6 +11,7 @@ import {
   DEFAULT_TASK_FIELDS, errorText, taskColumnShape, taskColumnsOf,
   type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps, type TaskSourceWriteContext,
 } from './kind.ts'
+import { locateRow } from './locate.ts'
 
 /** 根节点以 token 为身份；标题与类型由读取时解析，避免存下会过期的显示值。 */
 export const FeishuWikiRootSchema = z.object({ nodeToken: z.string().trim().min(1).max(200) }).strict()
@@ -137,15 +138,18 @@ export const feishuWikiTaskSource: TaskSourceDriver<FeishuWikiTaskSourceConfig> 
       throw new Error(`无法回写：多维表格 ${nodeToken} 已不可读（${error instanceof Error ? error.message : String(error)}）`)
     }
     // CAS（评审 C3）：给出期望状态时先读记录当前值，不匹配拒绝写入——人工修改不被无提示覆盖。
-    if (target.expectedStatus !== undefined) {
-      const column = config.statusColumn || DEFAULT_TASK_FIELDS.status
-      const current = (await api.records(nodeToken, tableId)).find(record => record.recordId === recordId)
-        ?.fields[column]
-      const currentText = typeof current === 'string' ? current : Array.isArray(current) ? current.map(String).join('') : ''
-      if (currentText.trim() !== target.expectedStatus.trim()) {
-        throw new Error(`任务清单的状态已不是「${target.expectedStatus}」（当前为「${currentText || '(空)'}」），回写被拒绝；请人工确认该任务的最终状态`)
-      }
-    }
-    await api.updateRecord(nodeToken, tableId, recordId, { [config.statusColumn || DEFAULT_TASK_FIELDS.status]: status })
+    // 行定位与 CAS 共用 locate.ts 单源（bitable 按 recordId 定位，无标题兜底）；无 CAS 期望时直接按任务键写入。
+    const statusColumn = config.statusColumn || DEFAULT_TASK_FIELDS.status
+    const { records, updateRecord } = api
+    const update = (recordId: string) => updateRecord(nodeToken, tableId, recordId, { [statusColumn]: status })
+    if (target.expectedStatus === undefined) { await update(recordId); return }
+    const cellText = (value: unknown): string => typeof value === 'string' ? value : Array.isArray(value) ? value.map(String).join('') : ''
+    const record = locateRow((await records(nodeToken, tableId)).map(row => ({ row, id: row.recordId, title: '', status: cellText(row.fields[statusColumn]).trim() })),
+      { taskId: recordId, taskTitle: target.taskTitle }, target.expectedStatus,
+      (reason: 'duplicate' | 'missing' | 'cas', { count, current }: { count: number; current: string }) => reason === 'duplicate'
+        ? new Error(`多维表格中记录「${recordId}」匹配到 ${count} 行，回写被拒绝`)
+        : reason === 'missing' ? new Error(`多维表格中找不到记录：${recordId}`)
+          : new Error(`任务清单的状态已不是「${target.expectedStatus}」（当前为「${current || '(空)'}」），回写被拒绝；请人工确认该任务的最终状态`))
+    await update(record.recordId)
   },
 }

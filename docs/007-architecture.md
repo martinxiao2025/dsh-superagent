@@ -327,8 +327,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/git-credentials/kind.ts`、`service.ts`、`probe.ts` | Git 凭据：独立记录、独立路由与身份校验；私钥或令牌只进加密存储，项目只存引用 |
 | `src/feishu-credentials/kind.ts`、`service.ts`、`probe.ts` | 飞书凭据：独立记录、独立路由与身份校验；应用密钥只进加密存储，任务来源只存引用 |
 | `src/feishu-transport.ts` | 飞书 OpenAPI 传输层：`FeishuTransport.get` 双实现（CLI / HTTP）、`TokenManager` 的 tenant token 换取与内存缓存、`BASE` 常量与业务码 → 语义族的分类表，知识库/群消息读取与凭据探测共用 |
+| `src/task-sources/locate.ts` | 回写行定位的单源决策（评审 S6/C3）：ID 优先、标题兜底、多行拒绝与 CAS 期望校验，三种清单格式共用 |
 | `src/task-sources/table.ts` | 本地任务清单读取：CSV/TSV 解析与仅用 Node 内置 zlib 的 `.xlsx` 读取 |
-| `src/task-sources/tasks.ts` | 任务项与工作项模型、清单规范化、复选框/编号列表拆解与稳定键 |
+| `src/task-sources/tasks.ts` | 任务项与工作项模型、清单行校验单源（`collectTasks`）、复选框/编号列表拆解与稳定键 |
 | `src/task-sources/writeback.ts` | 任务结果回写：更新 CSV/TSV 匹配行与 `.xlsx` 状态列（保留样式与 BOM/CRLF）；飞书文档明确报未支持 |
 | `src/admission.ts` | 准入表的取值、每个单元格的选项和默认值，与面板共享 |
 | `src/limits.ts` | 人设置的值的限制，由设置架构检查，并由面板字段提供 |

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Commands } from '../infra/commands.ts'
+import { redact } from '../infra/text.ts'
 import { hostOf, type Probe, type RepoAuth } from '../deployment.ts'
 import { recordTicketSource } from '../infra/worker-sources.ts'
 import { normalizePath } from '../infra/win32.ts'
@@ -20,11 +21,8 @@ export function hasEmbeddedCredentials(remote: string): boolean {
 }
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
-
-/** 错误与日志只展示脱敏后的地址，避免自定义远端里的凭据被写进界面或日志。 */
-export function redactCredentials(text: string): string {
-  return text.replace(/([a-zA-Z][\w+.-]*:\/\/)([^/@\s]+)@/g, '$1***@')
-}
+/** 错误与日志只展示脱敏后的地址：URL 内嵌凭据等由 `infra/text.ts` 单源遮蔽，避免自定义远端里的凭据被写进界面或日志（port.ts 再导出）。 */
+export const redactCredentials = redact
 
 /** 展开私钥路径里的 `~`，其余原样返回。 */
 export function sshKeyFile(key: string): string {

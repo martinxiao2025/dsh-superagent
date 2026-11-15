@@ -17,6 +17,7 @@ import type { Sessions } from '../sessions.ts'
 import type { Store } from '../store.ts'
 import type { TextCache } from '../cache.ts'
 import type { LinkTarget, ViewHost } from '../views/records.ts'
+import { dayAgo } from '../views/records.ts'
 import type { Variable } from '../execution-environment.ts'
 import { policyHistory } from '../settings-history.ts'
 import { overview } from '../views/overview.ts'
@@ -286,8 +287,7 @@ export function routes(runtime: HttpHost, listen: () => { host: string; port: nu
     },
     'GET decisions': ({ query }) => {
       const { kind, window, offset, limit } = DecisionsQuery.parse(query)
-      const since = window ? new Date(Date.now() - 86_400_000).toISOString() : ''
-      return decisionList(views(runtime), kind.split(',').filter(Boolean), offset, limit, since)
+      return decisionList(views(runtime), kind.split(',').filter(Boolean), offset, limit, window ? dayAgo() : '')
     },
     // 自我升级闭环的回顾聚合：按修订/模型/阶段分桶的工单结果与用量。
     'GET retro': ({ query }) => { const { by } = RetroQuery.parse(query); return { by, buckets: store.read.retro(by) } },

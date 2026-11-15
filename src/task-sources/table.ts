@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { inflateRawSync, deflateRawSync } from 'node:zlib'
 import { META_SHEET, TASK_SHEET, checkFormatVersion } from './excel-format.ts'
+import { locateRow } from './locate.ts'
 
 /** 读取一行之后的最小错误类型，调用方据此把记录标为异常而不中断其他来源。 */
 export class TaskFileError extends Error {}
@@ -470,29 +471,18 @@ function updateSheet(xml: string, shared: readonly string[],
   const titleIndex = column(title)
   const statusIndex = column(status)
   if (statusIndex < 0) throw new TaskFileError(`任务清单缺少状态列：${status}`)
-  // 行定位（评审 S6）：单元格 trim 后比较（表格软件常见前后空格会让精确匹配永久失败）；
-  // ID 列可用且命中时优先按 ID（标题可重复，其他行的同名标题不参与），否则按标题兜底；
-  // 选定键命中多于一行时显式拒绝而不是写错行。
+  // 行定位与 CAS（评审 S6/C3）共用 locate.ts 单源：单元格 trim 后比较，ID 优先、标题兜底、多行拒绝。
   const rowValues = (row: RegExpMatchArray): (column: number) => string => {
     const values = new Map(rawCells(row[2]!).map(cell => [cell.index, cellValue(attributes(cell.attrs), cell.body, shared)]))
     return (column: number): string => column < 0 ? '' : (values.get(column) ?? '').trim()
   }
-  const candidates = rows.slice(1).map(row => ({ row, value: rowValues(row) }))
-  const taskId = options.target.taskId.trim()
-  const taskTitle = options.target.taskTitle.trim()
-  const byId = idIndex >= 0 ? candidates.filter(({ value }) => value(idIndex) === taskId) : []
-  const chosen = byId.length ? byId : candidates.filter(({ value }) => titleIndex >= 0 && value(titleIndex) === taskTitle)
-  if (chosen.length > 1) throw new TaskFileError(`任务清单中「${options.target.taskId}」匹配到 ${chosen.length} 行，回写被拒绝；请修正清单使目标行唯一`)
-  const match = chosen[0]?.row
-  if (!match) throw new TaskFileError(`任务清单中找不到任务：${options.target.taskId}`)
-  // CAS（评审 C3）：期望状态给出且清单行已不处于该状态时拒绝写入——状态可能已被人工修改。
-  if (options.expectedStatus !== undefined) {
-    const values = new Map(rawCells(match[2]!).map(cell => [cell.index, cellValue(attributes(cell.attrs), cell.body, shared)]))
-    const current = (statusIndex < 0 ? '' : values.get(statusIndex) ?? '').trim()
-    if (current !== options.expectedStatus.trim()) {
-      throw new TaskFileError(`任务清单的状态已不是「${options.expectedStatus}」（当前为「${current}」），回写被拒绝；请人工确认该任务的最终状态`)
-    }
-  }
+  const match = locateRow(rows.slice(1).map(row => {
+    const value = rowValues(row)
+    return { row, id: value(idIndex), title: value(titleIndex), status: value(statusIndex) }
+  }), options.target, options.expectedStatus, (reason, { count, current }) => reason === 'duplicate'
+    ? new TaskFileError(`任务清单中「${options.target.taskId}」匹配到 ${count} 行，回写被拒绝；请修正清单使目标行唯一`)
+    : reason === 'missing' ? new TaskFileError(`任务清单中找不到任务：${options.target.taskId}`)
+      : new TaskFileError(`任务清单的状态已不是「${options.expectedStatus}」（当前为「${current}」），回写被拒绝；请人工确认该任务的最终状态`))
   const rowNumber = Number(match[1]!.match(/\br="(\d+)"/)?.[1] ?? rows.indexOf(match) + 1)
   const cells = rawCells(match[2]!)
   const existing = cells.find(cell => cell.index === statusIndex)
@@ -504,8 +494,8 @@ function updateSheet(xml: string, shared: readonly string[],
   return `${xml.slice(0, match.index)}<row${match[1]}>${merged.map(cell => cell.raw).join('')}</row>${xml.slice(match.index! + match[0].length)}`
 }
 
-/** 列序号转换为列字母（0 对应 A）。 */
-function columnName(index: number): string {
+/** 列序号转换为列字母（0 对应 A）；模板生成共用。 */
+export function columnName(index: number): string {
   let value = index + 1
   let name = ''
   while (value > 0) {
@@ -516,8 +506,8 @@ function columnName(index: number): string {
   return name
 }
 
-/** 转义写回 xlsx 文本中的 XML 特殊字符。 */
-function encodeXml(text: string): string {
+/** 转义写回 xlsx 文本中的 XML 特殊字符；模板生成共用。 */
+export function encodeXml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 

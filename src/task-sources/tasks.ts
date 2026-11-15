@@ -50,10 +50,35 @@ export class TaskListError extends Error {
 const ISSUE_LIMIT = 5
 
 /** 把多条问题压成一句可直接展示的摘要；超出上限时注明剩余条数，避免日志被长表格淹没。 */
-function describe(issues: readonly TaskIssue[]): string {
+export function describe(issues: readonly TaskIssue[]): string {
   const shown = issues.slice(0, ISSUE_LIMIT).map(issue => `第 ${issue.row} 行 ${issue.reason}`)
   const rest = issues.length - shown.length
   return `${issues.length} 处问题：${shown.join('；')}${rest > 0 ? `；另有 ${rest} 处未列出` : ''}`
+}
+
+/**
+ * 行级校验与规范化的单源：编号必填且整表唯一、标题必填；`normalize` 做各驱动自己的
+ * 字段映射与枚举校验，返回该行任务或拒绝理由。问题按行号汇总，整批拒绝。
+ */
+export function collectTasks(input: TaskTableInput, columns: TaskFieldMap,
+  normalize: (values: (name: string) => string) => { task: RawTask } | { reason: string }): { tasks: RawTask[]; issues: TaskIssue[] } {
+  const issues: TaskIssue[] = []
+  const seen = new Map<string, number>()
+  const tasks: RawTask[] = []
+  for (const row of input.rows) {
+    const value = (name: string): string => (row.values[name] ?? '').trim()
+    const id = value(columns.id)
+    const title = value(columns.title)
+    if (!id) { issues.push({ row: row.number, reason: `缺少任务编号（列 ${columns.id} 不能为空）` }); continue }
+    const first = seen.get(id)
+    if (first !== undefined) { issues.push({ row: row.number, reason: `任务编号 ${id} 与第 ${first} 行重复` }); continue }
+    if (!title) { issues.push({ row: row.number, reason: `缺少标题（列 ${columns.title} 不能为空）` }); continue }
+    const refined = normalize(value)
+    if ('reason' in refined) { issues.push({ row: row.number, reason: refined.reason }); continue }
+    seen.set(id, row.number)
+    tasks.push(refined.task)
+  }
+  return { tasks, issues }
 }
 
 /**
@@ -71,22 +96,11 @@ export function importTasks(input: TaskTableInput, columns: TaskFieldMap): RawTa
   }
   if (!input.rows.length) throw new TaskListError('任务清单只有表头、没有数据行，本次未导入任何任务')
 
-  const issues: TaskIssue[] = []
-  const seen = new Map<string, number>()
-  const tasks: RawTask[] = []
-  for (const row of input.rows) {
-    const value = (name: string): string => (row.values[name] ?? '').trim()
-    const id = value(columns.id)
-    const title = value(columns.title)
-    if (!id) { issues.push({ row: row.number, reason: `缺少任务编号（列 ${columns.id} 不能为空）` }); continue }
-    const first = seen.get(id)
-    if (first !== undefined) { issues.push({ row: row.number, reason: `任务编号 ${id} 与第 ${first} 行重复` }); continue }
-    if (!title) { issues.push({ row: row.number, reason: `缺少标题（列 ${columns.title} 不能为空）` }); continue }
-    seen.set(id, row.number)
-    const description = value(columns.description)
+  const { tasks, issues } = collectTasks(input, columns, value => {
     const priority = value(columns.priority)
-    tasks.push({ id, title, description, status: value(columns.status), ...(priority ? { priority } : {}) })
-  }
+    return { task: { id: value(columns.id), title: value(columns.title), description: value(columns.description),
+      status: value(columns.status), ...(priority ? { priority } : {}) } }
+  })
   if (issues.length) throw new TaskListError(`任务清单未导入，${describe(issues)}`, issues)
   return tasks
 }

@@ -7,7 +7,7 @@ import { CredentialsProvider, repoSummary, sourceSummary } from './project-edito
 import { ProjectCard, ProjectWizard } from './project-wizard.tsx'
 import { useSettings } from './settings-kit.tsx'
 import { when } from './text.ts'
-import { Hint, LabelValue, LoadState, PageHead, Section, StatusHead } from './widgets.tsx'
+import { Hint, LabelValue, LoadMore, LoadState, PageHead, Section, StatusHead } from './widgets.tsx'
 
 /** 项目列表：全局 worker 占用与排队数，以及每个项目的运行时摘要。 */
 export function ProjectsPage() {
@@ -104,7 +104,7 @@ export function ProjectPage({ id }: { id: string }) {
         </tr>)}</tbody>
       </table>}
       {data.more && <div className="dt-actions">
-        <Button variant="outline" size="sm" onClick={() => setLimit(value => Math.min(value + TASKS_PAGE, 1000))}>{t('loadMore')}</Button>
+        <LoadMore onMore={() => setLimit(value => Math.min(value + TASKS_PAGE, 1000))} />
       </div>}
     </Section>
   </>

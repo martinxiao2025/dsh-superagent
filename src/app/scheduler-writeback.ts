@@ -20,6 +20,10 @@ export interface WritebackPayload {
   expectedStatus?: string
 }
 
+/** 回写副作用的键：队列条目 + 终态种类 + 尝试次数；入队与取消四处共用这一构造。 */
+export const writebackKey = (entry: Pick<QueueEntry, 'id' | 'attempt'>, kind: 'done' | 'failed'): string =>
+  key('writeback', entry.id, kind, String(entry.attempt))
+
 /** writeback 模块所需的调度器内部状态与共享助手；由 ProjectScheduler 显式装配。 */
 export interface WritebackContext {
   readonly host: SchedulerHost
@@ -59,7 +63,7 @@ export class SchedulerWriteback {
     const finalStatus = succeeded === siblings.length ? project.taskPolicy.doneStatus : project.taskPolicy.failedStatus
     // 持久化副作用：进程重启后仍会重试；键含尝试次数，重复投递不会改变结果。
     // CAS：expectedStatus 取任务准入的待处理状态（回写前清单上它仍是待处理），驱动写前校验。
-    this.base.host.effects.enqueue('writeback', key('writeback', entry.id, kind, String(entry.attempt)),
+    this.base.host.effects.enqueue('writeback', writebackKey(entry, kind),
       { project: entry.project, task: entry.task, taskTitle: entry.taskTitle, status: finalStatus,
         expectedStatus: project.taskPolicy.pendingStatuses[0] })
   }

@@ -1,10 +1,13 @@
-/** 凭据表单基座：Git 与飞书凭据共享的草稿转换、空字段提交规则、预检展示与验证弹窗。 */
-import { useEffect, useState } from 'react'
+/** 凭据表单基座：Git 与飞书凭据共享的草稿转换、空字段提交规则、预检展示、验证弹窗，以及卡片/列表的共享组件。 */
+import { useEffect, useState, type ReactNode } from 'react'
 import type { SourceCheck } from '../setup.ts'
-import { Button, Input, Modal } from './controls.tsx'
+import type { Call } from './api.ts'
+import { mergeChecks } from './checks.tsx'
+import { Button, Input, Modal, Tag } from './controls.tsx'
 import { usePanel } from './provider.tsx'
 import { Field } from './settings-kit.tsx'
 import { errorText, sourceCheckText, type T } from './text.ts'
+import { ConfirmButton, Hint } from './widgets.tsx'
 
 /** 凭据草稿的公共形状：全部字段都是字符串，便于按声明式规格逐键读写。 */
 export type CredentialDraft = Record<string, string>
@@ -85,4 +88,161 @@ export function CredentialVerifyModal({ open, error, words, onClose, onVerify, f
           </> : null}
     </div>
   </Modal>
+}
+
+/** 卡片/列表共享组件认得的已保存凭据最小形状。 */
+export interface SavedCredentialView { id: string; name: string; revision: number; fingerprint?: string; configured?: boolean }
+/** 列表区块的文案（新增块的标题/提示与空态）。 */
+export interface CredentialListWords { addTitle: string; addHint: string; none: string }
+/** 一张卡片的文案（标题域标签与摘要行文本；指纹后缀由共享组件拼接）。 */
+export interface CredentialCardWords { kindTag: string; summary: string }
+
+/**
+ * 一个凭据域注入给卡片/列表共享组件的差异点：草稿与提交转换、域字段表单、文案，
+ * 以及绑定各自 HTTP 路由的增删改查与验证调用。共享的是卡片外壳、新增块与状态机，
+ * 不是身份——Git 与飞书的存储、探测与错误码保持独立。
+ */
+export interface CredentialDomain<V extends SavedCredentialView, D extends CredentialDraft> {
+  listWords(t: T): CredentialListWords
+  cardWords(t: T, record: V): CredentialCardWords
+  verifyWords(t: T): CredentialVerifyWords
+  /** 预检展示顺序。 */
+  verifyFields: readonly string[]
+  emptyDraft: D
+  draftOf(record: V): D
+  inputOf(draft: D): Record<string, unknown>
+  /** 域字段表单（不含保存/取消行）。 */
+  fields(draft: D, edit: (next: Partial<D>) => void, disabled: boolean): ReactNode
+  /** 三个就绪谓词：编辑已保存凭据可保存（名称即可）、草稿可验证、草稿可创建（Git 另要求材料在场）。 */
+  canSave(draft: D): boolean
+  canVerify(draft: D): boolean
+  canCreate(draft: D): boolean
+  list(call: Call): Promise<V[]>
+  /** 补充查询（Git 仓库地址或知识库 spaceId）非空时附带；返回该次验证的预检条目。 */
+  verifySaved(call: Call, record: V, query: string): Promise<readonly SourceCheck[]>
+  verifyDraft(call: Call, draft: D, query: string): Promise<readonly SourceCheck[]>
+  save(call: Call, record: V, draft: D): Promise<{ revision: number }>
+  create(call: Call, draft: D): Promise<{ id: string }>
+  remove(call: Call, record: V): Promise<unknown>
+}
+
+/** 做一次验证并更新预检状态；每次验证都从空结果开始，调用（含凭据与补充查询）由闭包携带。 */
+async function runVerify(notify: (text: string) => void, verify: () => Promise<readonly SourceCheck[]>,
+  set: { checks: (value: Record<string, SourceCheck>) => void; error: (text: string) => void; busy: (busy: boolean) => void }) {
+  set.busy(true); set.checks({}); set.error('')
+  try { set.checks(mergeChecks({}, await verify())) }
+  catch (failure) { const text = errorText(failure); set.error(text); notify(text) }
+  finally { set.busy(false) }
+}
+
+/** 单条已保存凭据的共享卡片：编辑/验证/删除按钮、摘要行、展开表单与验证弹窗；域注入字段与调用。 */
+export function SavedCredentialCard<V extends SavedCredentialView, D extends CredentialDraft>(
+  { record, changed, domain }: { record: V; changed: () => Promise<void>; domain: CredentialDomain<V, D> }) {
+  const { t, call, notify } = usePanel()
+  const [draft, setDraft] = useState<D>(() => domain.draftOf(record))
+  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
+  const [busy, setBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [verifyOpen, setVerifyOpen] = useState(false)
+  const [verifyError, setVerifyError] = useState('')
+  const save = async () => {
+    setBusy(true)
+    try {
+      const { revision } = await domain.save(call, record, draft)
+      notify(t('credentialSaved', { name: record.name, revision: String(revision) }))
+      setOpen(false)
+      await changed()
+    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
+  }
+  const words = domain.cardWords(t, record)
+  return <div className="dt-card">
+    <div className="dt-row-main">
+      <div className="dt-row-title">
+        <span className="dt-card-title">{record.name}</span><Tag>{record.id}</Tag>
+        {words.kindTag && <Tag>{words.kindTag}</Tag>}
+        {!record.configured && <Tag>{t('credentialUnconfigured')}</Tag>}
+      </div>
+      <div className="dt-row-buttons">
+        <Button variant="outline" size="sm" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+          {open ? t('close') : t('edit')}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => { setChecks({}); setVerifyError(''); setVerifyOpen(true) }}>{t('verify')}</Button>
+        <ConfirmButton label={t('credentialDelete')} title={t('credentialDeleteTitle')}
+          message={t('credentialDeleteConfirm', { name: record.name })} icon="trash" variant="outline"
+          onConfirm={async () => {
+            await domain.remove(call, record)
+            notify(t('credentialDeleted', { name: record.name }))
+            await changed()
+          }} />
+      </div>
+    </div>
+    <p className="dt-hint">{words.summary}{' · '}{t('credentialFingerprint', { fingerprint: record.fingerprint || '—' })}</p>
+    <CredentialChecks fields={domain.verifyFields} checks={checks} />
+    {open && <form className="dt-form" onSubmit={event => { event.preventDefault(); void save() }}>
+      {domain.fields(draft, next => setDraft(current => ({ ...current, ...next })), busy)}
+      <div className="dt-row-buttons">
+        <Button variant="primary" type="submit" disabled={busy || !domain.canSave(draft)}>{t('save')}</Button>
+        <Button variant="outline" onClick={() => setOpen(false)}>{t('cancel')}</Button>
+      </div>
+    </form>}
+    <CredentialVerifyModal open={verifyOpen} error={verifyError} words={domain.verifyWords(t)} onClose={() => setVerifyOpen(false)}
+      onVerify={query => { void runVerify(notify, () => domain.verifySaved(call, record, query),
+        { checks: setChecks, error: setVerifyError, busy: setChecking }) }}
+      fields={domain.verifyFields} checks={checks} busy={checking} />
+  </div>
+}
+
+/** 凭据设置区块的共享列表：「新增」触发、新增块与已保存卡片；域注入字段、文案与调用。 */
+export function CredentialCardsSection<V extends SavedCredentialView, D extends CredentialDraft>({ domain }: { domain: CredentialDomain<V, D> }) {
+  const { t, call, notify } = usePanel()
+  const [items, setItems] = useState<V[] | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState<D>(domain.emptyDraft)
+  const [busy, setBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
+  const [verifyOpen, setVerifyOpen] = useState(false)
+  const [verifyError, setVerifyError] = useState('')
+  const load = async () => setItems(await domain.list(call))
+  useEffect(() => { load().catch(failure => notify(errorText(failure))) }, [])
+  /** 收起新增区块并清空草稿与预检结果。 */
+  const closeAdd = () => { setAdding(false); setVerifyOpen(false); setDraft(domain.emptyDraft); setChecks({}); setVerifyError('') }
+  const create = async () => {
+    setBusy(true)
+    try {
+      const { id } = await domain.create(call, draft)
+      notify(t('credentialAdded', { id }))
+      closeAdd()
+      await load()
+    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
+  }
+  const words = domain.listWords(t)
+  return <>
+    <div className="dt-row-buttons dt-add-trigger">
+      <Button variant="primary" disabled={adding} onClick={() => setAdding(true)}>{t('credentialNew')}</Button>
+    </div>
+    {adding && <div className="dt-source-add" role="group" aria-label={words.addTitle}>
+      <div className="dt-row-main">
+        <div className="dt-row-title"><span className="dt-card-title">{words.addTitle}</span></div>
+        <p className="dt-hint">{words.addHint}</p>
+      </div>
+      {domain.fields(draft, next => setDraft(current => ({ ...current, ...next })), busy)}
+      <div className="dt-row-buttons">
+        <Button variant="outline" disabled={!domain.canVerify(draft)}
+          onClick={() => { setChecks({}); setVerifyError(''); setVerifyOpen(true) }}>{t('verify')}</Button>
+        <Button variant="primary" disabled={busy || !domain.canCreate(draft)} onClick={() => { void create() }}>{t('credentialNew')}</Button>
+        <Button variant="outline" onClick={closeAdd}>{t('cancel')}</Button>
+      </div>
+      <CredentialChecks fields={domain.verifyFields} checks={checks} />
+      <CredentialVerifyModal open={verifyOpen} error={verifyError} words={domain.verifyWords(t)} onClose={() => setVerifyOpen(false)}
+        onVerify={query => { void runVerify(notify, () => domain.verifyDraft(call, draft, query),
+          { checks: setChecks, error: setVerifyError, busy: setChecking }) }}
+        fields={domain.verifyFields} checks={checks} busy={checking} />
+    </div>}
+    <div className="dt-cards">
+      {items === null ? <Hint>{t('loading')}</Hint> : items.length === 0 ? <Hint>{words.none}</Hint>
+        : items.map(record => <SavedCredentialCard key={`${record.id}:${record.revision}`} record={record} changed={load} domain={domain} />)}
+    </div>
+  </>
 }

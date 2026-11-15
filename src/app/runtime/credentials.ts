@@ -47,34 +47,21 @@ export function buildCredentials(host: CredentialsHost): { vault: SecretVault; g
   }
   // 凭据材料只在读取知识库或群消息时短暂进入内存；两种能力共用同一份凭据解析。
   // 按 credential 缓存读取器实例（评审 S5）：同一凭据的多次读取复用其 token 缓存与连接，而不是每次重建。
-  const wikiReaders = new Map<string, Promise<FeishuWikiApi | undefined>>()
-  const imReaders = new Map<string, Promise<FeishuImApi | undefined>>()
-  const feishuWikiReader: FeishuWikiReader = credential => {
-    let cached = wikiReaders.get(credential)
-    if (!cached) {
-      cached = (async () => {
-        const api = feishuApi(credential)
-        if (!api) return undefined
-        return 'cli' in api ? larkWikiApi(larkCall(api.cli)) : httpWikiApi(api.appId, api.secret, lifetime)
-      })()
-      cached.catch(() => wikiReaders.delete(credential))
-      wikiReaders.set(credential, cached)
+  const cachedReader = <A>(cache: Map<string, Promise<A | undefined>>,
+    build: (api: { cli: string } | { appId: string; secret: string }) => A): ((credential: string) => Promise<A | undefined>) =>
+    credential => {
+      let cached = cache.get(credential)
+      if (!cached) {
+        cached = (async () => { const api = feishuApi(credential); return api ? build(api) : undefined })()
+        cached.catch(() => cache.delete(credential))
+        cache.set(credential, cached)
+      }
+      return cached
     }
-    return cached
-  }
-  const feishuImReader: FeishuImReader = credential => {
-    let cached = imReaders.get(credential)
-    if (!cached) {
-      cached = (async () => {
-        const api = feishuApi(credential)
-        if (!api) return undefined
-        return 'cli' in api ? larkImApi(larkCall(api.cli)) : httpImApi(api.appId, api.secret, lifetime)
-      })()
-      cached.catch(() => imReaders.delete(credential))
-      imReaders.set(credential, cached)
-    }
-    return cached
-  }
+  const feishuWikiReader: FeishuWikiReader = cachedReader(new Map(),
+    api => 'cli' in api ? larkWikiApi(larkCall(api.cli)) : httpWikiApi(api.appId, api.secret, lifetime))
+  const feishuImReader: FeishuImReader = cachedReader(new Map(),
+    api => 'cli' in api ? larkImApi(larkCall(api.cli)) : httpImApi(api.appId, api.secret, lifetime))
   return { vault, gitCredentials, feishuCredentials, feishuWikiReader, feishuImReader }
 }
 /** 收集项目引用的飞书凭据 ID；删除凭据时按它统计引用（随工厂同迁，保持单一出处）。 */

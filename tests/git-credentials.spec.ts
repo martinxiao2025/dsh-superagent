@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { UserError } from '../src/core/index.ts'
 import type { GitCredential } from '../src/git-credentials/kind.ts'
-import { GitCredentials, classifyProbeError, normalizePrivateKey, type GitCredentialRepository } from '../src/git-credentials/service.ts'
+import { GitCredentials, classifyProbeError, normalizePrivateKey } from '../src/git-credentials/service.ts'
+import type { CredentialRepository } from '../src/secrets/credential-service.ts'
 import { SecretVault } from '../src/secrets/vault.ts'
 
 const temporary = (): string => mkdtempSync(join(tmpdir(), 'dsh-git-credential-'))
@@ -15,7 +16,7 @@ function setup(projects: Record<string, { gitCredential?: string }> = {}) {
   const stateDir = temporary()
   const vault = new SecretVault(stateDir)
   const records = new Map<string, GitCredential>()
-  const repository: GitCredentialRepository = { get: id => records.get(id), list: () => [...records.values()],
+  const repository: CredentialRepository<GitCredential> = { get: id => records.get(id), list: () => [...records.values()],
     save: value => { records.set(value.id, value) }, remove: id => { records.delete(id) } }
   const probe = vi.fn(async () => ({ branches: 3 }))
   const credentials = new GitCredentials({ credentials: repository, vault, projects: () => projects, probe,

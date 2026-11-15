@@ -1,15 +1,12 @@
-/** Git 凭据设置：独立于代码仓库记录存储，界面只显示掩码与指纹。 */
-import { useEffect, useRef, useState } from 'react'
+/** Git 凭据设置：独立于代码仓库记录存储，界面只显示掩码与指纹；卡片与列表用凭据基座的共享组件。 */
+import { useRef } from 'react'
 import type { GitCredentialInput, GitCredentialView } from '../git-credentials/kind.ts'
-import type { SourceCheck } from '../setup.ts'
-import { mergeChecks } from './checks.tsx'
-import { Button, Input, Tag } from './controls.tsx'
-import { CredentialChecks, CredentialVerifyModal, credentialDraftOf, credentialInputOf,
-  type CredentialVerifyWords } from './credential-form.tsx'
+import { Button, Input } from './controls.tsx'
+import { CredentialCardsSection, credentialDraftOf, credentialInputOf,
+  type CredentialDomain, type CredentialVerifyWords } from './credential-form.tsx'
 import { usePanel } from './provider.tsx'
 import { Field } from './settings-kit.tsx'
-import { errorText, type T } from './text.ts'
-import { ConfirmButton, Hint } from './widgets.tsx'
+import { type T } from './text.ts'
 
 /** 表单草稿；用 type 别名（而非 interface）以满足凭据基座的字符串记录约束。 */
 type Draft = {
@@ -135,130 +132,31 @@ function CredentialFields({ draft, edit, disabled }: { draft: Draft; edit: (next
   </div>
 }
 
-/** 已保存凭据：默认只显示概要，编辑时才展开表单。 */
-function CredentialCard({ record, changed }: { record: GitCredentialView; changed: () => Promise<void> }) {
-  const { t, call, notify } = usePanel()
-  const [draft, setDraft] = useState<Draft>(() => draftOf(record))
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
-  const [busy, setBusy] = useState(false)
-  const [checking, setChecking] = useState(false)
-  const [open, setOpen] = useState(false)
-  const [verifyOpen, setVerifyOpen] = useState(false)
-  const [verifyError, setVerifyError] = useState('')
-  /** 用已保存凭据验证给定 Git 地址；每次验证都从空结果开始，地址为空时只做本地检查。 */
-  const check = async (repository: string) => {
-    setChecking(true); setChecks({}); setVerifyError('')
-    try {
-      const result = await call('POST git-credentials/verify', { body: { id: record.id, ...repository ? { repository } : {} } })
-      setChecks(mergeChecks({}, result.checks))
-    } catch (failure) {
-      setVerifyError(errorText(failure)); notify(errorText(failure))
-    } finally { setChecking(false) }
-  }
-  const save = async () => {
-    setBusy(true)
-    try {
-      const { revision } = await call('PUT git-credentials/:id', { id: record.id, body: { value: inputOf(draft),
-        revision: record.revision } })
-      notify(t('credentialSaved', { name: record.name, revision: String(revision) }))
-      setOpen(false)
-      await changed()
-    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
-  }
-  return <div className="dt-card">
-    <div className="dt-row-main">
-      <div className="dt-row-title">
-        <span className="dt-card-title">{record.name}</span><Tag>{record.id}</Tag>
-        <Tag>{record.kind === 'ssh' ? t('credentialKindSsh') : t('credentialKindHttps')}</Tag>
-        {!record.configured && <Tag>{t('credentialUnconfigured')}</Tag>}
-      </div>
-      <div className="dt-row-buttons">
-        <Button variant="outline" size="sm" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-          {open ? t('close') : t('edit')}
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => { setChecks({}); setVerifyError(''); setVerifyOpen(true) }}>{t('verify')}</Button>
-        <ConfirmButton label={t('credentialDelete')} title={t('credentialDeleteTitle')}
-          message={t('credentialDeleteConfirm', { name: record.name })} icon="trash" variant="outline"
-          onConfirm={async () => {
-            await call('DELETE git-credentials/:id', { id: record.id })
-            notify(t('credentialDeleted', { name: record.name }))
-            await changed()
-          }} />
-      </div>
-    </div>
-    <p className="dt-hint">{record.hint || t('credentialNoMaterial')}{' · '}{t('credentialFingerprint', { fingerprint: record.fingerprint || '—' })}</p>
-    <CredentialChecks fields={VERIFY_FIELDS} checks={checks} />
-    {open && <form className="dt-form" onSubmit={event => { event.preventDefault(); void save() }}>
-      <CredentialFields draft={draft} edit={next => setDraft(current => ({ ...current, ...next }))} disabled={busy} />
-      <div className="dt-row-buttons">
-        <Button variant="primary" type="submit" disabled={busy || !draft.name.trim()}>{t('save')}</Button>
-        <Button variant="outline" onClick={() => setOpen(false)}>{t('cancel')}</Button>
-      </div>
-    </form>}
-    <CredentialVerifyModal open={verifyOpen} error={verifyError} words={verifyWords(t)} onClose={() => setVerifyOpen(false)}
-      onVerify={repository => { void check(repository) }} fields={VERIFY_FIELDS} checks={checks} busy={checking} />
-  </div>
+/** Git 凭据域：卡片与列表的差异注入——真实 Git 地址作为验证补充查询，材料在场才能创建。 */
+const gitDomain: CredentialDomain<GitCredentialView, Draft> = {
+  listWords: t => ({ addTitle: t('credentialAddTitle'), addHint: t('gitCredentialAddHint'), none: t('gitCredentialNone') }),
+  cardWords: (t, record) => ({ kindTag: record.kind === 'ssh' ? t('credentialKindSsh') : t('credentialKindHttps'),
+    summary: record.hint || t('credentialNoMaterial') }),
+  verifyWords,
+  verifyFields: VERIFY_FIELDS,
+  emptyDraft: EMPTY,
+  draftOf,
+  inputOf,
+  fields: (draft, edit, disabled) => <CredentialFields draft={draft} edit={edit} disabled={disabled} />,
+  canSave: draft => !!draft.name.trim(),
+  canVerify: hasMaterial,
+  canCreate: draft => !!draft.name.trim() && hasMaterial(draft),
+  list: async call => (await call('GET git-credentials')).credentials,
+  verifySaved: async (call, record, repository) =>
+    (await call('POST git-credentials/verify', { body: { id: record.id, ...repository ? { repository } : {} } })).checks,
+  verifyDraft: async (call, draft, repository) =>
+    (await call('POST git-credentials/verify', { body: { value: inputOf(draft), ...repository ? { repository } : {} } })).checks,
+  save: (call, record, draft) => call('PUT git-credentials/:id', { id: record.id, body: { value: inputOf(draft), revision: record.revision } }),
+  create: (call, draft) => call('POST git-credentials', { body: { value: inputOf(draft) } }),
+  remove: (call, record) => call('DELETE git-credentials/:id', { id: record.id }),
 }
 
-/** Git 凭据设置页：新增表单 + 已保存记录。 */
+/** Git 凭据设置页：共享卡片/列表区块，域注入表单与调用。 */
 export function GitCredentialSettings() {
-  const { t, call, notify } = usePanel()
-  const [items, setItems] = useState<GitCredentialView[] | null>(null)
-  const [adding, setAdding] = useState(false)
-  const [draft, setDraft] = useState<Draft>(EMPTY)
-  const [busy, setBusy] = useState(false)
-  const [checking, setChecking] = useState(false)
-  const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
-  const [verifyOpen, setVerifyOpen] = useState(false)
-  const [verifyError, setVerifyError] = useState('')
-  const load = async () => setItems((await call('GET git-credentials')).credentials)
-  useEffect(() => { load().catch(failure => notify(errorText(failure))) }, [])
-  /** 收起新增区块并清空草稿与预检结果。 */
-  const closeAdd = () => { setAdding(false); setVerifyOpen(false); setDraft(EMPTY); setChecks({}); setVerifyError('') }
-  /** 用草稿材料验证给定 Git 地址；每次验证都从空结果开始，地址为空时只做本地检查。 */
-  const verify = async (repository: string) => {
-    setChecking(true); setChecks({}); setVerifyError('')
-    try {
-      const result = await call('POST git-credentials/verify', { body: { value: inputOf(draft), ...repository ? { repository } : {} } })
-      setChecks(mergeChecks({}, result.checks))
-    } catch (failure) {
-      setVerifyError(errorText(failure)); notify(errorText(failure))
-    } finally { setChecking(false) }
-  }
-  const create = async () => {
-    setBusy(true)
-    try {
-      const { id } = await call('POST git-credentials', { body: { value: inputOf(draft) } })
-      notify(t('credentialAdded', { id }))
-      setDraft(EMPTY)
-      setChecks({})
-      setAdding(false)
-      await load()
-    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
-  }
-  return <>
-    <div className="dt-row-buttons dt-add-trigger">
-      <Button variant="primary" disabled={adding} onClick={() => setAdding(true)}>{t('credentialNew')}</Button>
-    </div>
-    {adding && <div className="dt-source-add" role="group" aria-label={t('credentialAddTitle')}>
-      <div className="dt-row-main">
-        <div className="dt-row-title"><span className="dt-card-title">{t('credentialAddTitle')}</span></div>
-        <p className="dt-hint">{t('gitCredentialAddHint')}</p>
-      </div>
-      <CredentialFields draft={draft} edit={next => setDraft(current => ({ ...current, ...next }))} disabled={busy} />
-      <div className="dt-row-buttons">
-        <Button variant="outline" disabled={!hasMaterial(draft)}
-          onClick={() => { setChecks({}); setVerifyError(''); setVerifyOpen(true) }}>{t('verify')}</Button>
-        <Button variant="primary" disabled={busy || !draft.name.trim() || !hasMaterial(draft)} onClick={() => { void create() }}>{t('credentialNew')}</Button>
-        <Button variant="outline" onClick={closeAdd}>{t('cancel')}</Button>
-      </div>
-      <CredentialChecks fields={VERIFY_FIELDS} checks={checks} />
-      <CredentialVerifyModal open={verifyOpen} error={verifyError} words={verifyWords(t)} onClose={() => setVerifyOpen(false)}
-        onVerify={repository => { void verify(repository) }} fields={VERIFY_FIELDS} checks={checks} busy={checking} />
-    </div>}
-    <div className="dt-cards">
-      {items === null ? <Hint>{t('loading')}</Hint> : items.length === 0 ? <Hint>{t('gitCredentialNone')}</Hint>
-        : items.map(record => <CredentialCard key={`${record.id}:${record.revision}`} record={record} changed={load} />)}
-    </div>
-  </>
+  return <CredentialCardsSection domain={gitDomain} />
 }

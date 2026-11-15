@@ -17,6 +17,7 @@ import type { Sessions } from './sessions.ts'
 import type { Settings } from './settings.ts'
 import { KV } from '../kv.ts'
 import type { Store } from './store.ts'
+import { effectiveBudget } from './usage-meter.ts'
 import type { TextCache } from './cache.ts'
 
 /** 通过 orchestrator_read 暴露的资源描述符，标记执行器会话也可为自己的工单读取哪些资源。 */
@@ -227,9 +228,8 @@ const ROUTES: readonly Route[] = [
   ['usage', read => {
     const { host, ticketId } = read
     if (ticketId) {
-      // 工作单元只读本工单：合计、生效预算与最近的请求记录。
-      const project = host.store.tickets.get(ticketId)?.execution?.project
-      const budget = (project ? host.store.projects.get(project)?.execution.budget : undefined) ?? host.store.settings().executor.budget
+      // 工作单元只读本工单：合计、生效预算与最近的请求记录；预算回退链与 UsageMeter 共用单源。
+      const budget = effectiveBudget(host.store, ticketId)
       return { ticket: ticketId, ...(host.store.usage.sumTicket(ticketId) ?? { requests: 0 }), ...(budget ? { budget } : {}),
         recent: host.store.usage.forTicket(ticketId).slice(-20).reverse() }
     }

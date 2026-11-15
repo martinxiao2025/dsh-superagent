@@ -1,23 +1,17 @@
 /** 飞书凭据的增删改查、轮换与身份校验；应用密钥只经过加密存储层。 */
 import { SecretVault, fingerprint, mask, type SecretMaterial } from '../secrets/vault.ts'
 import { credentialCheck, type CredentialCheck } from '../secrets/check.ts'
-import { CredentialService } from '../secrets/credential-service.ts'
+import { CredentialService, type CredentialRepository } from '../secrets/credential-service.ts'
 import { feishuFailureCode } from '../feishu-transport.ts'
 import { FeishuCredentialInputSchema, FeishuCredentialSchema, type FeishuCredential, type FeishuCredentialInput,
   type FeishuCredentialView } from './kind.ts'
 
-/** 记录层只依赖最小读写接口，便于用内存实现测试。 */
-export interface FeishuCredentialRepository {
-  get(id: string): FeishuCredential | undefined
-  list(): FeishuCredential[]
-  save(value: FeishuCredential): void
-  remove(id: string): void
-}
 /** 身份与知识库探测：应用模式校验 tenant token，CLI 模式校验可执行文件。 */
 export type FeishuProbe = (input: { mode: 'app' | 'cli'; appId?: string; appSecret?: string; cli?: string; spaceId?: string })
   => Promise<{ nodes: number }>
 export interface FeishuCredentialsOptions {
-  credentials: FeishuCredentialRepository
+  /** 记录层只依赖共享骨架的最小读写接口（`CredentialRepository`），便于用内存实现测试。 */
+  credentials: CredentialRepository<FeishuCredential>
   vault: SecretVault
   /** 引用该凭据的任务来源配置；删除前据此拒绝。 */
   references: () => readonly string[]

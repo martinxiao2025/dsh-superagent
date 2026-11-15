@@ -3,7 +3,7 @@
  * Excel / CSV / TSV 与飞书任务表共用同一套列名，界面语言不影响表头。
  */
 import type { TaskFieldMap } from './kind.ts'
-import { TaskListError, type RawTask, type TaskIssue } from './tasks.ts'
+import { TaskListError, collectTasks, describe, type RawTask, type TaskIssue } from './tasks.ts'
 
 /** 标准任务表的工作表名；CSV / TSV 等价于只有这一张表。 */
 export const TASK_SHEET = 'tasks'
@@ -58,36 +58,21 @@ export function parseStandardTasks(input: { header: readonly string[]; rows: rea
   }
   const unknown = [...new Set(columns.filter(name => name && !(STANDARD_COLUMNS as readonly string[]).includes(name)))]
   if (!input.rows.length) return { tasks: [], empty: true, unknown }
-  const issues: TaskIssue[] = []
-  const seen = new Map<string, number>()
-  const tasks: RawTask[] = []
-  for (const row of input.rows) {
-    const value = (name: string): string => (row.values[name] ?? '').trim()
-    const id = value(STANDARD_TASK_FIELDS.id), title = value(STANDARD_TASK_FIELDS.title)
+  // 行级校验（编号必填且唯一、标题必填）走 tasks.ts 的 collectTasks 单源；这里只做标准枚举校验。
+  const { tasks, issues } = collectTasks(input, STANDARD_TASK_FIELDS, value => {
     const rawStatus = value(STANDARD_TASK_FIELDS.status), rawPriority = value(STANDARD_TASK_FIELDS.priority)
-    if (!id) { issues.push({ row: row.number, reason: `缺少任务编号（列 ${STANDARD_TASK_FIELDS.id} 不能为空）` }); continue }
-    const first = seen.get(id)
-    if (first !== undefined) { issues.push({ row: row.number, reason: `任务编号 ${id} 与第 ${first} 行重复` }); continue }
-    if (!title) { issues.push({ row: row.number, reason: `缺少标题（列 ${STANDARD_TASK_FIELDS.title} 不能为空）` }); continue }
     const status = rawStatus.toLowerCase()
     if (!(TASK_STATUSES as readonly string[]).includes(status)) {
-      issues.push({ row: row.number, reason: `状态“${rawStatus}”无效（列 ${STANDARD_TASK_FIELDS.status}），只允许 ${TASK_STATUSES.join(' / ')}` })
-      continue
+      return { reason: `状态“${rawStatus}”无效（列 ${STANDARD_TASK_FIELDS.status}），只允许 ${TASK_STATUSES.join(' / ')}` }
     }
     const priority = rawPriority.toUpperCase()
     if (rawPriority && !(TASK_PRIORITIES as readonly string[]).includes(priority)) {
-      issues.push({ row: row.number, reason: `优先级“${rawPriority}”无效（列 ${STANDARD_TASK_FIELDS.priority}），只允许 ${TASK_PRIORITIES.join(' / ')}` })
-      continue
+      return { reason: `优先级“${rawPriority}”无效（列 ${STANDARD_TASK_FIELDS.priority}），只允许 ${TASK_PRIORITIES.join(' / ')}` }
     }
-    seen.set(id, row.number)
-    tasks.push({ id, title, description: value(STANDARD_TASK_FIELDS.description), status,
-      ...(priority ? { priority } : {}) })
-  }
-  if (issues.length) {
-    const shown = issues.slice(0, 5).map(issue => `第 ${issue.row} 行 ${issue.reason}`)
-    const rest = issues.length - shown.length
-    throw new TaskFormatError('taskRowInvalid', `任务表未导入，${issues.length} 处问题：${shown.join('；')}${rest > 0 ? `；另有 ${rest} 处未列出` : ''}`, issues)
-  }
+    return { task: { id: value(STANDARD_TASK_FIELDS.id), title: value(STANDARD_TASK_FIELDS.title),
+      description: value(STANDARD_TASK_FIELDS.description), status, ...(priority ? { priority } : {}) } }
+  })
+  if (issues.length) throw new TaskFormatError('taskRowInvalid', `任务表未导入，${describe(issues)}`, issues)
   return { tasks, empty: false, unknown }
 }
 

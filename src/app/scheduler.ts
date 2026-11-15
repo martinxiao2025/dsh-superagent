@@ -5,7 +5,6 @@
  * `scheduler-reconcile`、`scheduler-dispatch`、`scheduler-writeback` 三个模块承担。
  */
 import type { Engine } from '../core/index.ts'
-import { key } from '../core/ids.ts'
 import type { Settings } from '../policy.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { GitAuth } from '../code-repos/port.ts'
@@ -19,7 +18,7 @@ import type { Health } from '../infra/health.ts'
 import { queueActive, queueInFlight, type QueueEntry, type QueueSnapshot } from '../queue/model.ts'
 import { SchedulerReconcile } from './scheduler-reconcile.ts'
 import { SchedulerDispatch } from './scheduler-dispatch.ts'
-import { SchedulerWriteback, type WritebackPayload } from './scheduler-writeback.ts'
+import { SchedulerWriteback, writebackKey, type WritebackPayload } from './scheduler-writeback.ts'
 
 export type { WritebackPayload }
 
@@ -215,12 +214,7 @@ export class ProjectScheduler {
     const settings = this.host.settings()
     const active = this.host.store.queue.active()
     const total = this.host.store.queue.count()
-    const projects = Object.entries(this.host.projects()).map(([id, project]) => ({
-      id, name: project.name, enabled: project.enabled,
-      ...(this.nextPoll.has(id) ? { nextPollAt: new Date(this.nextPoll.get(id)!).toISOString() } : {}),
-      ...(this.errors.get(id) ? { lastError: this.errors.get(id)! } : {}),
-      ...(this.deferred.get(id) ? { deferred: this.deferred.get(id)! } : {}),
-    }))
+    const projects = Object.entries(this.host.projects()).map(([id, project]) => this.projectStatus(id, project))
     const topError = this.errors.get('')
     return {
       at: new Date(this.now()).toISOString(),
@@ -239,21 +233,24 @@ export class ProjectScheduler {
   /** 项目详情视图的完整条目集：活动按序 + 终态最新在前；详情页是交互路径，不做分页。 */
   projectQueue(projectId: string): QueueSnapshot {
     const settings = this.host.settings()
-    const project = this.host.project(projectId)
-    const status = { id: projectId, name: project?.name ?? projectId, enabled: project?.enabled ?? false,
-      ...(this.nextPoll.has(projectId) ? { nextPollAt: new Date(this.nextPoll.get(projectId)!).toISOString() } : {}),
-      ...(this.errors.get(projectId) ? { lastError: this.errors.get(projectId)! } : {}),
-      ...(this.deferred.get(projectId) ? { deferred: this.deferred.get(projectId)! } : {}) }
     const topError = this.errors.get('')
     return {
       at: new Date(this.now()).toISOString(),
       maxWorkers: settings.executor.maxWorkers,
       used: this.host.executor.slotsInUse(),
       ...(topError ? { error: topError } : {}),
-      projects: [status],
+      projects: [this.projectStatus(projectId, this.host.project(projectId))],
       items: [...this.host.store.queue.activeIn(projectId), ...this.host.store.queue.terminalIn(projectId)]
         .map(entry => this.toItem(entry, settings)),
     }
+  }
+
+  /** 项目状态行的公共形态（快照与项目详情共用）：轮询计时、最近错误与推迟原因。 */
+  private projectStatus(id: string, project: { name: string; enabled: boolean } | undefined) {
+    return { id, name: project?.name ?? id, enabled: project?.enabled ?? false,
+      ...(this.nextPoll.has(id) ? { nextPollAt: new Date(this.nextPoll.get(id)!).toISOString() } : {}),
+      ...(this.errors.get(id) ? { lastError: this.errors.get(id)! } : {}),
+      ...(this.deferred.get(id) ? { deferred: this.deferred.get(id)! } : {}) }
   }
 
   /** 队列条目的面板形态；字段与既有快照逐字一致（新增不改名）。 */
@@ -385,8 +382,8 @@ export class ProjectScheduler {
         try { this.host.store.atomic(() => this.host.engine.stopTicket(entry.ticketId!, 'The project was removed')) }
         catch { /* 工单已结束或不存在：仍然清理队列记录。 */ }
       }
-      this.host.effects.cancel('writeback', key('writeback', entry.id, 'done', String(entry.attempt)))
-      this.host.effects.cancel('writeback', key('writeback', entry.id, 'failed', String(entry.attempt)))
+      this.host.effects.cancel('writeback', writebackKey(entry, 'done'))
+      this.host.effects.cancel('writeback', writebackKey(entry, 'failed'))
     }
     this.host.store.atomic(() => this.host.store.queue.remove(projectId))
     // 内存侧的轮询计时、错误与推迟原因一并清理，避免快照继续展示已删除的项目。
@@ -404,8 +401,8 @@ export class ProjectScheduler {
     const entry = this.host.store.queue.get(id)
     if (!entry || queueActive(entry)) return { retried: false }
     // 重试前取消旧尝试待执行的写回，避免过期结果覆盖新一轮的状态。
-    this.host.effects.cancel('writeback', key('writeback', entry.id, 'done', String(entry.attempt)))
-    this.host.effects.cancel('writeback', key('writeback', entry.id, 'failed', String(entry.attempt)))
+    this.host.effects.cancel('writeback', writebackKey(entry, 'done'))
+    this.host.effects.cancel('writeback', writebackKey(entry, 'failed'))
     this.save({ ...entry, state: 'queued', attempt: 0, dueAt: this.now(), updatedAt: this.stamp(),
       reason: undefined, endedAt: undefined, startedAt: undefined, ticketId: undefined })
     this.dispatch.pump()
