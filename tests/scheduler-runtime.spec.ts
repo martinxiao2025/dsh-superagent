@@ -221,6 +221,75 @@ describe('调度器与真实引擎集成', () => {
     await runtime.idle()
     expect(runtime.store.queue.get(queued[0]!.id)).toMatchObject({ state: 'running' })
   })
+
+  it('手动重试耗尽重试的条目会生成新触发器并真正重新执行（评审 C1）', async () => {
+    // 回归背景：retryEntry 把 attempt 归零后，triggerId 若只由 attempt 决定，
+    // pump 会幂等拿回历史尝试已结束的旧工单——重试不执行任何新工单还会再次回写失败。
+    // 修复：triggerId 纳入 tickets.length（工单历史代次，永不复位）。
+    driver.tasks = [task('t5', '部署修复')]
+    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    await runtime.scheduler.scan()
+    await runtime.idle()
+    const entry = runtime.store.queue.list()[0]!
+    const firstTicket = entry.ticketId!
+    // 耗尽全部自动重试（maxRetries=2）：连续三次 dropped 报告；每次重试产生新工单（其 worker 会话按新工单命名）。
+    for (let round = 0; round <= 2; round++) {
+      const current = runtime.store.queue.get(entry.id)!.ticketId!
+      await runReport(current, `worker-${current}`, 'dropped', `失败 ${round}`)
+      await runtime.idle()
+      const due = runtime.store.queue.get(entry.id)!
+      if (due.state === 'queued') runtime.store.queue.save({ ...due, dueAt: Date.now() - 1 })
+      runtime.scheduler.pump()
+      await runtime.idle()
+    }
+    const exhausted = runtime.store.queue.get(entry.id)!
+    expect(exhausted).toMatchObject({ state: 'failed' })
+    expect(exhausted.attempt).toBe(3)
+    // 手动重试：attempt 归零，但历史代次使触发器全新 → 产生新工单并进入 running。
+    expect(runtime.scheduler.retryEntry(exhausted.id).retried).toBe(true)
+    await runtime.idle()
+    const retried = runtime.store.queue.get(entry.id)!
+    expect(retried.state).toBe('running')
+    expect(retried.ticketId).toBeTruthy()
+    expect(retried.ticketId).not.toBe(firstTicket)
+  })
+
+  it('worker 向人提问时队列不接管工单（评审 C2）', async () => {
+    // 回归背景：settleOutcome 曾对全部 person 阶段 stop-then-retry——worker 通过 attention
+    // 提的问题会在 15 秒内被强停重建，问题丢失且烧掉重试预算。现在只有 blocked/failed 接管。
+    driver.tasks = [task('t6', '设计确认')]
+    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    await runtime.scheduler.scan()
+    await runtime.idle()
+    const entry = runtime.store.queue.list()[0]!
+    const ticketId = entry.ticketId!
+    // worker 用 progress + human_action 向人提问：工单进入 person/answer（attention 置位）。
+    const ask = toolRegistry.get(`worker-${ticketId}`)?.get('orchestrator_report')!
+    await ask.execute({ state: 'progress', summary: '进行中，需要确认', human_action: '用哪个配色方案？' }, { signal: new AbortController().signal })
+    await runtime.idle()
+    // 再走一轮调度：工单仍然存活，问题保留，队列条目保持 running。
+    runtime.scheduler.pump()
+    await runtime.idle()
+    const ticket = runtime.store.tickets.get(ticketId)!
+    expect(ticket.ended).toBeUndefined()
+    expect(ticket.attention).toBeDefined()
+    expect(runtime.store.queue.get(entry.id)).toMatchObject({ state: 'running', ticketId })
+  })
+
+  it('worker 报告 blocked 时项目按既有语义接管（评审 C2 白名单的反向验证）', async () => {
+    driver.tasks = [task('t7', '构建修复')]
+    runtime.store.saveSettings({ ...runtime.store.settings(), projects: { p1: project('p1') as never } })
+    await runtime.scheduler.scan()
+    await runtime.idle()
+    const entry = runtime.store.queue.list()[0]!
+    const ticketId = entry.ticketId!
+    await runReport(ticketId, `worker-${ticketId}`, 'blocked', '等待设计文件')
+    runtime.scheduler.observe(ticketId)
+    await runtime.idle()
+    // blocked 报告之后工单在等人：项目自动接管（stop-then-retry），条目回到 queued 等退避。
+    expect(runtime.store.tickets.get(ticketId)!.ended).toBeDefined()
+    expect(runtime.store.queue.get(entry.id)!.state).toBe('queued')
+  })
 })
 
 /** 通过执行器工具把 worker 报告写进真实引擎（与 runtime.spec 相同的工具路径）。 */

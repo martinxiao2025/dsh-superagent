@@ -206,7 +206,15 @@ export class Commands {
     if (!bot) throw new Error('The Feishu Source has no working bot CLI')
     const output = await this.run(bot.cli, [...args, '--as', 'bot', '--format', 'json'], cwd)
       .catch((error: unknown) => { throw membership(error) })
-    const result = JSON.parse(output) as { ok: boolean; data: T; error?: { code?: number; message?: string } }
+    // lark-cli 可能在 JSON 负载前打印横幅或警告行（部署探测路径已为同一行为实现了
+    // firstParsed 容错，见 deployment.ts）；业务主路径必须用同一口径解析，否则横幅一旦
+    // 出现，全部飞书调用抛 SyntaxError 且丢失 CliError 错误码分类（评审 E3）。
+    let result: { ok: boolean; data: T; error?: { code?: number; message?: string } } | undefined
+    for (const line of output.split(/\r?\n/)) {
+      try { result = JSON.parse(line) as typeof result } catch { continue }
+      if (result) break
+    }
+    if (!result) throw membership(new CliError(`Feishu command did not return JSON${output.trim() ? `: ${output.trim().slice(0, 200)}` : ''}`))
     const code = result.error?.code
     if (!result.ok) throw membership(new CliError(`${result.error?.message ?? 'Feishu command failed'}${code ? ` (${code})` : ''}`, code))
     return result.data

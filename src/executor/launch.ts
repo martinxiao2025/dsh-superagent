@@ -49,7 +49,9 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
     : note.trim()
   // 项目目录保留分组与归属，每张工单再在自己的子目录内执行，同项目并发时互不覆盖。
   const directory = join(executionRoot(settings, stateDir), folder, ticketDirectoryName(ticket.id))
-  return { name, project: identity, directory, assignment }
+  // 项目调度的工单记录其镜像仓库：工作区回收按它执行 git worktree 拆除（评审 E4）。
+  const repo = outcome.project ? projectRepoId(outcome.project.id) : undefined
+  return { name, project: identity, directory, assignment, ...(repo ? { repo } : {}) }
 }
 
 /** 准备命令的选择：项目级 prepare 优先于全局 executor.prepare；无仓库的工单只能用全局命令，避免多项目共享缓存互相污染。 */

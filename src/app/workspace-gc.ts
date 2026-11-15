@@ -17,6 +17,17 @@ export interface WorkspaceGcInput {
   readonly now?: () => number
   /** 删除单个目录；默认递归删除。 */
   readonly remove?: (directory: string) => Promise<void>
+  /**
+   * 删除前复查工单是否仍打开（评审 E4）：GC 快照取自循环前，工单可能在删除 pass 进行中
+   * 被人的消息 wake 复活并重建目录——删除前重查可避免删掉复活工单的运行中产物。
+   */
+  readonly stillOpen?: (ticketId: string) => boolean
+  /**
+   * 按镜像仓库执行 `git worktree remove --force`（评审 E4）：worktree 是镜像仓库登记的资源，
+   * 直接 `rm -rf` 会把 gitdir 元数据残留到镜像里，直到下一次 materialize 才被顺带 prune。
+   * 实现按 repo 归属调用 git；缺省时跳过（元数据由 materializeWorkspace 的 prune 兜底）。
+   */
+  readonly removeWorktree?: (repo: string, directory: string) => Promise<void>
 }
 
 /** 一次回收的结果；面板与调度健康条目据此报告。 */
@@ -56,13 +67,14 @@ function referencedDirectories(tickets: readonly Ticket[]): Set<string> {
 }
 
 /** 已结束工单的目录与结束时间；未结束的工单不出现在映射里，以免被删除。 */
-function endedDirectories(tickets: readonly Ticket[]): Map<string, number> {
-  const ended = new Map<string, number>()
+function endedDirectories(tickets: readonly Ticket[]): Map<string, { ticketId: string; endedAt: number; repo?: string }> {
+  const ended = new Map<string, { ticketId: string; endedAt: number; repo?: string }>()
   for (const ticket of tickets) {
     const directory = ticket.execution?.directory
     if (!directory || !ticket.ended) continue
     const endedAt = Date.parse(ticket.ended.at)
-    ended.set(normalize(directory), Number.isFinite(endedAt) ? endedAt : Date.parse(ticket.updatedAt))
+    ended.set(normalize(directory), { ticketId: ticket.id, endedAt: Number.isFinite(endedAt) ? endedAt : Date.parse(ticket.updatedAt),
+      repo: ticket.execution?.repo })
   }
   return ended
 }
@@ -107,11 +119,16 @@ export async function collectWorkspaces(input: WorkspaceGcInput): Promise<Worksp
       // 不属于任何工单的目录可能由人工或旧版本创建，保留并只计入统计。
       if (!referenced.has(key)) { report.unknown++; continue }
       // 未结束的工单（运行中、等待输入或待重试）不参与回收。
-      const endedAt = ended.get(key)
-      if (endedAt === undefined) { report.kept++; continue }
+      const info = ended.get(key)
+      if (!info) { report.kept++; continue }
       if (!inside(root, directory)) { report.kept++; continue }
-      if (!Number.isFinite(endedAt) || now - endedAt < input.retentionMs) { report.kept++; continue }
+      if (!Number.isFinite(info.endedAt) || now - info.endedAt < input.retentionMs) { report.kept++; continue }
+      // 删除前复查（评审 E4）：快照之后的 wake 复活会让「已结束」过期，跳过本轮。
+      if (input.stillOpen?.(info.ticketId)) { report.kept++; continue }
       try {
+        // 先走 git 的 worktree 拆除协议（评审 E4）：镜像里的 gitdir 元数据随目录一起注销，
+        // 失败（镜像已删、目录不是 worktree）时退回 rm，不阻塞回收。
+        if (input.removeWorktree && info.repo) await input.removeWorktree(info.repo, directory).catch(() => {})
         await remove(directory)
         report.removed.push(directory)
         remaining--

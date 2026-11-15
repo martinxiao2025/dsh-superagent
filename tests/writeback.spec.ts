@@ -56,6 +56,20 @@ describe('text writeback', () => {
     await expect(writeTaskStatusAt(rst, columns, target, 'done')).rejects.toThrow('不支持')
     rmSync(directory_, { recursive: true, force: true })
   })
+
+  it('rejects the write when the current status no longer matches the expected one (CAS)', async () => {
+    // 回归（评审 C3）：人工在结算间隙把状态改成别的值时，回写被拒绝而不是无提示覆盖。
+    const file = join(directory(), 'backlog.csv')
+    writeFileSync(file, 'task_id,title,status\nT-1,修复登录,进行中\n', 'utf8')
+    await expect(writeTaskStatusAt(file, columns, target, 'done', 'todo')).rejects.toThrow('请人工确认')
+    // 清单仍是人工改后的值，未被覆盖。
+    expect(readFileSync(file).toString('utf8')).toContain('T-1,修复登录,进行中')
+    // 期望值匹配（含前后空白）时正常写入。
+    writeFileSync(file, 'task_id,title,status\nT-1,修复登录, todo \n', 'utf8')
+    await writeTaskStatusAt(file, columns, target, 'done', 'todo')
+    expect(readFileSync(file).toString('utf8')).toContain('T-1,修复登录,done')
+    rmSync(directory(), { recursive: true, force: true })
+  })
 })
 
 describe('xlsx writeback', () => {

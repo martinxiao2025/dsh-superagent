@@ -69,3 +69,39 @@ it('records a failing removal and keeps the directory for the next pass', async 
   expect(report.removed).toEqual([])
   expect(existsSync(old)).toBe(true)
 })
+
+it('删除前复查复活：工单在快照后被唤醒时跳过本轮回收（评审 E4）', async () => {
+  const revived = make('acme', 'revived')
+  const gone = make('acme', 'gone')
+  const report = await collectWorkspaces({ workRoot: root, retentionMs: DAY, now: () => now,
+    tickets: { list: () => [
+      ended('revived', revived, new Date(now - 5 * DAY).toISOString()),
+      ended('gone', gone, new Date(now - 5 * DAY).toISOString()),
+    ] },
+    // 快照之后 wake 复活了 revived：目录里有新一轮运行产物，不能按过期快照删掉。
+    stillOpen: ticketId => ticketId === 'revived' })
+  expect(report.removed).toEqual([gone])
+  expect(report.kept).toBe(1)
+  expect(existsSync(revived)).toBe(true)
+  expect(existsSync(gone)).toBe(false)
+})
+
+it('先按镜像注销 worktree 再删目录，拆除失败退回 rm 不阻塞（评审 E4）', async () => {
+  const withRepo = make('acme', 'with-repo')
+  const fallback = make('acme', 'fallback')
+  const teardowns: string[] = []
+  const report = await collectWorkspaces({ workRoot: root, retentionMs: DAY, now: () => now,
+    tickets: { list: () => [
+      { ...ended('with-repo', withRepo, new Date(now - 5 * DAY).toISOString()), execution: { directory: withRepo, name: 't', repo: 'repo-1' } } as unknown as Ticket,
+      { ...ended('fallback', fallback, new Date(now - 5 * DAY).toISOString()), execution: { directory: fallback, name: 't', repo: 'repo-2' } } as unknown as Ticket,
+    ] },
+    removeWorktree: async (repo, directory) => {
+      if (repo === 'repo-2') throw new Error('not a worktree')
+      teardowns.push(`${repo}:${directory}`)
+    } })
+  expect(teardowns).toEqual([`repo-1:${withRepo}`])
+  expect(report.errors).toEqual([])
+  expect(report.removed.sort()).toEqual([withRepo, fallback].sort())
+  expect(existsSync(withRepo)).toBe(false)
+  expect(existsSync(fallback)).toBe(false)
+})

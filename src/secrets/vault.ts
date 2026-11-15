@@ -61,7 +61,10 @@ export class SecretVault {
    */
   private restrictToUser(file: string): void {
     if (process.platform !== 'win32') return
-    const result = spawnSync('icacls', [file, '/inheritance:r', '/grant:r', `${userInfo().username}:F`], { windowsVerbatimArguments: true })
+    // 默认（非 verbatim）参数模式会为含空格的路径与用户名自动加引号；verbatim 模式
+    // 原样拼接会让 `C:\Users\John Smith\...` 被拆成两个参数，整个凭据子系统在含空格
+    // 用户目录的机器上不可用（评审 S2）。
+    const result = spawnSync('icacls', [file, '/inheritance:r', '/grant:r', `${userInfo().username}:F`])
     if (result.status !== 0) {
       throw new SecretError('secretUnreadable',
         `Could not restrict ${file} to the current user (icacls exit ${result.status}): ${String(result.stderr).trim()}`)

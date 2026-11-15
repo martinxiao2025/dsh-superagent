@@ -9,6 +9,7 @@ import type { Commands } from '../src/infra/commands.ts'
 import { commitWorkCopy } from '../src/code-repos/work.ts'
 import { gitEnv } from './fixtures/git.ts'
 import { readStandardTable } from '../src/task-sources/table.ts'
+import { splitTask } from '../src/task-sources/tasks.ts'
 import { TASK_SOURCE_DRIVERS, TaskSourceRegistry, taskSources } from '../src/task-sources/index.ts'
 import { excelTaskSource } from '../src/task-sources/excel.ts'
 import { feishuImTaskSource } from '../src/task-sources/feishu-im.ts'
@@ -213,6 +214,24 @@ describe('feishu im task source', () => {
     ])
   })
 
+  it('skips bot messages by default and includes them only when asked', async () => {
+    // 回归（评审 S4）：senderType 已采集却从未消费——集成机器人的每条消息都成为任务，
+    // 群内互动机器人还会形成「消息→任务→执行→新消息」的自我放大循环。
+    const api: FeishuImApi = { chats: async () => [], async messages() {
+      return [
+        { messageId: 'om_1', text: '人类消息', senderId: 'ou_1', senderType: 'user', createdAt: '1' },
+        { messageId: 'om_2', text: 'CI 构建通过', senderId: 'ou_bot', senderType: 'bot', createdAt: '2' },
+        { messageId: 'om_3', text: '审批机器人提醒', senderId: 'ou_bot2', senderType: 'app', createdAt: '3' },
+      ]
+    } }
+    const list = (includeBotMessages?: boolean) => feishuImTaskSource.list(
+      feishuImTaskSource.schema.parse({ feishuCredential: 'bot', chatId: 'oc_1', limit: 5, ...(includeBotMessages === undefined ? {} : { includeBotMessages }) }),
+      { signal: new AbortController().signal, commands: {} as Commands, feishuIm: async () => api })
+    // 默认只收人类消息；显式开启后机器人消息才进入清单。
+    expect((await list()).map(task => task.id)).toEqual(['om_1'])
+    expect((await list(true)).map(task => task.id)).toEqual(['om_1', 'om_2', 'om_3'])
+  })
+
   it('checks the credential and chat access before polling', async () => {
     const unset = await feishuImTaskSource.verify(feishuImTaskSource.schema.parse({}), 'feishuCredential', deps())
     expect(unset[0]).toMatchObject({ field: 'feishuCredential', ok: false, code: 'feishuCredentialUnset' })
@@ -236,6 +255,26 @@ describe('feishu im task source', () => {
     expect(messageTextOf('post', JSON.stringify({ title: '日报',
       content: [[{ tag: 'text', text: '第一段' }], [{ tag: 'text', text: '第二段' }]] }))).toBe('日报\n第一段\n第二段')
     expect(messageTextOf('image', '{}')).toBe('[图片]')
+  })
+})
+
+describe('work item hashing', () => {
+  // 回归（评审 S3）：多工作项的 contentHash 曾只覆盖工作项文本——标题或描述正文的修改
+  // 不改变 hash，已排队条目继续携带旧的派工文本执行。
+  it('changes the content hash when the task title or prose changes, but not when sibling items change', () => {
+    const of = (title: string, description: string, index: number) =>
+      splitTask({ id: 't1', title, description, status: 'todo' })[index]!
+    const baseline = of('导出修复', '- [ ] 修复 CSV\n验收：无引号错位\n- [ ] 修复 TSV', 0)
+    // 标题变化 → 换代。
+    expect(of('导出修复（重）', '- [ ] 修复 CSV\n验收：无引号错位\n- [ ] 修复 TSV', 0).contentHash).not.toBe(baseline.contentHash)
+    // 描述正文（非列表行，如验收标准）变化 → 换代。
+    expect(of('导出修复', '- [ ] 修复 CSV\n验收：带引号也不错位\n- [ ] 修复 TSV', 0).contentHash).not.toBe(baseline.contentHash)
+    // 本项文本变化 → 换代。
+    expect(of('导出修复', '- [ ] 修复 CSV 与 TSV\n验收：无引号错位\n- [ ] 修复 TSV', 0).contentHash).not.toBe(baseline.contentHash)
+    // 兄弟列表行的增删不改变本项的哈希：删除第二项不应取消重排第一项。
+    expect(of('导出修复', '- [ ] 修复 CSV\n验收：无引号错位', 0).contentHash).toBe(baseline.contentHash)
+    // itemKey 只由工作项文本决定，兄弟行增删不改变身份。
+    expect(of('导出修复', '- [ ] 修复 CSV\n验收：无引号错位', 0).itemKey).toBe(baseline.itemKey)
   })
 })
 

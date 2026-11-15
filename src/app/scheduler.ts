@@ -108,6 +108,7 @@ export class ProjectScheduler {
     this.jitter = host.jitter ?? Math.random
     this.writeback = new SchedulerWriteback({ host, registry: this.registry, syncRepo: this.syncRepo,
       busy: projectId => this.busy(projectId),
+      polling: projectId => this.reconcile.polling(projectId),
       sourceConfig: (fields, config, feishuCredential) => this.sourceConfig(fields, config, feishuCredential) })
     this.reconcile = new SchedulerReconcile({ host, nextPoll: this.nextPoll, errors: this.errors, deferred: this.deferred,
       registry: this.registry, syncRepo: this.syncRepo, busy: projectId => this.busy(projectId),

@@ -436,9 +436,10 @@ function rawCells(row: string): RawCell[] {
 /**
  * 把状态写入 xlsx 中匹配行的状态单元格，保留该单元格的样式属性与其他 ZIP 条目。
  * 状态写成内联字符串；目标单元格不存在时按列序插入新单元格。
- * @throws TaskFileError 当缺少工作表、状态列或找不到任务行时。
+ * 提供 `expectedStatus` 时执行 CAS 校验（评审 C3）：目标行当前状态必须与之匹配，否则拒绝写入。
+ * @throws TaskFileError 当缺少工作表、状态列、找不到任务行或 CAS 不匹配时。
  */
-export function writeXlsxStatus(buffer: Buffer, options: { sheet: string; columns: XlsxColumns; target: XlsxTarget; status: string }): Buffer {
+export function writeXlsxStatus(buffer: Buffer, options: { sheet: string; columns: XlsxColumns; target: XlsxTarget; status: string; expectedStatus?: string }): Buffer {
   const entries = zipEntries(buffer)
   const text = (name: string): string => {
     const found = entries.find(item => item.name === name)
@@ -455,7 +456,8 @@ export function writeXlsxStatus(buffer: Buffer, options: { sheet: string; column
 }
 
 /** 在工作表 XML 中定位任务行并替换状态单元格，返回新的工作表 XML。 */
-function updateSheet(xml: string, shared: readonly string[], options: { columns: XlsxColumns; target: XlsxTarget; status: string }): string {
+function updateSheet(xml: string, shared: readonly string[],
+  options: { columns: XlsxColumns; target: XlsxTarget; status: string; expectedStatus?: string }): string {
   const rows = [...xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)]
   if (!rows.length) throw new TaskFileError('工作表没有表头')
   const header = rawCells(rows[0]![2]!).map(cell => ({ index: cell.index, value: cellValue(attributes(cell.attrs), cell.body, shared) }))
@@ -471,6 +473,14 @@ function updateSheet(xml: string, shared: readonly string[], options: { columns:
     return (idIndex >= 0 && value(idIndex) === options.target.taskId) || (titleIndex >= 0 && value(titleIndex) === options.target.taskTitle)
   })
   if (!match) throw new TaskFileError(`任务清单中找不到任务：${options.target.taskId}`)
+  // CAS（评审 C3）：期望状态给出且清单行已不处于该状态时拒绝写入——状态可能已被人工修改。
+  if (options.expectedStatus !== undefined) {
+    const values = new Map(rawCells(match[2]!).map(cell => [cell.index, cellValue(attributes(cell.attrs), cell.body, shared)]))
+    const current = (statusIndex < 0 ? '' : values.get(statusIndex) ?? '').trim()
+    if (current !== options.expectedStatus.trim()) {
+      throw new TaskFileError(`任务清单的状态已不是「${options.expectedStatus}」（当前为「${current}」），回写被拒绝；请人工确认该任务的最终状态`)
+    }
+  }
   const rowNumber = Number(match[1]!.match(/\br="(\d+)"/)?.[1] ?? rows.indexOf(match) + 1)
   const cells = rawCells(match[2]!)
   const existing = cells.find(cell => cell.index === statusIndex)

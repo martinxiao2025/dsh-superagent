@@ -45,7 +45,18 @@ export class SchedulerDispatch {
   /** 这次尝试的建单触发器是否已落库；触发器与工单同事务写入，落库即代表建单事务已提交。 */
   private scheduledTrigger(entry: QueueEntry): boolean {
     // 可选链兜底：测试中的假存储可能未实现触发器仓储面，此时视为未落库。
-    return !!this.base.host.store.triggers?.get(key('trigger', 'schedule', entry.id, String(entry.attempt)))
+    return !!this.base.host.store.triggers?.get(this.triggerIdOf(entry))
+  }
+
+  /**
+   * 本次尝试的建单触发器 ID：attempt 与工单历史代次共同参与。
+   * attempt 是重试预算（自动重试递增）；但手动重试（面板 `retryEntry`）会把 attempt 归零，
+   * 若触发器只由 attempt 决定，归零后会命中历史尝试已用过的触发器，`engine.schedule`
+   * 幂等拿回**已结束**的旧工单——重试不会真正执行，还会把旧结果再次回写（评审 C1）。
+   * `tickets.length` 在每次真实建单后递增且永不复位，作为生命周期代次保证手动重试也拿到新触发器。
+   */
+  private triggerIdOf(entry: QueueEntry): string {
+    return key('trigger', 'schedule', entry.id, String(entry.attempt), String(entry.tickets.length))
   }
 
   settle(entry: QueueEntry, ticket: Ticket | undefined): void {
@@ -120,7 +131,8 @@ export class SchedulerDispatch {
     if (!project?.enabled) return false
     const starting: QueueEntry = { ...entry, state: 'starting', startedAt: this.base.stamp(), updatedAt: this.base.stamp(), dueAt: this.base.now() }
     // 每次尝试都必须是一个新的触发器与工单：复用已结束工单的触发器只会拿回旧工单，重试不会真正执行。
-    const triggerId = key('trigger', 'schedule', entry.id, String(entry.attempt))
+    // 手动重试会把 attempt 归零，因此触发器还要带上工单历史代次（见 triggerIdOf）。
+    const triggerId = this.triggerIdOf(entry)
     const repoId = projectRepoId(entry.project)
     const input: ScheduledTicket = {
       trigger: {
@@ -192,8 +204,12 @@ export function settleOutcome(entry: QueueEntry, ticket: Ticket | undefined): re
     if (outcome === 'stopped' && by === 'human') return [{ kind: 'finish', state: 'cancelled', reason: 'Stopped by a person' }]
     return [{ kind: 'retry', reason: `The ticket ended: ${outcome}` }]
   }
-  // 工作单元报告失败或阻塞后工单在等人；项目重试接管，不再依赖人工跟进。
-  if (ticketStage(ticket).stage === 'person') {
+  // person 阶段按动作白名单接管（评审 C2）：只有 blocked/failed（工作单元已停滞且在等人，
+  // 项目按既有语义自动重试接管）才 stop-then-retry。answer（工作单元向人提问）、review（ready
+  // 报告等待关注线程关闭）与 delivery（输入投递失败，执行器自身带退避重试）不再被下一个
+  // tick 强停重建——那会销毁工单上等待人的问题或已完成的报告，并烧掉项目重试预算。
+  const stage = ticketStage(ticket)
+  if (stage.stage === 'person' && (stage.action === 'blocked' || stage.action === 'failed')) {
     return [{ kind: 'stop-then-retry', ticketId: ticket.id, reason: 'The assignment did not finish' }]
   }
   return []

@@ -9,8 +9,8 @@ import { TASK_SHEET } from './excel-format.ts'
 import { parseDelimited, writeXlsxStatus } from './table.ts'
 import type { TaskFieldMap } from './kind.ts'
 
-/** 回写目标：任务编号与原始标题，用于在清单中定位唯一一行。 */
-export interface WriteTarget { taskId: string; taskTitle: string }
+/** 回写目标：任务编号与原始标题用于定位唯一一行；`expectedStatus` 是写入前的 CAS 期望值（评审 C3）。 */
+export interface WriteTarget { taskId: string; taskTitle: string; expectedStatus?: string }
 
 /** 文本清单的字节风格：BOM、换行符与文件末尾是否有换行。 */
 export interface TextStyle { bom: boolean; eol: '\n' | '\r\n'; finalNewline: boolean }
@@ -27,13 +27,16 @@ export function detectStyle(buffer: Buffer): TextStyle {
 /**
  * 把任务状态写入指定清单文件；任务来源驱动据此回写工作副本。
  * xlsx 固定写 `tasks` 工作表；文本清单保留原文件字节风格。
- * @throws 当文件格式不支持、找不到对应行或写入失败时。
+ * 提供 `expectedStatus` 时执行 CAS 校验（评审 C3）：目标行当前状态必须与之匹配，
+ * 不匹配抛错——人工在结算间隙改过清单时写入被拒绝，由人工仲裁而不是无提示覆盖。
+ * @throws 当文件格式不支持、找不到对应行、CAS 不匹配或写入失败时。
  */
 export async function writeTaskStatusAt(
   file: string,
   columns: TaskFieldMap,
   target: WriteTarget,
   status: string,
+  expectedStatus?: string,
 ): Promise<void> {
   const extension = extname(file).toLowerCase()
   if (extension === '.xlsx') {
@@ -42,6 +45,7 @@ export async function writeTaskStatusAt(
       columns: { id: columns.id, title: columns.title, status: columns.status },
       target,
       status,
+      expectedStatus,
     })
     await replaceFile(file, updated)
     return
@@ -60,6 +64,10 @@ export async function writeTaskStatusAt(
   const row = body.find(cells => (idIndex >= 0 && cells[idIndex] === target.taskId)
     || (titleIndex >= 0 && cells[titleIndex] === target.taskTitle))
   if (!row) throw new Error(`任务清单中找不到任务：${target.taskId}`)
+  // CAS（评审 C3）：期望状态给出且清单行已不处于该状态时拒绝写入——状态可能已被人工修改。
+  if (expectedStatus !== undefined && row[statusIndex]?.trim() !== expectedStatus.trim()) {
+    throw new Error(`任务清单的状态已不是「${expectedStatus}」（当前为「${row[statusIndex] ?? ''}」），回写被拒绝；请人工确认该任务的最终状态`)
+  }
   while (row.length <= statusIndex) row.push('')
   row[statusIndex] = status
   const temporary = `${file}.${process.pid}.tmp`

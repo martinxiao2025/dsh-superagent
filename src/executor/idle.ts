@@ -55,7 +55,9 @@ export function resumeAfter(w: WorkerContext, ticketId: string, assignmentId: st
       if (!(failure instanceof Later)) throw failure
       w.after(ticketId, SLOT_WAIT_MS, go); return
     }
-    const sent = w.host.sessions.prompt(sessionId, `retry:${assignmentId}:${tries}`, text, 'queue')
+    // requestId 必须每工单单调递增（评审 E1）：turnRetries.tries 在回合成功后清零，
+    // 若用它作键，同一分配第二次瞬态失败会复用早先已入历史的 ID，被幂等去重静默丢弃。
+    const sent = w.host.sessions.prompt(sessionId, `retry:${assignmentId}:${state.retrySeq++}`, text, 'queue')
     void w.background(sent.finally(() => {
       if (waking) w.slots.free(ticketId)
       const state = w.workers.get(ticketId)

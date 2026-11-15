@@ -473,7 +473,11 @@ export class Runtime extends Service implements SourceHost {
   private async reclaimWorkspaces(): Promise<void> {
     const report = await collectWorkspaces({ tickets: this.store.tickets,
       workRoot: executionRoot(this.store.settings(), this.machine.stateDir),
-      retentionMs: this.machine.workspaceRetentionDays.get() * 86_400_000 })
+      retentionMs: this.machine.workspaceRetentionDays.get() * 86_400_000,
+      // 删除前复查工单是否已复活（评审 E4）；先按镜像执行 git worktree 拆除再删目录，
+      // 避免镜像里残留 gitdir 元数据（残破引用会让复活工单的启动校验永久失败）。
+      stillOpen: ticketId => this.store.tickets.get(ticketId)?.ended === undefined,
+      removeWorktree: async (repo, directory) => { await this.commands.git(['worktree', 'remove', '--force', directory], join(this.machine.stateDir, 'repos', repo)) } })
     const detail = report.disabled ? 'Workspace reclaim is disabled'
       : `${report.removed.length} reclaimed, ${report.kept} kept, ${report.unknown} unknown, ${report.scanned} scanned`
         + (report.errors.length ? `; ${report.errors.join('; ')}` : '')

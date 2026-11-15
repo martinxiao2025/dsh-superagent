@@ -105,19 +105,26 @@ export function splitTask(task: RawTask): WorkItem[] {
   const parts = boxes.length ? boxes : numbered.length >= 2 ? numbered : []
   const seen = new Map<string, number>()
   // 工作项身份取文本摘要与重复序号：列表增删或重排不会把旧内容当成新项，也不会把不同项混为一谈。
-  const identity = (text: string): { itemKey: string; contentHash: string } => {
+  const identity = (text: string, content: string): { itemKey: string; contentHash: string } => {
     const base = simpleHash(text)
     const occurrence = seen.get(base) ?? 0
     seen.set(base, occurrence + 1)
-    return { itemKey: `${base}-${occurrence}`, contentHash: simpleHash(`${text}\u0000${task.id}`) }
+    // contentHash 覆盖最终派工给执行器的正文（评审 S3）：只对工作项文本做摘要时，
+    // 任务标题或描述正文的修改不会改变 hash，已排队条目会继续携带旧的组合文本被执行。
+    return { itemKey: `${base}-${occurrence}`, contentHash: simpleHash(`${content}\u0000${task.id}`) }
   }
   if (!parts.length) {
     const text = compose(task)
-    return [{ taskId: task.id, taskTitle: task.title, title: task.title, text, ...identity(`${task.title}\u0000${text}`) }]
+    return [{ taskId: task.id, taskTitle: task.title, title: task.title, text, ...identity(`${task.title}\u0000${text}`, text) }]
   }
+  // 多工作项的内容哈希作用域（评审 S3 的精确定义）：标题 + 描述中的非列表行（验收标准等
+  // 正文）+ 本项自身文本。兄弟列表行的增删不改变其他项的哈希——删除第二项不应取消重排
+  // 第一项；而标题或正文的变化必须让所有项换代，否则已排队条目会执行旧内容。
+  const prose = lines.filter(line => !CHECKBOX.test(line) && !NUMBERED.test(line)).filter(line => line.trim())
   return parts.map(part => {
     const text = compose(task, part)
-    return { taskId: task.id, taskTitle: task.title, title: `${task.title} / ${part}`, text, ...identity(`item\u0000${part}`) }
+    const scope = [task.title, ...prose, part].join('\u0000')
+    return { taskId: task.id, taskTitle: task.title, title: `${task.title} / ${part}`, text, ...identity(`item\u0000${part}`, scope) }
   })
 }
 

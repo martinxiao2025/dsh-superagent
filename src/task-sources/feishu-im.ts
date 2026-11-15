@@ -22,6 +22,9 @@ export const FeishuImTaskSourceSchema = z.object({
   /** 生成的 RawTask.status；必须与项目准入状态一致，否则轮询不会产生任务。 */
   taskStatus: z.string().trim().min(1).max(100).default('待处理'),
   stripMentions: z.boolean().default(true),
+  /** 默认跳过机器人消息（评审 S4）：集成机器人的每条消息都会变成任务，
+   *  群内互动机器人还会形成「消息→任务→执行→新消息」的自我放大循环。 */
+  includeBotMessages: z.boolean().default(false),
 }).strict()
 export type FeishuImTaskSourceConfig = z.infer<typeof FeishuImTaskSourceSchema>
 
@@ -105,6 +108,13 @@ export const feishuImTaskSource: TaskSourceDriver<FeishuImTaskSourceConfig> = {
     const messages = await api.messages(config.chatId, { limit: config.limit, signal: ctx.signal })
     ctx.signal.throwIfAborted()
     return messages.flatMap(message => {
+      // 机器人消息默认不作为任务（评审 S4）：飞书 sender_type 取值 user/app，
+      // `app` 是机器人与应用发送的消息；集成机器人的每条消息都会成为任务，
+      // 群内互动机器人还会形成「消息→任务→执行→新消息」的自我放大循环。
+      // 消息来源侧（sources/feishu-trigger.ts）对机器人消息的处理与此对齐，
+      // 避免两条飞书链路对同一消息的态度相反。
+      const machine = message.senderType !== 'user'
+      if (machine && !config.includeBotMessages) return []
       const text = cleanText(message.text, config.stripMentions)
       if (!text) return []
       const [first] = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)

@@ -178,6 +178,52 @@ describe('syncCode', () => {
     expect(calls.some(args => args[0] === 'init')).toBe(false)
   })
 
+  it('keeps local writeback commits when only the mirror branch is ahead（评审 S1）', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake(github, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return `${directory}\n`
+        if (args.includes('--verify') && args.some(arg => arg.startsWith('refs/heads/'))) return 'refs/heads/main'
+        if (args.includes('--verify')) return 'refs/remotes/origin/main'
+        return 'local789' // HEAD 始终是镜像上的回写提交；远端没有新提交。
+      }
+      if (name === 'remote') return args[1] === 'get-url' ? 'https://github.com/acme/widgets.git\n' : ''
+      if (name === 'for-each-ref') return 'origin/main'
+      if (name === 'rev-list') return args.includes('origin/main..main') ? '1' : '0'
+      return ''
+    })
+    const result = await syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal })
+    // 本地领先而远端未动：回写提交保留，ff-only 是空操作，绝不重置。
+    expect(result).toEqual({ directory, commit: 'local789', changed: false, empty: false })
+    expect(calls.some(args => args.includes('reset'))).toBe(false)
+    expect(calls).toContainEqual(['checkout', '--quiet', 'main'])
+    expect(calls).toContainEqual(['merge', '--ff-only', '--quiet', 'origin/main'])
+  })
+
+  it('fails loudly on divergence instead of resetting writeback commits away（评审 S1）', async () => {
+    const directory = temporary()
+    const { commands, calls } = fake(github, (args) => {
+      const name = command(args)
+      if (name === 'rev-parse') {
+        if (args.includes('--show-toplevel')) return `${directory}\n`
+        if (args.includes('--verify') && args.some(arg => arg.startsWith('refs/heads/'))) return 'refs/heads/main'
+        if (args.includes('--verify')) return 'refs/remotes/origin/main'
+        return 'local789'
+      }
+      if (name === 'remote') return args[1] === 'get-url' ? 'https://github.com/acme/widgets.git\n' : ''
+      if (name === 'for-each-ref') return 'origin/main'
+      if (name === 'rev-list') return args.includes('origin/main..main') ? '1' : '2'
+      return ''
+    })
+    await expect(syncCode({ commands, stateDir: temporary(), codeSource: 'demo-tree', branch: 'main', directory,
+      signal: new AbortController().signal })).rejects.toThrow('分叉')
+    // 已完成的回写副作用不会重放：静默重置等于丢写；这里必须显式失败且不做任何破坏性操作。
+    expect(calls.some(args => args.includes('reset'))).toBe(false)
+    expect(calls.some(args => args.includes('merge'))).toBe(false)
+  })
+
   it('refuses a record that is not a GitHub or GitLab repository', async () => {
     const { commands } = fake(undefined, () => '')
     await expect(syncCode({ commands, stateDir: temporary(), codeSource: 'feishu', branch: 'main', directory: temporary(),

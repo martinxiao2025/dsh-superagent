@@ -152,6 +152,18 @@ export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
     if (!(await hasRef(git, remoteRef))) throw new Error(`代码仓库没有分支：${branch}`)
     const local = await hasRef(git, `refs/heads/${branch}`)
     if (local) {
+      // 镜像上可能有回写产生的本地提交（评审 S1：011 P0-2 的「提交代替脏文件」修复的后果）。
+      // 三种情况全部无损处理：
+      // · 本地不领先：正常路径，`merge --ff-only` 快进到远端；
+      // · 本地领先、远端未动：保留本地提交（回写结果还在镜像上），ff-only 是空操作——待 push 能力接入后推送；
+      // · 双方都前进（分叉）：显式失败并说明处置。绝不静默 reset 丢弃本地回写提交——
+      //   已完成的回写副作用不会重放，重置等于丢写，清单行回到待处理还可能触发重复执行。
+      const ahead = Number((await git(['rev-list', '--count', `origin/${branch}..${branch}`])).trim() || '0')
+      const behind = Number((await git(['rev-list', '--count', `${branch}..origin/${branch}`])).trim() || '0')
+      if (ahead > 0 && behind > 0) {
+        throw new Error(`代码镜像与远端分叉：本地有 ${ahead} 个未推送的回写提交，远端另有 ${behind} 个新提交。`
+          + '请在镜像目录手工 rebase 或推送本地提交后重试（push 能力接入见优化计划 S1）')
+      }
       await git(['checkout', '--quiet', branch])
       await git(['merge', '--ff-only', '--quiet', `origin/${branch}`])
     } else {

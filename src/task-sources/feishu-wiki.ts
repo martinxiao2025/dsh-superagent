@@ -136,6 +136,16 @@ export const feishuWikiTaskSource: TaskSourceDriver<FeishuWikiTaskSourceConfig> 
     try { await api.node(nodeToken) } catch (error) {
       throw new Error(`无法回写：多维表格 ${nodeToken} 已不可读（${error instanceof Error ? error.message : String(error)}）`)
     }
+    // CAS（评审 C3）：给出期望状态时先读记录当前值，不匹配拒绝写入——人工修改不被无提示覆盖。
+    if (target.expectedStatus !== undefined) {
+      const column = config.statusColumn || DEFAULT_TASK_FIELDS.status
+      const current = (await api.records(nodeToken, tableId)).find(record => record.recordId === recordId)
+        ?.fields[column]
+      const currentText = typeof current === 'string' ? current : Array.isArray(current) ? current.map(String).join('') : ''
+      if (currentText.trim() !== target.expectedStatus.trim()) {
+        throw new Error(`任务清单的状态已不是「${target.expectedStatus}」（当前为「${currentText || '(空)'}」），回写被拒绝；请人工确认该任务的最终状态`)
+      }
+    }
     await api.updateRecord(nodeToken, tableId, recordId, { [config.statusColumn || DEFAULT_TASK_FIELDS.status]: status })
   },
 }

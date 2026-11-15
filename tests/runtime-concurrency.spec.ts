@@ -833,6 +833,34 @@ it('tells a passing failure of the provider or the network from one that a later
     expect(transient(error)).toBe(false)
   }
 })
+
+it('delivers a fresh resume message for each transient failure even after a successful retry reset the counter', async () => {
+  // 回归（评审 E1）：requestId 曾用 `retry:<assignmentId>:<tries>`，而 tries 在回合成功后清零。
+  // 同一分配内「失败→重试成功→再失败」会让第二次恢复消息复用早先已入会话历史的 ID，
+  // 被 AgentDelivery 幂等去重静默丢弃，工单永久 running。现在 requestId 用单调递增的 retrySeq。
+  const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
+  const agent = h.agents.get(one.sessionId)!
+  const error = () => h.ctx.emit('agent/error', { agent, turn: 1, step: 1, error: Object.assign(new Error('x'), { status: 503 }) } as never)
+  const resumeIds = () => h.deliveries.mock.calls.map(([call]) => call)
+    .filter(call => call.sessionId === one.sessionId && call.text.includes('Your last turn failed for a passing reason'))
+    .map(call => call.id)
+  // 第一次瞬态失败：退避后恢复消息进入会话历史。
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    error()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(resumeIds()).toHaveLength(1)
+    // 回合恢复成功（计数清零），随后同一分配再次瞬态失败：退避后第二次恢复消息
+    // 必须带着新的 ID 真实投递，而不是复用历史 ID 被 AgentDelivery 去重吞掉。
+    idle(one.sessionId)
+    await h.runtime.idle()
+    error()
+    await vi.advanceTimersByTimeAsync(15_000)
+    const ids = resumeIds()
+    expect(ids).toHaveLength(2)
+    expect(ids[0]).not.toBe(ids[1])
+  } finally { vi.useRealTimers() }
+})
 it('reports a worker waiting when its turn ends after a person answered its blocked report', async () => {
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
   await h.runTool(one.sessionId, 'orchestrator_report', { state: 'blocked', summary: 'Which color?' })

@@ -314,7 +314,9 @@ export interface Ticket {
  * 此时工单会结束，除非其工作尚未完成（见 `Tickets.unfinished`）。
  */
 export interface Follow { thread: string; own: boolean; closed?: { at: string; outcome: 'merged' | 'closed' } }
-export interface Execution { name: string; project?: string; directory: string; assignment: string }
+export interface Execution { name: string; project?: string; directory: string; assignment: string;
+  /** 工单工作区检出自的代码仓库记录 ID；工作区回收按它定位镜像并注销 worktree（评审 E4）。 */
+  repo?: string }
 
 /** 工单是否未结束：它尚未结束。 */
 export const liveTicket = (ticket: Pick<Ticket, 'ended'>): boolean => !ticket.ended

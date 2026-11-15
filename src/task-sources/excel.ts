@@ -124,11 +124,11 @@ export const excelTaskSource: TaskSourceDriver<ExcelTaskSourceConfig> = {
     ctx.signal.throwIfAborted()
     return tasks
   },
-  /** 回写状态列；完成/失败映射到标准枚举后写入 `tasks` 表。 */
+  /** 回写状态列；完成/失败映射到标准枚举后写入 `tasks` 表；CAS 期望值透传给底层写入（评审 C3）。 */
   async writeback(config: ExcelTaskSourceConfig, target, status, ctx: TaskSourceWriteContext): Promise<void> {
     const directory = ctx.syncRepo ? await ctx.syncRepo() : undefined
     const file = await taskFilePath(config, ctx.syncRepo)
-    await writeTaskStatusAt(file, STANDARD_TASK_FIELDS, target, standardStatus(status))
+    await writeTaskStatusAt(file, STANDARD_TASK_FIELDS, target, standardStatus(status), target.expectedStatus)
     if (directory && ctx.commands) {
       await commitWorkCopy((args, cwd) => ctx.commands!.git(args, cwd), directory, file,
         `chore: record task ${target.taskId} as ${status}`)

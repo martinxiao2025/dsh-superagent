@@ -122,6 +122,13 @@ export interface WorkerState {
   launchRetries: { assignmentId: string; tries: number }
   /** 本工单当前任务分配的回合重试计数。 */
   turnRetries: { assignmentId: string; tries: number }
+  /**
+   * 本工单恢复投递的单调序号：requestId 的幂等键必须覆盖「语义上的一次尝试」，
+   * 而 `turnRetries.tries` 在回合成功后清零（`clearRetries`），复用它会让第二次瞬态失败
+   * 生成的恢复消息与早先已入会话历史的消息同 ID，被 `AgentDelivery` 幂等去重静默丢弃，
+   * 工单因此卡死。序号只在同一工单内递增，永不复位（评审 E1）。
+   */
+  retrySeq: number
   /** 正在等待瞬时失败退避计时器以恢复其工作单元回合的任务分配 ID。 */
   resuming?: string
   /**
@@ -218,7 +225,7 @@ export class DshExecutor implements Executor {
   private state(ticketId: string): WorkerState {
     let state = this.workers.get(ticketId)
     if (!state) {
-      state = { launchRetries: { assignmentId: '', tries: 0 }, turnRetries: { assignmentId: '', tries: 0 }, timers: new Set() }
+      state = { launchRetries: { assignmentId: '', tries: 0 }, turnRetries: { assignmentId: '', tries: 0 }, retrySeq: 0, timers: new Set() }
       this.workers.set(ticketId, state)
     }
     return state

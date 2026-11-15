@@ -228,14 +228,44 @@ it('成功结束后回写完成状态，并保留队列记录', async () => {
   const entry = [...h.entries.values()][0]!
   h.tickets.get(entry.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
   h.scheduler.observe(entry.ticketId!)
-  // 回写进入持久化副作用队列（带尝试次数的键），而不是发起即忘。
-  expect(h.effects.at(-1)).toMatchObject({ kind: 'writeback', payload: { project: 'a', task: 'a1', status: 'done' } })
+  // 回写进入持久化副作用队列（带尝试次数的键），而不是发起即忘；CAS 期望值取首个待处理状态。
+  expect(h.effects.at(-1)).toMatchObject({ kind: 'writeback', payload: { project: 'a', task: 'a1', status: 'done', expectedStatus: 'todo' } })
   await h.flush()
   expect(h.entries.get(entry.id)).toMatchObject({ state: 'succeeded', ticketId: entry.ticketId })
   expect(h.driver.written.at(-1)).toMatchObject({ taskId: 'a1', status: 'done' })
   // 已经成功的任务即使仍在来源中，也不会重复入队。
   await h.scheduler.poll('a')
   expect([...h.entries.values()]).toHaveLength(1)
+})
+
+it('多工作项任务的回写按任务聚合：全部终态才写一次，状态由全部结果决定（评审 C3）', async () => {
+  const h = setup({ a: project('a') })
+  // 两个复选框工作项。
+  h.driver.tasks = [{ id: 'a1', title: 'A 一', description: '- [ ] 第一项\n- [ ] 第二项', status: 'todo' }]
+  await h.scheduler.poll('a')
+  h.scheduler.pump()
+  const [first, second] = [...h.entries.values()].sort((left, right) => left.item - right.item)
+  // 第一项成功：第二项仍在队列，回写不入队（等待聚合）。
+  h.tickets.get(first!.ticketId!)!.ended = { outcome: 'completed', by: 'executor', at: '' }
+  h.scheduler.observe(first!.ticketId!)
+  expect(h.effects.filter(effect => effect.kind === 'writeback')).toHaveLength(0)
+  expect(h.driver.written).toHaveLength(0)
+  // 第二项耗尽重试（maxRetries=2）：每次重试到期后重建工单再报告 dropped。
+  for (let round = 0; round <= 2; round++) {
+    const current = h.entries.get(second!.id)!.ticketId
+    if (!current) { h.entries.set(second!.id, { ...h.entries.get(second!.id)!, dueAt: 0 }); h.scheduler.pump() }
+    const ticketId = h.entries.get(second!.id)!.ticketId!
+    h.tickets.get(ticketId)!.ended = { outcome: 'dropped', by: 'executor', at: '' }
+    h.scheduler.observe(ticketId)
+  }
+  // 全部工作项已终态：聚合回写恰好一次，状态取 failed（任一失败即失败）。
+  const effects = h.effects.filter(effect => effect.kind === 'writeback')
+  expect(effects).toHaveLength(1)
+  expect(effects[0]).toMatchObject({ payload: { task: 'a1', status: 'failed', expectedStatus: 'todo' } })
+  await h.flush()
+  expect(h.driver.written).toEqual([{ taskId: 'a1', status: 'failed' }])
+  expect(h.entries.get(first!.id)).toMatchObject({ state: 'succeeded' })
+  expect(h.entries.get(second!.id)).toMatchObject({ state: 'failed' })
 })
 
 it('重启后从持久化队列恢复：启动中没有工单的条目重新排队', async () => {
@@ -385,6 +415,23 @@ it('手动扫描与定时检查互斥，同一项目只轮询一次', async () =
   await Promise.all([scan, tick])
   expect(h.driver.calls).toBe(1)
   expect([...h.entries.values()]).toHaveLength(1)
+})
+
+it('轮询进行中时另一条通路的轮询落空，互斥落在项目上（评审 C4）', async () => {
+  // 回归背景：手动 scan 与 tick 投递的 poll 副作用各自持并发池（数值相同但互不感知），
+  // 慢速轮询期间另一通路的同项目调用会并发 fetch/merge 同一工作副本。
+  const h = setup({ a: project('a') })
+  h.driver.tasks = [task('a1', 'A 一')]
+  let release: (() => void) | undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  ;(h.driver as unknown as { list(): Promise<RawTask[]> }).list = async () => { h.driver.calls += 1; await gate; return h.driver.tasks }
+  // 两条通路并发轮询同一项目：第二条在 in-flight 期间直接落空。
+  const first = h.scheduler.poll('a')
+  const second = h.scheduler.poll('a')
+  await new Promise(resolve => setTimeout(resolve, 20))
+  release?.()
+  await Promise.all([first, second])
+  expect(h.driver.calls).toBe(1)
 })
 
 it('队列快照暴露下次轮询时间与最近错误', async () => {

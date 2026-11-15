@@ -42,12 +42,31 @@ export interface ReconcileContext {
 
 /** 轮询与合并：项目任务来源的一次读取结果原子地并入队列。 */
 export class SchedulerReconcile {
+  /** 正在轮询的项目：手动 scan、tick 投递的 poll 副作用与 pollNow 三条通路共用（评审 C4）。 */
+  private readonly inFlight = new Set<string>()
+
   constructor(private readonly base: ReconcileContext) {}
+
+  /** 项目是否正被轮询；回写（writeback）据此与轮询互斥（评审 S9）。 */
+  polling(projectId: string): boolean { return this.inFlight.has(projectId) }
 
   /** 轮询一个项目：读取任务来源，取消消失的任务，把新的工作项入队；`settings` 由调用链传入以避免重复读取。 */
   async poll(projectId: string, settings: Settings = this.base.host.settings()): Promise<void> {
     const project = settings.projects[projectId]
     if (!project?.enabled) return
+    // 资源级互斥（评审 C4）：互斥应落在工作副本这一共享资源上，而不是调用方的池子上。
+    // 手动 scan 与 tick 投递的 poll 副作用各自持并发池，数值相同不代表同一项目不重叠；
+    // 已有轮询在跑时直接让本次调用落空（到期投递的副作用下次 tick 会再来）。
+    if (this.inFlight.has(projectId)) return
+    this.inFlight.add(projectId)
+    try {
+      await this.pollExclusive(projectId, project, settings)
+    } finally {
+      this.inFlight.delete(projectId)
+    }
+  }
+
+  private async pollExclusive(projectId: string, project: Settings['projects'][string], settings: Settings): Promise<void> {
     const interval = project.schedule.intervalMinutes * 60_000
     // 项目有任务在执行时不拉取：同步会改写轮询工作副本，与 worker 的检出互相踩。
     // 推迟到 `min(轮询间隔, BUSY_RETRY_MS)` 之后重试，原因写进快照供排障，不静默丢弃。

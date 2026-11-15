@@ -54,9 +54,13 @@ export async function materializeWorkspace(input: WorkspaceInput): Promise<'reus
   // 上次可能留下了已删除目录的 worktree 元数据，先清理再创建。
   await git(['worktree', 'prune'], checkout)
   const branch = input.branch?.trim()
-  const ref = branch && (await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], checkout).catch(() => '')).trim()
-    ? branch : 'HEAD'
-  await git(['worktree', 'add', '--detach', directory, ref], checkout)
+  // 请求了分支但镜像中不存在其本地引用：显式失败而不是静默检出 HEAD（评审 E2）。
+  // 镜像可能尚未轮询到新分支（项目刚切换 execution.branch 或上轮同步失败），
+  // 静默回退会让 worker 在旧分支的顶端开工并可能提交/发 PR。
+  if (branch && !(await git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], checkout).catch(() => '')).trim()) {
+    throw new Error(`工作副本中没有分支 ${branch}：项目刚切换分支或镜像尚未同步，等待下一次轮询后重试`)
+  }
+  await git(['worktree', 'add', '--detach', directory, branch ?? 'HEAD'], checkout)
   return 'created'
 }
 
