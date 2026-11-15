@@ -393,6 +393,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/tools/definitions/route.ts`、`src/app/tools/definitions/ticket.ts`、`src/app/tools/definitions/eval.ts`、`src/app/tools/definitions/replies.ts`、`src/app/tools/definitions/settings.ts`、`src/app/tools/definitions/prompts.ts` | 主会话各工具的定义：路由（RouteItemSchema/FIELDS/route）、工单动作、评估、回复与线程、设置与策略同步、提示词保存 |
 | `src/app/tools/definitions/retro.ts` | `orchestrator_retrospective`：按修订/模型/阶段分桶的用量与工单结果聚合（自我升级闭环的度量入口；改进经 `orchestrator_prompts_save`/`orchestrator_settings_save` 落地） |
 | `src/app/runtime/credentials.ts` | `buildCredentials`：凭据域装配工厂（从组合根拆出）——加密存储、两域凭据服务与按凭据缓存的飞书读取能力，以及 `feishuCredentialReferences` |
+| `src/app/project-workspaces.ts` | `ProjectWorkspaces`：宿主侧项目归类——项目 workspace 幂等建立（标题=项目名）、改名同步、项目删除时注销，工作区回收后按路径遗忘 |
 | `src/infra/worker-dispatch-source.ts` | 调度器垫片的源码模板（`WORKER_DISPATCH_BODY`）：从 `worker-sources.ts` 拆出，可被语法检查与测试直接加载 |
 | `src/app/tools/executor.ts` | 执行器会话的工具 |
 | `src/app/http/routes.ts` | `/orchestrator/api` 路由表与视图组装：`HttpHost`（HTTP 层唯一能力面）、`stateView` 等面板视图的类型出口 |
@@ -513,6 +514,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/win32.spec.ts` | `infra/win32.ts` 的单源 Windows 规则：cmd 引用、路径归一、PATHEXT，以及垫片源码形态与实现的行为一致 |
 | `tests/usage-meter.spec.ts` | `UsageMeter`：master/worker 归因落账、软档提醒与子代理封锁、项目预算优先、硬档结束工单、无预算与无 usage 事件忽略 |
+| `tests/project-workspaces.spec.ts` | `ProjectWorkspaces`：项目 workspace 幂等建立与改名同步、项目删除时注销（记录先删的路径遗忘）、回收路径遗忘 |
 | `tests/worker-sources.spec.ts` | 调度器脚本的直接单测：以 Node 运行分发脚本正文，验证命令识别、记录选择（显式指定 → 目录祖先登记 → 该种类唯一一条，绝不按位置兜底）、worker-bin 离开 PATH 与凭据协议参数转发 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |

@@ -24,7 +24,7 @@ import type { RegisterTool, Tool } from './tools/tool.ts'
 export interface SessionsHost {
   /** DSH Cordis 上下文：会话、智能体、持久化及其事件。 */
   readonly context: Context
-  readonly store: Pick<Store, 'tickets' | 'settings' | 'get' | 'set' | 'keys'>
+  readonly store: Pick<Store, 'tickets' | 'settings' | 'get' | 'set' | 'keys' | 'projects' | 'triggers'>
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'compose' | 'skills'>
   readonly effects: Pick<Effects, 'enqueue' | 'handle' | 'idle' | 'pending'>
   /** `models` 健康条目，报告等待模型预算重试的受管会话。 */
@@ -176,12 +176,27 @@ export class Sessions {
       await ctx.sessionController.create({ sessionId: id as SessionId, workspaceId: workspace.id,
         agentPreset: role === 'worker' ? WORKER_PRESET : ROUTER_PRESET })
       result = await ctx.sessionController.resolveAgent(id as SessionId)
+      // 宿主侧归类（M5）：workspace 标题即宿主侧边栏的分组名。主会话固定命名；
+      // 工单会话按「<项目名> · <工单标题>」命名（同项目在宿主列表按前缀聚拢），无项目时沿用工单标题。
+      // 复用既有 workspace（会话已存在）时不改写标题：人工改过的命名不被自动化覆盖。
+      await workspace.setTitle(role === 'orchestrator' ? 'dsh-superagent 编排器' : this.workerWorkspaceTitle(id, title))
+        .catch(error => ctx.logger.warn('dsh-superagent could not title a workspace: %s', String(error)))
     }
     if ('error' in result) throw result.error
     await this.decorate(result.agent)
     ctx.permissionPresets.set(result.agent.session, 'danger-full-access')
     await ctx.sessionController.rename({ sessionId: id as SessionId, title })
     return result.agent
+  }
+  /** 工单 workspace 的标题：`<项目名> · <工单标题>`；项目未配置时用来源记录 ID，两者皆缺时沿用会话标题。 */
+  private workerWorkspaceTitle(sessionId: string, fallback: string): string {
+    const ticketId = ticketOfSession(sessionId)
+    const ticket = ticketId === undefined ? undefined : this.host.store.tickets.get(ticketId)
+    if (!ticket) return fallback
+    const projectId = ticket.execution?.project
+    const project = projectId === undefined ? undefined : this.host.store.projects.get(projectId)
+    const prefix = project?.name ?? (this.host.store.triggers.get(ticket.origin.triggerId)?.source ?? '')
+    return prefix ? `${prefix} · ${ticket.title}` : ticket.title
   }
   /** 返回 `sessionId` 是否已持有在 `requestId` 下投递的消息；若会话不存在则返回 `false`。 */
   async holds(sessionId: string, requestId: string): Promise<boolean> {

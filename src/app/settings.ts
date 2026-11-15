@@ -97,6 +97,8 @@ export interface SettingsHost {
   readonly setup: Pick<Setup, 'configured' | 'checkAccounts' | 'blockCommands' | 'restart'>
   /** 触发一次即时轮次，使设置保存后新获允许的工作立即运行。 */
   requestPass(): void
+  /** 宿主侧项目 workspace 归类（M5）：保存/删除项目后建立/改名/注销；缺省为空操作（测试桩）。 */
+  readonly workspaces?: { sync(projectId: string): Promise<void>; remove(projectId: string): Promise<void> }
 }
 
 /**
@@ -340,6 +342,8 @@ export class Settings {
     // 否则部署里没有新项目的仓库来源，调度轮询会以「记录必须是 GitHub 或 GitLab」失败。
     const restarting = projectsChanged(before, store.projects.list()) || !this.host.setup.configured()
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    // 宿主侧归类（M5）：项目已入库，建立/改名其 workspace；失败只告警，不阻塞设置保存。
+    this.host.workspaces?.sync(recordId).catch(error => this.host.context.logger.warn('dsh-superagent could not sync a project workspace: %s', String(error)))
     if (restarting) this.host.setup.restart()
     return { id: recordId, revision: store.blockRevision(block), restarting, context_delivery: delivery }
   }
@@ -364,6 +368,8 @@ export class Settings {
     })
     const restarting = projectsChanged(before, store.projects.list()) || !this.host.setup.configured()
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    // 宿主侧归类（M5）：项目改名或启停后同步其 workspace；失败只告警，不阻塞保存。
+    this.host.workspaces?.sync(id).catch(error => this.host.context.logger.warn('dsh-superagent could not sync a project workspace: %s', String(error)))
     if (restarting) this.host.setup.restart()
     else this.host.requestPass()
     return { saved: true, revision: store.blockRevision(block), policy_changed: false, restarting, context_delivery: delivery,
@@ -398,6 +404,8 @@ export class Settings {
     // 删除项目同样改变部署材料：仓库来源要在初始化重跑后移出部署，避免残留可同步的孤儿记录。
     const restarting = projectsChanged(before, store.projects.list()) || !this.host.setup.configured()
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
+    // 宿主侧归类（M5）：注销项目的 workspace 分组节点（目录与工单会话日志保留）。
+    this.host.workspaces?.remove(id).catch(error => this.host.context.logger.warn('dsh-superagent could not remove a project workspace: %s', String(error)))
     if (restarting) this.host.setup.restart()
     return { removed: true as const, restarting, context_delivery: delivery }
   }

@@ -241,8 +241,22 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const webServer = { host: '127.0.0.1', port: 3082, register: (route: { handler: HttpHandler }) => { http = route.handler; return () => {} } }
   const jobs = jobRegistry(id => agents.get(id))
   const subagents = subagentRuntime(agents)
+  /** workspaceRegistry 的记录面（M5 断言用）：created/deleted/titles。 */
+  const registry = { created: [] as { path: string; title?: string }[], titles: {} as Record<string, string>, deleted: [] as string[] }
   const services = { agents, llm: { resolveCallConfig: vi.fn(async (value: unknown) => value) }, sessionController: controller,
-    sessionPersistence: persistence, workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess, webServer,
+    sessionPersistence: persistence,
+    // workspaceRegistry：记录 create/get/list/delete 与 setTitle，供宿主侧项目归类的断言（M5）。
+    workspaceRegistry: {
+      create: async (cwd: string, title?: string) => {
+        registry.created.push({ path: cwd, title })
+        registry.titles[cwd] = title ?? cwd
+        return { id: cwd, title: registry.titles[cwd]!, setTitle: async (value: string) => { registry.titles[cwd] = value } }
+      },
+      get: (id: string) => registry.created.some(item => item.path === id)
+        ? { id, title: registry.titles[id]!, path: id, setTitle: async (value: string) => { registry.titles[id] = value } } : undefined,
+      list: () => registry.created.filter(item => !registry.deleted.includes(item.path)).map(item => ({ id: item.path, path: item.path })),
+      delete: async (id: string) => { registry.deleted.push(id) } },
+    permissionPresets: { set: () => {} }, subprocess, webServer,
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
@@ -304,7 +318,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const step = (sessionId: string) => { steps.get(sessionId)!() }
   /** worker 的某个步骤会认领等待它的内容，并在会话取走它之前被切断。 */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
-  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, addFeishuSource, api, controller, subprocess, hooks, resolveDefault, stop,
+  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, addFeishuSource, api, controller, subprocess, hooks, resolveDefault, stop, workspaces: registry,
     jobs, subagents, step, claim }
 }
 export type Host = Awaited<ReturnType<typeof startRuntime>>

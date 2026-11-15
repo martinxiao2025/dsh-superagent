@@ -108,7 +108,7 @@ beforeEach(async () => {
   const ctx = new Context()
   const services = { agents, llm: { resolveCallConfig: vi.fn(async value => value) }, sessionController: controller,
     sessionPersistence: { flush: vi.fn(async () => {}), open: vi.fn(async () => ({ read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} })) },
-    workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) }, permissionPresets: { set: () => {} }, subprocess,
+    workspaceRegistry: { create: async (cwd: string) => ({ id: cwd, setTitle: async () => {} }) }, permissionPresets: { set: () => {} }, subprocess,
     webServer: { host: '127.0.0.1', port: 3082, register: () => () => {} }, jobs: jobs.service }
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
   const BOT = join(directory, 'lark-bot')

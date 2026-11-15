@@ -133,7 +133,7 @@ async function start() {
   const ctx = new Context()
   const history = { read: async () => ({ events: [] }), [Symbol.asyncDispose]: async () => {} }
   const services = { agents, llm: { resolveCallConfig: async (value: unknown) => value },
-    workspaceRegistry: { create: async (cwd: string) => ({ id: cwd }) },
+    workspaceRegistry: { create: async (cwd: string) => ({ id: cwd, setTitle: async () => {} }) },
     sessionController: { create, resolveAgent, selectModel: async () => {}, rename: async () => {}, inspect: async () => ({ events: [] }) },
     sessionPersistence: { flush: async () => {}, open: async () => history }, permissionPresets: { set: () => {} }, subprocess,
     webServer: { host: '127.0.0.1', port: 3082, register: () => () => {} } }

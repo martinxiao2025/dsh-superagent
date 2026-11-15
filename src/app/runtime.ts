@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import { mkdirSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { lockSync } from 'proper-lockfile'
 import { Engine, key, reasonText, type EngineForSettings, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
@@ -66,6 +67,7 @@ import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
 import { UsageMeter } from './usage-meter.ts'
+import { ProjectWorkspaces, type WorkspaceRegistryLike } from './project-workspaces.ts'
 
 // 来源插件仅通过 `SourceHost` 服务接口与 dsh-superagent 交互。
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -124,6 +126,8 @@ export class Runtime extends Service implements SourceHost {
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** 用量计量与预算闸；`initialize()` 中装配（engine 可用后）。 */
   private usage?: UsageMeter
+  /** 宿主侧项目 workspace 归类（M5）；`buildSessions` 中装配，设置服务与工作区回收经由它。 */
+  private workspaces?: ProjectWorkspaces
   private readonly loops = new Set<{ controller: AbortController; running: Promise<void> }>()
   /** 当主会话工具正在执行引擎命令时非零，用于抑制自触发的领域事件通知。 */
   private quiet = 0
@@ -240,6 +244,9 @@ export class Runtime extends Service implements SourceHost {
   /** 构造会话管理器、设置服务与执行器；执行器经惰性 getter 回读稍后装配的引擎。必须晚于 `buildSources`。 */
   private buildSessions(environment: (ticket: Ticket) => Variable[], link: (trigger: Trigger, signal?: AbortSignal) => Promise<{ source_url?: string; source_url_read?: string }>) {
     const runtime = this
+    // 宿主侧项目归类（M5）：项目 workspace 的建立/改名/注销都经由它；失败只告警，不阻塞项目写路径。
+    this.workspaces = new ProjectWorkspaces({ registry: this.ctx.workspaceRegistry as unknown as WorkspaceRegistryLike,
+      store: this.store, workRoot: executionRoot(this.store.settings(), this.machine.stateDir) })
     const sessions = new Sessions({ context: this.ctx, store: this.store, prompts: this.prompts, effects: this.effects,
       health: this.board.claim('models'), masterId: this.masterId, lifetime: this.lifetime,
       closing: () => this.closing(), environment,
@@ -249,6 +256,7 @@ export class Runtime extends Service implements SourceHost {
     const stopTicket: EngineForSettings['stopTicket'] = (id, reason) => this.engine.stopTicket(id, reason)
     const settings = new Settings({ store: this.store, sources: this.sources, engine: { policyChanged, stopTicket }, health: this.board,
       context: this.ctx, lifetime: this.lifetime, sessions, sourceHost: this, setup: this.setup,
+      workspaces: this.workspaces,
       requestPass: () => { this.passes.request() } })
     const executor = new DshExecutor({ context: this.ctx, get engine() { return runtime.engine }, store: this.store, effects: this.effects,
       commands: this.commands, health: this.board.claim('worker'), machine: this.machine,
@@ -462,6 +470,11 @@ export class Runtime extends Service implements SourceHost {
       // 避免镜像里残留 gitdir 元数据（残破引用会让复活工单的启动校验永久失败）。
       stillOpen: ticketId => this.store.tickets.get(ticketId)?.ended === undefined,
       removeWorktree: async (repo, directory) => { await this.commands.git(['worktree', 'remove', '--force', directory], join(this.machine.stateDir, 'repos', repo)) },
+      // 删除目录前注销其宿主 workspace（M5）：目录已删的分组节点不能残留在宿主侧边栏。
+      remove: async directory => {
+        await this.workspaces?.forgetPath(directory)
+        await rm(directory, { recursive: true, force: true })
+      },
       // 目录删除成功后注销工单来源登记（评审 E6）：worker-sources.json 随回收收缩。
       forget: directory => forgetTicketSource(this.machine.stateDir, directory) })
 
