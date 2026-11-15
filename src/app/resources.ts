@@ -49,13 +49,15 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'prompt-preview/<id>', holds: 'a composed prompt that orchestrator_prompts_save previewed' },
   { name: 'models', holds: 'model providers, the DSH default and each role\'s model' },
   { name: 'models/<provider>', holds: 'one provider\'s models' },
+  { name: 'usage', holds: 'token accounting: the Executor Session reads its ticket\'s totals, budget and recent requests; the main '
+    + 'Session reads the installation-wide totals by model and a page of recent requests', executor: true },
   { name: 'feishu/<trigger-id>/…', holds: 'a Feishu original, as the dsh-superagent-feishu skill describes', executor: true },
 ]
 export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(resource => !executor || resource.executor)
   .map(resource => `${resource.name}: ${resource.holds}`).join('; ')
 
 export interface ResourceHost {
-  readonly store: Pick<Store, 'get' | 'settings' | 'triggers' | 'tickets' | 'threads' | 'read' | 'decisions' | 'replyStatus'>
+  readonly store: Pick<Store, 'get' | 'settings' | 'triggers' | 'tickets' | 'threads' | 'read' | 'decisions' | 'replyStatus' | 'usage' | 'projects'>
   readonly pages: TextCache
   readonly prompts: Pick<Prompts, 'current' | 'version' | 'history' | 'skills' | 'defaultChanged'>
   readonly commands: Commands
@@ -213,6 +215,19 @@ const ROUTES: readonly Route[] = [
     const models = (await main(read).context.sessionController.modelCatalog()).groups.find(group => group.id === read.rest)?.models
     if (!models) throw new Error('Unknown model provider')
     return list(read, (offset, count) => models.slice(offset, offset + count))
+  }],
+  ['usage', read => {
+    const { host, ticketId } = read
+    if (ticketId) {
+      // 工作单元只读本工单：合计、生效预算与最近的请求记录。
+      const project = host.store.tickets.get(ticketId)?.execution?.project
+      const budget = (project ? host.store.projects.get(project)?.execution.budget : undefined) ?? host.store.settings().executor.budget
+      return { ticket: ticketId, ...(host.store.usage.sumTicket(ticketId) ?? { requests: 0 }), ...(budget ? { budget } : {}),
+        recent: host.store.usage.forTicket(ticketId).slice(-20).reverse() }
+    }
+    const whole = main(read)
+    return { ...whole.store.usage.sum(), byModel: whole.store.usage.byModel(),
+      ...list(read, (offset, count) => whole.store.usage.recent(offset + count)) }
   }],
   ['feishu/', async read => {
     const { record, rest } = feishuPath(read)

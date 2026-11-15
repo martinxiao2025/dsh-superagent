@@ -56,6 +56,15 @@ export class Tickets extends EnginePart {
     return this.require(ticketId)
   }
   /**
+   * 工单耗尽其 token 预算：执行器侧结束工单（outcome `stopped`、by `executor`），收口与停止相同。
+   * 与人工停止的区别记录在 `ended.by`：调度器把它结算为最终失败，不再重试（重试会立刻再次耗尽）。
+   * @throws 当工单未知时抛出 UserError。
+   */
+  exhaust(ticketId: string, reason: string): Ticket {
+    this.end(ticketId, 'executor', 'stopped', this.now(), reason)
+    return this.require(ticketId)
+  }
+  /**
    * 结束可重试的未结束工单（`failed`、`blocked` 或输入投递失败）所停滞的任务分配，并启动一个新的。
    * @throws 当工单未知或不可重试时抛出 UserError。
    */

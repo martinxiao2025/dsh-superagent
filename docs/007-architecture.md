@@ -417,6 +417,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/infra/environment.ts` | 智能体的进程环境：命令垫片、git 配置和凭据助手、`runAsWorker`，以及环境和工单目录的检查 |
 | `src/infra/worker-sources.ts` | 执行侧的分发数据与调度器：工单目录到来源记录的登记（`recordTicketSource`）、记录到 CLI 的表（`writeWorkerRecords`），以及按记录选择 CLI 的 `WORKER_DISPATCH_BODY` |
 | `src/infra/win32.ts` | Windows 特有规则的唯一权威实现：`cmdQuote`（与垫片源码形态 `CMD_QUOTE_SOURCE`）、`normalizePath`（与 `NORMALIZE_PATH_SOURCE`）和 `pathExtensions`；登记与查找路径键的共用出口 |
+| `src/app/usage-meter.ts` | `UsageMeter`：监听 `agent/request` 与 `session/event`，把每步实际路由与 `assistant/message` 的 token 结算按工单归因（子代理沿父链）写入 `Store.usage`；两档预算（软档 80% 注入收敛提醒并封锁子代理，硬档 100% 经 `Engine.exhaustTicket` 以 `stopped`/`executor` 结束工单） |
 | `src/infra/git-timeout.ts` | `withGitTimeout`：给已绑定的 `Commands` 覆盖 git 类命令的超时（项目 `execution.gitTimeoutSeconds`），其余方法委托原对象 |
 | `src/infra/paths.ts` | 包的根目录，即打包文件所在位置 |
 | `src/infra/text.ts` | 字数统计和聊天消息限制、`fill` 和 `sameName` |
@@ -505,6 +506,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `tests/model-surface.spec.ts` | 模型读取的一切：工具、提示词、技能和输入，按工具架构、执行环境和术语表检查，并受每个角色的大小预算约束 |
 | `tests/deployment.spec.ts`、`tests/environment.spec.ts`、`tests/execution-environment.spec.ts`、`tests/index.spec.ts`、`tests/windows-compat.spec.ts` | 插件配置和安装、智能体的进程环境与多记录分发、执行环境按来源记录注入、插件入口（先挂载路由、锁失败与初始化失败仍可诊断），以及 Windows 启动器和 shell 行为 |
 | `tests/win32.spec.ts` | `infra/win32.ts` 的单源 Windows 规则：cmd 引用、路径归一、PATHEXT，以及垫片源码形态与实现的行为一致 |
+| `tests/usage-meter.spec.ts` | `UsageMeter`：master/worker 归因落账、软档提醒与子代理封锁、项目预算优先、硬档结束工单、无预算与无 usage 事件忽略 |
 | `tests/worker-sources.spec.ts` | 调度器脚本的直接单测：以 Node 运行分发脚本正文，验证命令识别、记录选择（显式指定 → 目录祖先登记 → 该种类唯一一条，绝不按位置兜底）、worker-bin 离开 PATH 与凭据协议参数转发 |
 | `tests/service-script.spec.ts` | `scripts/dsh-superagent.mjs` 对假 `ps`、`tmux` 和 `dsh` 的行为 |
 | `tests/task-sources.spec.ts` | 任务来源驱动：Excel 从仓库工作副本读取、回写（保留 BOM/CRLF 并提交为干净工作副本）、飞书文档读取、飞书群消息转任务与消息体文本抽取、字段级预检文案与注册表扩展 |

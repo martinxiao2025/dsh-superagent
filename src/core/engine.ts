@@ -215,6 +215,12 @@ export class Engine {
    * @throws 当工单未知、已结束或不可重试时抛出 UserError。
    */
   retryTicket(ticketId: string): Ticket { return this.repo.atomic(() => this.tickets.retry(ticketId)) }
+  /**
+   * 工单耗尽其 token 预算（预算闸的硬档）：结束工单（outcome `stopped`、by `executor`）并停止其工作单元；
+   * 调度器把它结算为最终失败而不是重试。
+   * @throws 当工单未知时抛出 UserError。
+   */
+  exhaustTicket(ticketId: string, reason: string): Ticket { return this.repo.atomic(() => this.tickets.exhaust(ticketId, reason)) }
 
   // 执行器
 
@@ -335,4 +341,4 @@ export type EngineForPeople = Pick<Engine, 'stopTicket' | 'retryTicket' | 'reeva
 export type EngineForSettings = Pick<Engine, 'policyChanged' | 'stopTicket'>
 /** 执行器告知引擎的内容，以及其工作单元向引擎询问的内容。 */
 export type EngineForExecutor = Pick<Engine, 'assignmentStarted' | 'inputsDelivered' | 'inputsRead' | 'turnEnded' | 'deliveryFailed'
-  | 'assignmentInterrupted' | 'report' | 'markUnrelated' | 'handback' | 'followForContext' | 'reply' | 'stage'>
+  | 'assignmentInterrupted' | 'report' | 'markUnrelated' | 'handback' | 'followForContext' | 'reply' | 'stage' | 'exhaustTicket'>

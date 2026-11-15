@@ -58,12 +58,20 @@ export const EvalConfigSchema = z.object({
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
-/** 执行器设置：全局并发数、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令；模型在 `models` 块。 */
+/** 一份工单级 token 预算：三项可选上限，全部留空表示不设预算。 */
+export const BudgetSchema = z.object({
+  inputTokens: z.number().int().positive().max(LIMITS.budgetTokens).optional(),
+  outputTokens: z.number().int().positive().max(LIMITS.budgetTokens).optional(),
+  totalTokens: z.number().int().positive().max(LIMITS.budgetTokens).optional(),
+}).strict()
+export type Budget = z.infer<typeof BudgetSchema>
+/** 执行器设置：全局并发数、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令、被屏蔽的命令与默认预算；模型在 `models` 块。 */
 export const ExecutorConfigSchema = z.object({
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
   directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
   blockedCommands: z.array(CommandNameSchema).default([]),
+  budget: BudgetSchema.optional(),
 }).strict()
 /** 消息来源记录：键是记录 ID，`kind` 选择适配器，`config` 由适配器 schema 校验。 */
 export const SourceInstanceSchema = z.object({

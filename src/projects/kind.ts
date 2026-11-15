@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { CodeRepoKindSchema } from '../code-repos/kind.ts'
 import { LIMITS } from '../limits.ts'
+import { BudgetSchema } from '../settings/schema.ts'
 import { TaskSourceKindSchema } from '../task-sources/kind.ts'
 
 /** 项目标识：与来源记录使用同一套命名规则。 */
@@ -50,6 +51,8 @@ export const ProjectSchema = z.object({
     prepare: z.string().max(LIMITS.prepareCommand).default(''),
     /** 项目的 git 超时覆盖（秒）；0 表示沿用部署配置的 gitTimeoutMs。大仓库首次 clone 时按项目放宽。 */
     gitTimeoutSeconds: z.number().int().min(LIMITS.projectGitTimeoutSeconds.min).max(LIMITS.projectGitTimeoutSeconds.max).default(0),
+    /** 项目级 token 预算覆盖；未设置时用全局 executor.budget。 */
+    budget: BudgetSchema.optional(),
   }).strict().default(() => ({ directory: '', branch: '', prepare: '', gitTimeoutSeconds: 0 })),
   schedule: z.object({
     intervalMinutes: z.number().int().min(LIMITS.projectIntervalMinutes.min).max(LIMITS.projectIntervalMinutes.max).default(30),

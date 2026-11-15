@@ -106,5 +106,13 @@ export function OverviewPage() {
         {stat(t('idleLabel'), data.executor.idle)}
       </div>}
     </Section>
+    {data.usage && <Section title={t('usageTitle')} hint={t('usageIntro')}>
+      <div className="dt-stats">
+        {stat(t('usageRequestsLabel'), data.usage.requests)}
+        {stat(t('usageInputLabel'), data.usage.input + data.usage.cacheRead + data.usage.cacheWrite)}
+        {stat(t('usageOutputLabel'), data.usage.output)}
+        {data.usage.reasoning > 0 && stat(t('usageReasoningLabel'), data.usage.reasoning)}
+      </div>
+    </Section>}
   </>
 }

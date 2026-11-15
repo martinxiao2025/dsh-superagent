@@ -185,7 +185,7 @@ export class SchedulerDispatch {
 export type SettleAction =
   | { kind: 'retry'; reason: string }
   | { kind: 'succeed' }
-  | { kind: 'finish'; state: 'cancelled'; reason: string }
+  | { kind: 'finish'; state: 'cancelled' | 'failed'; reason: string }
   | { kind: 'stop-then-retry'; ticketId: string; reason: string }
 
 /**
@@ -200,6 +200,8 @@ export function settleOutcome(entry: QueueEntry, ticket: Ticket | undefined): re
     const { outcome, by } = ticket.ended
     if (outcome === 'completed' || outcome === 'merged' || outcome === 'closed') return [{ kind: 'succeed' }]
     if (outcome === 'stopped' && by === 'human') return [{ kind: 'finish', state: 'cancelled', reason: 'Stopped by a person' }]
+    // 预算耗尽的停止（by executor）：重试会立刻再次耗尽，结算为最终失败。
+    if (outcome === 'stopped' && by === 'executor') return [{ kind: 'finish', state: 'failed', reason: 'The ticket ran out of its token budget' }]
     return [{ kind: 'retry', reason: `The ticket ended: ${outcome}` }]
   }
   // person 阶段按动作白名单接管（评审 C2）：只有 blocked/failed（工作单元已停滞且在等人，

@@ -36,6 +36,8 @@ export interface SessionsHost {
   environment(ticket: Ticket): Variable[]
   /** 要在主会话（`ticket === undefined`）或 `ticket` 的执行器会话上注册的工具。 */
   tools(agent: Agent, ticket?: Ticket): Tool[]
+  /** 工单的预算软档是否已到（禁止再启动子代理）；缺省为永否（无预算部署）。 */
+  subagentsBlocked?(ticketId: string): boolean
 }
 
 /**
@@ -353,9 +355,12 @@ export class Sessions {
   private workOnly(agent: Agent, ticketId: string): (() => void)[] {
     const store = this.host.store
     const allow = this.inherited(agent, WORK_TOOLS)
-    return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(() => {
+    return [agent.ctx.tools.restrict({ allow }), agent.ctx.tools.guard(execution => {
       const current = store.tickets.get(ticketId)
-      return !current || !liveTicket(current) ? 'Ticket ended; new work needs a new authorized ticket' : undefined
+      if (!current || !liveTicket(current)) return 'Ticket ended; new work needs a new authorized ticket'
+      // 预算软档：token 预算用掉 80% 后不再启动新的子代理（每个子代理都是完整提示词起步的固定开销）。
+      if (execution?.name === 'subagent' && this.host.subagentsBlocked?.(ticketId)) return 'The token budget is nearly used; finish without starting more subagents.'
+      return undefined
     })]
   }
   /**

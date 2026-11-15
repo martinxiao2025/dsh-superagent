@@ -75,6 +75,7 @@ export function overview(host: ViewHost, health: HealthMap, policyVersionValue: 
     executor: { ...load, maxWorkers: settings.executor.maxWorkers, idle: open.filter(ticket => ticketStage(ticket).stage === 'idle').length },
     flow: { received, filtered, triggers: received - filtered, judged: judgement.judged, accepted: judgement.accepted,
       evaluating: evaluating.length, dropped: store.read.droppedSince(since) },
+    usage: store.usage.sum(),
     policyVersion: policyVersionValue,
   }
 }

@@ -66,6 +66,7 @@ import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
+import { UsageMeter } from './usage-meter.ts'
 
 // 来源插件仅通过 `SourceHost` 服务接口与 dsh-superagent 交互。
 declare module '@deepseek-ai/cordis' { interface Context { orchestrator: SourceHost } }
@@ -122,6 +123,8 @@ export class Runtime extends Service implements SourceHost {
   private stopping?: Promise<void>
   private readonly sourceDeps: SourceContextDeps
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
+  /** 用量计量与预算闸；`initialize()` 中装配（engine 可用后）。 */
+  private usage?: UsageMeter
   private readonly loops = new Set<{ controller: AbortController; running: Promise<void> }>()
   /** 当主会话工具正在执行引擎命令时非零，用于抑制自触发的领域事件通知。 */
   private quiet = 0
@@ -273,7 +276,8 @@ export class Runtime extends Service implements SourceHost {
     const sessions = new Sessions({ context: this.ctx, store: this.store, prompts: this.prompts, effects: this.effects,
       health: this.board.claim('models'), masterId: this.masterId, lifetime: this.lifetime,
       closing: () => this.closing(), environment,
-      tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent) })
+      tools: (agent, ticket) => ticket ? executorTools(this.toolHost, ticket) : mainTools(this.toolHost, agent),
+      subagentsBlocked: id => this.usage?.subagentsBlocked(id) ?? false })
     const policyChanged: EngineForSettings['policyChanged'] = (from, to, effects) => { this.engine.policyChanged(from, to, effects) }
     const stopTicket: EngineForSettings['stopTicket'] = (id, reason) => this.engine.stopTicket(id, reason)
     const settings = new Settings({ store: this.store, sources: this.sources, engine: { policyChanged, stopTicket }, health: this.board,
@@ -435,6 +439,13 @@ export class Runtime extends Service implements SourceHost {
     }
     this.sessions.install()
     this.executor.install()
+    // 用量计量与预算闸：监听宿主会话事件，落账到 `Store.usage` 并执行两档预算。
+    this.usage = new UsageMeter({ store: this.store, masterId: this.masterId,
+      engine: { exhaustTicket: (id, reason) => this.engine.exhaustTicket(id, reason) },
+      sessions: { relay: (id, text) => this.sessions.relay(id, text),
+        prompt: (sessionId, requestId, text, mode) => this.sessions.prompt(sessionId, requestId, text, mode) },
+      lifetime: this.lifetime }, this.ctx)
+    this.usage.install()
     await this.sessions.ensure(this.masterId, this.machine.stateDir, 'dsh-superagent orchestrator', 'orchestrator')
     for (const id of this.settings.syncable()) await this.settings.sync(id).catch(() => { /* sync() 会把失败记录到健康状态中。 */ })
     // 若在等待初始化、创建会话或策略同步期间调用了 stop()，则不要启动后台循环。

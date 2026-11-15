@@ -182,7 +182,9 @@ export function TicketPage({ id }: { id: string }) {
       </Details>}
       <Details icon="hash" title={t('identifiers')}>
         <KeyValues rows={[[t('ticketId'), <span className="dt-mono">{data.id}</span>], [t('executionDirectory'), <span
-          className="dt-mono">{data.directory ?? t('empty')}</span>]]} />
+          className="dt-mono">{data.directory ?? t('empty')}</span>],
+          ...data.usage ? [[t('usageTicketLabel'), `${data.usage.requests} · ${t('usageInputLabel')} ${data.usage.input
+            + data.usage.cacheRead + data.usage.cacheWrite} · ${t('usageOutputLabel')} ${data.usage.output}`] as [string, ReactNode]] : []]} />
       </Details>
     </div>
     {data.actions.stop && <div className="dt-danger-zone">

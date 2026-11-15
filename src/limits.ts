@@ -17,5 +17,7 @@ export const LIMITS = {
   gitTimeoutMs: { min: 1_000, max: 3_600_000 },
   /** 项目级 git 超时覆盖（秒）；0 表示沿用全局配置。 */
   projectGitTimeoutSeconds: { min: 0, max: 3600 },
+  /** 单工单 token 预算各项的上限；最低值挡住明显手滑的小数字。 */
+  budgetTokens: 2_000_000_000,
   workspaceRetentionDays: { min: 0, max: 3650 },
 } as const

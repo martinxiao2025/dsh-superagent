@@ -77,6 +77,7 @@ export function ticketDetail(host: ViewHost, id: string) {
     inputs: ticket.inputs.slice().reverse().map(input),
     // 仅因上下文而跟随的线程（例如相关 Issue）不授予权限，并以 `context: true` 标记。
     threads: view.threadsOf(id).map(thread => ({ ...threadSummary(view, thread),
-      ...thread.context?.includes(id) ? { context: true as const } : {} })) }
+      ...thread.context?.includes(id) ? { context: true as const } : {} })),
+    usage: store.usage.sumTicket(id) }
 }
 export type TicketDetailView = NonNullable<ReturnType<typeof ticketDetail>>
