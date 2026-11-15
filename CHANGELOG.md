@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### 优化重构批次（docs/012，2026-11-15）
+
+按 [docs/012-优化重构方案.md](docs/012-优化重构方案.md) 的 M0–M5 实施（M6 真机冒烟另行执行）；
+全部 1400 例测试通过，`pnpm check`（typecheck + test + build）全绿。**注意：SCHEMA 14→15，旧状态库需 reset。**
+
+- **各阶段模型自由定义（M1）**：工作单元全流程规范为六阶段（调查/设计/实现/验证/评审/交付，
+  `core/stages.ts`），工单记录 `stage`/`stageHistory`（记录而非硬状态机）；设置新增 `models` 块
+  ——角色位（编排/工作单元）+ 六阶段 + 子代理 + 工具型小模型，任何一项留空继承宿主默认；
+  模型路由改为**每请求覆盖**（`agent/request` waterfall + 解析缓存），worker 按工单当前阶段解析；
+  worker 新工具 `orchestrator_stage`；阶段聚焦提示词 `prompts/stages/*.md`（未声明阶段时与旧组合逐字一致）；
+  面板新增「模型」分组（阶段×模型矩阵）。
+- **最少 token 消费（M2/M3）**：新 `UsageMeter` 把每次模型请求的 token 结算按工单归因落账
+  （`usage` 表，子代理沿父链归因，含阶段与提示词修订）；两档预算（`executor.budget`，
+  项目 `execution.budget` 优先）——软档 80% 注入工作单元引导收敛并封锁新子代理、硬档 100%
+  自动结束工单（调度器结算为最终失败，不重试）；只读资源 `usage`；面板概览用量区与
+  工单用量行；自我升级闭环：`orchestrator_retrospective` 按提示词修订/模型/阶段聚合
+  工单结果与用量，面板「按修订对比」简表——度量→改一处→再度量。
+- **宿主项目自动建立与会话归类（M5）**：每个启用项目自动拥有宿主 workspace（标题=项目名，
+  汇聚项目根下的人工会话）；工单 workspace 命名「<项目名> · <工单标题>」（同项目按前缀聚拢、
+  搜索直达）；项目删除与工单回收时自动注销对应 workspace，宿主侧边栏不残留失效分组。
+- **地基与架构收敛（M0/M4）**：SCHEMA 15（项目独立建表 `Store.projects`，项目迁出设置快照，
+  `usage` 表）；删 7 处旧数据兼容死代码；`infra/win32.ts` 单源（cmd 引号/路径归一/PATHEXT，
+  六处拷贝收敛 + 垫片一致性单测）；工具注册表化（`tools/definitions/`）；worker-dispatch 垫片
+  模板独立成模块并加 `node --check` 测试；审计修复 8 项（查询参数 400、`/health` 免同源、
+  客户端 ErrorBoundary、transient 结构化、VACUUM 参数化、队列隔离区、Setup 并行解析、
+  飞书读取器缓存、xlsx 解压上限）；runtime 凭据域与客户端 projects 组件拆分；
+  优化台账转 Markdown（`docs/012`），删除 xlsx 与 11 个 round 脚本。
+
 ### DSH 最佳实践对齐批次（2026-11-15）
 
 按 DSH 官方插件实践（dsh-doc practices/compositions/tool-design）逐条对照后的优化与完善；
