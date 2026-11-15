@@ -40,6 +40,18 @@
   全部存在，无需 fallback。
 - 007 模块表补充三个新叶子文件；011 §9.2 关闭记录同步。
 
+### 自我迭代升级批次（2026-11-15）
+
+- **启动记录带版本**：`startup.json` 新增 `version` 字段（运行中的插件包版本）——版本对照的
+  权威锚点；重载后与检出 `package.json` 不一致即报错。
+- **新增 [scripts/self-update.mjs](../scripts/self-update.mjs)（自我迭代升级）**：link 安装的
+  一步升级闭环——pull（未提交改动时拒绝）→ install → build → 重载提示（官方实践禁止脚本写
+  profile 文件，重载由插件管理器或 plugin_manager 完成）→ 等待 startup.json 更新并核对版本 →
+  verify-live 全绿。已实测 verify-only 与完整参数解析路径。
+- **Excel 任务驱动自举**（接上批次）：仓库自带 `tasks/backlog.csv`（插件自身迭代任务清单）+
+  [examples/project-seed.json](../examples/project-seed.json) 种子配置 + 010 §4.3 自举说明；
+  插件的后续迭代由自己的标准格式清单驱动（吃自己的狗粮）。
+
 ### 开发调试与实机验证批次（2026-11-15）
 
 对照 DSH 官方插件开发实践（plugin-development / verification）更新脚本与文档：

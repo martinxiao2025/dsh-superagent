@@ -16,7 +16,7 @@ afterEach(() => {
 })
 /** 一份完整启动记录，只让用例关心阶段与时间。 */
 const entry = (stateDir: string, phase: StartupPhase, at: string) => ({ phase, detail: '', stateDir, at, pid: 1234,
-  listen: { host: '127.0.0.1', port: 3082 } })
+  listen: { host: '127.0.0.1', port: 3082 }, version: '0.0.0-test' })
 
 it('summarizes any thrown value and truncates a long stack', () => {
   expect(startupError('boom')).toEqual({ name: 'Error', message: 'boom' })

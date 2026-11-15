@@ -375,10 +375,20 @@ scripts/dsh-superagent.mjs clean --yes [--profile NAME] [--dsh-home DIR] [--stat
 
 1. 等到没有执行器正处在回合中间。
 2. 备份 `<stateDir>/orchestrator.sqlite`（服务运行中可用 `scripts/dsh-superagent.mjs backup`，见「日常备份」）。
-3. 运行 `git pull && pnpm install && pnpm build`。
+3. 运行 `git pull && pnpm install && pnpm build`。link 安装可用一步到位的自迭代脚本（见下）。
 4. 运行 `scripts/dsh-superagent.mjs restart` 并检查其状态。
 
 重启会结束运行中的派工，并带恢复备注启动替代派工。团队文本和被覆盖的提示词部分会保留；没有覆盖的部分跟随新默认值。升级后审阅标记为 **默认内容已更新** 的部分。
+
+### 自我迭代升级（link 安装）
+
+本仓库以 `link:` 安装进 profile 时，`scripts/self-update.mjs` 把升级收敛为一条命令：
+
+```sh
+node scripts/self-update.mjs --profile superagent
+```
+
+它依次执行：`git pull --ff-only`（检出有未提交改动时拒绝——自我迭代绝不覆盖进行中的工作）→ `pnpm install --frozen-lockfile` → `pnpm build` → **重载提示**（打印插件管理器 disable→enable 的手工步骤并等待 `startup.json` 更新；官方实践禁止脚本写 profile 文件，重载由操作者或编码智能体的 `plugin_manager` 工具完成）→ `verify-live` 全绿检查。启动记录里的 `version` 字段与检出的 `package.json` 不一致时会明确报错——那是重载没有真正拿到新产物的权威信号。每个环节都可 `--no-…` 跳过，退出码 0/1 可被每小时检查或任务清单工单消费（本仓库 `tasks/backlog.csv` 的架构迭代任务即按此路径执行）。
 
 被较新版本迁移过的数据库无法被旧版本打开。因此回滚需要升级前的备份。升级 DeepSeek Harness 本身之后，重启运行中的实例，以便面板加载匹配的产物。
 

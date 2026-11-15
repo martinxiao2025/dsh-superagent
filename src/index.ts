@@ -1,4 +1,6 @@
 /** 主插件入口：先挂载管理路由、再取得状态目录锁并初始化 Runtime，使启动失败可被健康接口诊断。 */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-settings'
 import { Runtime } from './app/runtime.ts'
@@ -11,6 +13,10 @@ import { resetState } from './app/reset.ts'
 export const name = 'dsh-superagent'
 export const inject = ['agents', 'sessionController', 'sessionPersistence', 'workspaceRegistry', 'permissionPresets', 'tools', 'systemPrompt', 'skills', 'webServer', 'llm', 'subprocess']
 export { Config }
+/** 插件包版本：启动记录写入它，verify-live 与升级流程据此核对版本漂移（自我迭代的版本对照锚点）。 */
+const pluginVersion = (): string => {
+  try { return (JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { version?: string }).version ?? '' } catch { return '' }
+}
 export async function apply(ctx: Context, config: DeploymentConfig): Promise<void> {
   // 配置校验必须在挂载任何路由之前完成：旧模型的键应当让插件直接失败，而不是留下半个管理接口。
   const machine = machineOf(config)
@@ -31,7 +37,7 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   const record = (phase: StartupPhase, detail: string, error?: unknown): void => {
     const status: StartupStatus = { phase, detail, stateDir: machine.stateDir, ...error === undefined ? {} : { error: startupError(error) } }
     mount.set(status)
-    recordStartup(machine.stateDir, { ...status, at: new Date().toISOString(), pid: process.pid,
+    recordStartup(machine.stateDir, { ...status, at: new Date().toISOString(), pid: process.pid, version: pluginVersion(),
       listen: { host: ctx.webServer.host, port: ctx.webServer.port ?? 0 } })
   }
   record('http-registered', `管理路由已挂载：/orchestrator/api（${ctx.webServer.host}:${ctx.webServer.port ?? 0}）`)

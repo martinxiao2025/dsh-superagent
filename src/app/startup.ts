@@ -19,6 +19,8 @@ export interface StartupEntry extends StartupStatus {
   readonly at: string
   readonly pid: number
   readonly listen: { host: string; port: number }
+  /** 运行中的插件包版本（package.json 的 version）；verify-live 与升级流程据此核对版本漂移。 */
+  readonly version: string
 }
 export const STARTUP_FILE = 'startup.json'
 export const STARTUP_PREV_FILE = 'startup.prev.json'
