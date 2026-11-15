@@ -148,8 +148,9 @@ it('decodes path parameters and parses each route\'s query', async () => {
     sessions: { delivery: async () => 'injected' },
   })
   expect(await call('POST', `threads/${encodeURIComponent('feishu:oc_1:om/root')}/unsubscribe`)).toMatchObject({ status: 200, body: { context_delivery: 'injected' } })
-  // 无效的 offset 默认为 0，超过路由上限的 limit 会被截断。
-  expect(await call('GET', 'decisions?kind=accept&limit=500&offset=x&window=24h')).toEqual({ status: 200, body: { items: [], next_offset: null } })
+  // 无效的 offset 以 400 拒绝（不再静默回退为 0）；超过路由上限的 limit 会被截断。
+  expect(await call('GET', 'decisions?kind=accept&limit=500&window=24h')).toEqual({ status: 200, body: { items: [], next_offset: null } })
+  expect(await call('GET', 'decisions?kind=accept&offset=x')).toMatchObject({ status: 400 })
   expect(seen).toEqual(['feishu:oc_1:om/root', { filter: { kinds: ['accept'], since: expect.any(String) }, offset: 0, limit: 200 }])
 })
 

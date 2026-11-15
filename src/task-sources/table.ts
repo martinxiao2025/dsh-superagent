@@ -212,11 +212,14 @@ function zipDataStart(buffer: Buffer, entry: ZipEntry): number {
   return entry.offset + 30 + nameLength + extra
 }
 
-/** 读取一个 ZIP 条目并解压。 */
+/** ZIP 条目解压后的字节上限：压缩炸弹（声明小体积、解压巨大）在此被拒绝，而不是耗尽内存。 */
+const MAX_INFLATED_BYTES = 64 * 1024 * 1024
+
+/** 读取一个 ZIP 条目并解压；解压输出受 `maxOutputLength` 硬上限保护。 */
 function zipRead(buffer: Buffer, entry: ZipEntry): Buffer {
   const data = zipPayload(buffer, entry)
   if (entry.method === 0) return data
-  if (entry.method === 8) return inflateRawSync(data)
+  if (entry.method === 8) return inflateRawSync(data, { maxOutputLength: MAX_INFLATED_BYTES })
   throw new TaskFileError(`不支持的 xlsx 压缩方式：${entry.method}`)
 }
 

@@ -825,11 +825,15 @@ it('holds a status request in a normal slot while every other slot is taken', as
   expect(h.agents.get(one.sessionId)!.status).toBe('running')
 })
 it('tells a passing failure of the provider or the network from one that a later try would meet again', () => {
+  // 结构化信号优先：HTTP 状态与系统错误码精确匹配；文本表只兜底固定的提供方/HTTP 层文案。
   for (const error of [Object.assign(new Error('x'), { status: 429 }), Object.assign(new Error('x'), { status: 503 }),
-    Object.assign(new Error('connect'), { code: 'ECONNRESET' }), new TypeError('fetch failed'), new Error('getaddrinfo EAI_AGAIN api.example.com')]) {
+    Object.assign(new Error('connect'), { code: 'ECONNRESET' }), Object.assign(new Error('dns'), { code: 'EAI_AGAIN' }),
+    new TypeError('fetch failed')]) {
     expect(transient(error)).toBe(true)
   }
-  for (const error of [Object.assign(new Error('x'), { status: 400 }), Object.assign(new Error('x'), { status: 401 }), new Error('context too long'), 'LlmError: offline']) {
+  // 相同文案出现在 message 上但没有系统码时（例如业务错误引用了网络词）不算瞬时，除非命中固定文案。
+  for (const error of [Object.assign(new Error('x'), { status: 400 }), Object.assign(new Error('x'), { status: 401 }),
+    new Error('context too long'), 'LlmError: offline', new Error('getaddrinfo EAI_AGAIN api.example.com')]) {
     expect(transient(error)).toBe(false)
   }
 })

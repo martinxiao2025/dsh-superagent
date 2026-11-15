@@ -107,6 +107,8 @@ export const sharedText = {
   searchNoneGithub: ['没有找到。可以输入触发文字、GitHub PR 或 Issue 链接或 #编号。', 'Nothing found. Try Trigger text, a GitHub PR or Issue link, or #number.'],
   'ticket.ended': ['已结束', 'ended'],
   sessionListNotReady: ['Session 列表尚未加载，请稍后重试。', 'The Session list has not loaded yet; try again shortly.'],
+  boundaryMessage: ['管理面板遇到渲染错误；下面的详情可用于排查，重试会重新渲染当前页面。', 'The panel hit a rendering error; the details below may help diagnose it, and Retry re-renders the current page.'],
+  boundaryRetry: ['重试', 'Retry'],
   sessionNotListed: ['这个 Session 不在当前会话列表里，可能已被归档或删除。', 'This Session is not in the current list; it may have been archived or deleted.'],
   searchFiltered: ['被来源过滤：{reason}', 'Filtered by its Source: {reason}'],
   searchFoundCapped: ['找到 {tickets} 个工单、{threads} 个线程、前 {items} 条触发（请缩小搜索范围）', 'Found {tickets} Tickets, {threads} Threads and the first {items} Triggers (narrow the search)'],

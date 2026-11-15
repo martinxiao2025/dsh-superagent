@@ -558,7 +558,9 @@ it('队列在数据库层保证活动条目唯一，并清理过期终态', () =
       store.db.prepare('INSERT INTO trigger VALUES (?,?,?)').run('t2', '{', '2026-01-01T00:00:00.000Z')
       expect(() => store.triggers.get('t2')).toThrow(/corrupt/)
       store.db.prepare('INSERT INTO queue VALUES (?,?,?)').run('bad', '{"id":"bad"}', 99)
-      expect(() => store.queue.list()).toThrow()
+      // 队列列表读取跳过损坏行并上报（与实体列表同口径），不让整个队列失败；按 ID 直读仍明确报错。
+      expect(store.queue.list().map(entry => entry.id)).toEqual(['q3'])
+      expect(() => store.queue.get('bad')).toThrow()
     } finally {
       store.close()
     }

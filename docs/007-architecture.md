@@ -392,6 +392,8 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/tools/main.ts` | 主会话的工具注册表：把 `definitions/` 的工具工厂组装成数组 |
 | `src/app/tools/definitions/route.ts`、`src/app/tools/definitions/ticket.ts`、`src/app/tools/definitions/eval.ts`、`src/app/tools/definitions/replies.ts`、`src/app/tools/definitions/settings.ts`、`src/app/tools/definitions/prompts.ts` | 主会话各工具的定义：路由（RouteItemSchema/FIELDS/route）、工单动作、评估、回复与线程、设置与策略同步、提示词保存 |
 | `src/app/tools/definitions/retro.ts` | `orchestrator_retrospective`：按修订/模型/阶段分桶的用量与工单结果聚合（自我升级闭环的度量入口；改进经 `orchestrator_prompts_save`/`orchestrator_settings_save` 落地） |
+| `src/app/runtime/credentials.ts` | `buildCredentials`：凭据域装配工厂（从组合根拆出）——加密存储、两域凭据服务与按凭据缓存的飞书读取能力，以及 `feishuCredentialReferences` |
+| `src/infra/worker-dispatch-source.ts` | 调度器垫片的源码模板（`WORKER_DISPATCH_BODY`）：从 `worker-sources.ts` 拆出，可被语法检查与测试直接加载 |
 | `src/app/tools/executor.ts` | 执行器会话的工具 |
 | `src/app/http/routes.ts` | `/orchestrator/api` 路由表与视图组装：`HttpHost`（HTTP 层唯一能力面）、`stateView` 等面板视图的类型出口 |
 | `src/app/http/schemas.ts` | 每条路由的 zod 请求校验 schema，与 `Api` 类型契约一一对应 |
@@ -446,10 +448,13 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/overview.tsx` | 概览 |
 | `src/client/source.tsx`、`trigger.tsx`、`eval.tsx`、`execution.tsx` | 每个阶段一个文件：其状态，以及有设置时的设置 |
 | `src/client/git-credentials.tsx`、`feishu-credentials.tsx` | Git 与飞书凭据设置页：两页各自独立增删改查，只显示掩码与指纹，绝不下发材料 |
-| `src/client/projects.tsx` | 项目标签页：项目列表与运行时概览、单项目的任务与队列详情，以及项目设置分区 |
+| `src/client/projects.tsx` | 项目标签页的路由外壳：项目列表与运行时概览、单项目的任务与队列详情，以及项目设置分区 |
+| `src/client/project-editors.tsx` | 项目表单的共享构件：Git/飞书凭据上下文、代码仓库编辑器（凭据联动类型与认证）、任务来源编辑器与模板下载 |
+| `src/client/project-wizard.tsx` | 新建项目四步向导与已保存项目的卡片、声明式规格驱动的编辑表单 |
 | `src/client/thread.tsx`、`ticket.tsx` | 记录页面：带时间线的线程，以及带授权、输入和派工的工单 |
 | `src/client/settings.tsx` | 设置标签页：分组导航和屏幕上的分组 |
 | `src/client/settings-kit.tsx` | 设置块的构件：各阶段分组共享的设置、`useBlockDraft`、字段（包括来源 kind 的字段），以及保存历史 |
+| `src/client/boundary.tsx` | `Boundary`：面板渲染错误的兜底界面，错误详情与重试入口隔离在面板内 |
 | `src/client/models.tsx` | 模型设置分组：角色位（编排/工作单元）、六个阶段、子代理与工具型小模型的模型矩阵，全部留空继承宿主默认 |
 | `src/client/prompts.tsx` | 提示词设置：页面拥有它读取的视图，编辑器拥有草稿，编辑、完整提示词和历史标签页据此渲染；内置部分的编辑器显示已变化的默认值，并保留或丢弃覆盖 |
 | `src/client/prompt-config.ts` | 按段落、团队段落、技能名、内置部分（`part/<key>`，带 `withOverride`）和提示词视图给出的部分标题组织的提示词配置，以及完整提示词的行差异，均为纯函数 |

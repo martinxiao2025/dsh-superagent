@@ -478,9 +478,14 @@ export class Store implements Repositories {
       AND value ->> '$.state' IN ('succeeded','failed','cancelled') AND value ->> '$.endedAt' IS NOT NULL
       AND value ->> '$.endedAt' < ?`).run(project, before).changes),
   }
-  /** 队列读取统一按 schema 解析，字段缺失或类型变化会明确失败而不是变成 `undefined`。 */
+  /** 队列读取统一按 schema 解析，字段缺失或类型变化会明确失败；单行损坏跳过并上报（与 `entityValues` 同口径），不让整个列表失败。 */
   private queueValues(sql: string, ...parameters: SQLInputValue[]): QueueEntry[] {
-    return this.db.prepare(sql).all(...parameters).map(row => QueueEntrySchema.parse(JSON.parse(String(row.value))))
+    const entries: QueueEntry[] = []
+    for (const row of this.db.prepare(sql).all(...parameters)) {
+      try { entries.push(QueueEntrySchema.parse(JSON.parse(String(row.value)))) }
+      catch (error) { this.report(error) }
+    }
+    return entries
   }
   /** 工单/线程/决策的列表读取校验：关键字段必须存在且类型正确，未知字段放行；单行损坏跳过并上报，不让整个列表失败（详情页 `get` 仍 fail-fast）。 */
   private entityValues<T>(sql: string, schema: z.ZodType, ...parameters: SQLInputValue[]): T[] {

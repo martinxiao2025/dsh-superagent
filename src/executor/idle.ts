@@ -16,21 +16,26 @@ export const BACKGROUND_LIMIT_MS = 30 * 60_000
 /** 通过瞬态失败后继续的工作单元在两次查看之间等待工作单元槽位或等待处理恢复的时长。 */
 export const SLOT_WAIT_MS = 5000
 
-/** 瞬时失败的分类表：HTTP 状态优先（408、429 与全部 5xx），其余按网络层与限流文案兜底。 */
+/** 瞬时失败的分类表：HTTP 状态优先（408、429 与全部 5xx），其次按错误的系统 `code` 精确匹配，最后按提供方限流文案兜底。 */
 const TRANSIENT_STATUS = new Set([408, 429])
 const TRANSIENT_MIN_STATUS = 500
-const TRANSIENT_TEXT = ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE', 'UND_ERR', 'socket hang up', 'fetch failed',
-  'network error', 'overloaded', 'rate limit', '\\b(?:408|429|50[0-4])\\b']
+/** Node 网络层错误码：出现在 `error.code` 字段上时精确匹配，不对任意错误文本裸匹配（评审 E10）。 */
+const TRANSIENT_CODE = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'EPIPE', 'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT'])
+/** 无结构化字段时的最后兜底：只匹配提供方与 HTTP 层的固定文案，不包含会被业务文案携带的宽泛词。 */
+const TRANSIENT_TEXT = ['socket hang up', 'fetch failed', 'network error', 'overloaded', 'rate limit', '\\b(?:408|429|50[0-4])\\b']
 const PASSING = new RegExp(TRANSIENT_TEXT.join('|'), 'i')
 
 /**
  * 当错误表示瞬时的网络或模型提供方失败时为 true：HTTP 408、429 或 5xx 状态，
- * 或被拒绝、重置、超时、无法解析主机的连接。
+ * 带已知系统错误码的连接失败，或固定形态的提供方限流/网络文案。
  */
 export function transient(error: unknown): boolean {
   const status = (error as { status?: unknown } | undefined)?.status
   if (typeof status === 'number') return TRANSIENT_STATUS.has(status) || status >= TRANSIENT_MIN_STATUS
-  const text = error instanceof Error ? `${error.name} ${error.message} ${String((error as { code?: unknown }).code ?? '')}` : String(error)
+  const code = (error as { code?: unknown } | undefined)?.code
+  if (typeof code === 'string') return TRANSIENT_CODE.has(code)
+  const text = error instanceof Error ? error.message : String(error)
   return PASSING.test(text)
 }
 

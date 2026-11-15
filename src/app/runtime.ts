@@ -45,12 +45,11 @@ import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
 import { Setup } from './setup.ts'
 import { SecretVault } from '../secrets/vault.ts'
-import { GitCredentials } from '../git-credentials/service.ts'
-import { gitProbe } from '../git-credentials/probe.ts'
-import { FeishuCredentials } from '../feishu-credentials/service.ts'
-import { feishuProbe } from '../feishu-credentials/probe.ts'
-import { httpWikiApi, larkWikiApi, type FeishuWikiApi, type FeishuWikiReader } from '../task-sources/feishu-api.ts'
-import { httpImApi, larkImApi, type FeishuImApi, type FeishuImReader } from '../task-sources/feishu-im-api.ts'
+import type { GitCredentials } from '../git-credentials/service.ts'
+import type { FeishuCredentials } from '../feishu-credentials/service.ts'
+import type { FeishuWikiApi, FeishuWikiReader } from '../task-sources/feishu-api.ts'
+import type { FeishuImApi, FeishuImReader } from '../task-sources/feishu-im-api.ts'
+import { buildCredentials } from './runtime/credentials.ts'
 import { taskSources } from '../task-sources/index.ts'
 import { syncRepoWorkCopy, pushRepoWorkCopy } from '../code-repos/port.ts'
 import { projectRepoId } from '../projects/kind.ts'
@@ -214,40 +213,8 @@ export class Runtime extends Service implements SourceHost {
   /** 构造加密存储与两域凭据服务，以及按凭据现取的飞书知识库/群消息读取能力。必须晚于 `openStorage`。 */
   private buildCredentials(): { vault: SecretVault; gitCredentials: GitCredentials; feishuCredentials: FeishuCredentials;
     feishuWikiReader: FeishuWikiReader; feishuImReader: FeishuImReader } {
-    const { store, setup, commands, machine } = this
-    // 凭据记录与项目引用相互独立：项目只保存记录 ID，材料永远不进入设置快照。
-    const vault = new SecretVault(machine.stateDir)
-    const projects = () => store.projects.map()
-    const gitCredentials = new GitCredentials({ credentials: store.gitCredentials, vault, projects, probe: gitProbe(commands, vault) })
-    const feishuCredentials = new FeishuCredentials({ credentials: store.feishuCredentials, vault,
-      references: () => feishuCredentialReferences(store.projects.list()), probe: feishuProbe(commands) })
-    /** 凭据的调用方式：CLI 身份用可执行文件，应用身份用 appId 与密钥；材料只在这里短暂读取。 */
-    const feishuApi = (credential: string): { cli: string } | { appId: string; secret: string } | undefined => {
-      const record = store.feishuCredentials.get(credential)
-      if (!record) return undefined
-      if (record.mode === 'cli') return { cli: record.cli.trim() || 'lark' }
-      const secret = feishuCredentials.material(credential)?.appSecret
-      return record.appId && secret ? { appId: record.appId, secret } : undefined
-    }
-    /** CLI 身份调用：以机器人身份、JSON 输出，失败时把业务码并进消息。 */
-    const larkCall = (cli: string) => async (args: string[]): Promise<unknown> => {
-      const output = await commands.run(cli, [...args, '--as', 'bot', '--format', 'json'], machine.stateDir)
-      const result = JSON.parse(output) as { ok: boolean; data: unknown; error?: { code?: number; message?: string } }
-      if (!result.ok) throw new Error(`${result.error?.message ?? 'Feishu command failed'}${result.error?.code ? ` (${result.error.code})` : ''}`)
-      return result.data
-    }
-    // 凭据材料只在读取知识库或群消息时短暂进入内存；两种能力共用同一份凭据解析。
-    const feishuWikiReader: FeishuWikiReader = async credential => {
-      const api = feishuApi(credential)
-      if (!api) return undefined
-      return 'cli' in api ? larkWikiApi(larkCall(api.cli)) : httpWikiApi(api.appId, api.secret, this.lifetime)
-    }
-    const feishuImReader: FeishuImReader = async credential => {
-      const api = feishuApi(credential)
-      if (!api) return undefined
-      return 'cli' in api ? larkImApi(larkCall(api.cli)) : httpImApi(api.appId, api.secret, this.lifetime)
-    }
-    return { vault, gitCredentials, feishuCredentials, feishuWikiReader, feishuImReader }
+    // 凭据域装配拆到 `runtime/credentials.ts`（评审 4.1）：Runtime 只调用工厂，不接触材料细节。
+    return buildCredentials({ store: this.store, commands: this.commands, machine: this.machine, lifetime: this.lifetime })
   }
 
   /** 构造效果队列与来源注册表，以及后续阶段共用的链接解析、工单环境与只读资源。必须晚于 `buildCredentials`。 */
@@ -480,7 +447,8 @@ export class Runtime extends Service implements SourceHost {
       requestPass: () => { passes.request() }, models: () => this.ctx.sessionController.modelCatalog(),
       backupDatabase: target => {
         // VACUUM INTO 在读事务中生成一致性快照，运行中的 WAL 库也能安全备份；目标必须是绝对路径（路由层校验）。
-        this.store.db.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
+        // 参数绑定承载路径：不再把路径拼进 SQL（此前仅转义单引号）。
+        this.store.db.prepare('VACUUM INTO ?').run(target)
         return { snapshot: target }
       },
       reset: () => runtime.reset() }
@@ -574,9 +542,4 @@ export class Runtime extends Service implements SourceHost {
       }
     }
   }
-}
-
-/** 收集项目引用的飞书凭据 ID；删除凭据时按它统计引用。 */
-export function feishuCredentialReferences(projects: { project: { feishuCredential?: string } }[]): string[] {
-  return projects.flatMap(({ project }) => project.feishuCredential ? [project.feishuCredential] : [])
 }

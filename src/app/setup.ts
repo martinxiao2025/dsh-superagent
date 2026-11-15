@@ -400,9 +400,9 @@ export class Setup {
     const probe = this.probe()
     const sources: Record<string, ResolvedSource> = {}
     const problems: Record<string, SetupProblem> = {}
-    // 逐条独立解析：一条记录失败不影响其他记录，也不阻止机器级环境初始化。
-    for (const [id, record] of Object.entries(settings.sources)) {
-      if (!record.enabled) continue
+    // 逐条独立解析，一条记录失败不影响其他记录；来源记录之间相互独立，并发解析（评审 E8）以缩短启动等待。
+    await Promise.all(Object.entries(settings.sources).map(async ([id, record]) => {
+      if (!record.enabled) return
       try {
         const resolved = await this.resolveRecord(id, record, probe)
         if (resolved) sources[id] = resolved
@@ -411,10 +411,10 @@ export class Setup {
         problems[id] = error.problem
         context.logger.warn('dsh-superagent leaves source %s out: %s', id, error.message)
       }
-    }
+    }))
     // 每个启用的项目把自己的仓库解析成部署来源，任务来源同步工作副本时复用同一套命令入口。
-    for (const { id, project } of projects) {
-      if (!project.enabled) continue
+    await Promise.all(projects.map(async ({ id, project }) => {
+      if (!project.enabled) return
       const repoId = projectRepoId(id)
       try {
         sources[repoId] = await this.projectSource(repoId, project.codeRepo, project.gitCredential, probe)
@@ -423,7 +423,7 @@ export class Setup {
         problems[repoId] = error.problem
         context.logger.warn('dsh-superagent leaves project repo %s out: %s', id, error.message)
       }
-    }
+    }))
     this.sourceProblems = problems
     const resolved: Deployment = { ...machine, sources }
     const machineProblem = (error: unknown): never => {

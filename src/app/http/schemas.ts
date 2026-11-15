@@ -5,15 +5,16 @@ import { THREAD_FILTERS, TICKET_FILTERS } from '../api.ts'
 import { GitCredentialInputSchema } from '../../git-credentials/kind.ts'
 import { FeishuCredentialInputSchema } from '../../feishu-credentials/kind.ts'
 
-const offset = z.coerce.number().int().nonnegative().catch(0)
-const limit = (fallback: number, max: number) => z.coerce.number().int().positive().catch(fallback).transform(value => Math.min(max, value))
-export const TicketsQuery = z.object({ state: z.enum(TICKET_FILTERS).catch('open'), offset, limit: limit(20, 1000) })
-export const ThreadsQuery = z.object({ filter: z.enum(THREAD_FILTERS).catch('subscribed'), offset, limit: limit(20, 1000) })
+// 分页与过滤参数：缺失时用默认值，非法值一律 400（此前 `.catch` 静默回退，掩盖了调用方的坏参数）。
+const offset = z.coerce.number().int().nonnegative().default(0)
+const limit = (fallback: number, max: number) => z.coerce.number().int().positive().default(fallback).transform(value => Math.min(max, value))
+export const TicketsQuery = z.object({ state: z.enum(TICKET_FILTERS).default('open'), offset, limit: limit(20, 1000) })
+export const ThreadsQuery = z.object({ filter: z.enum(THREAD_FILTERS).default('subscribed'), offset, limit: limit(20, 1000) })
 export const QueueQuery = z.object({ offset, limit: limit(200, 1000) })
 export const ProjectTasksQuery = z.object({ offset, limit: limit(50, 1000) })
 export const RetroQuery = z.object({ by: z.enum(['revision', 'model', 'stage']).default('revision') })
 export const ThreadQuery = z.object({ limit: limit(50, 100), before: z.string().optional(), around: z.string().optional() })
-export const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.literal('24h').optional().catch(undefined), offset,
+export const DecisionsQuery = z.object({ kind: z.string().default(''), window: z.literal('24h').optional(), offset,
   limit: limit(30, 200) })
 const count = z.coerce.number().int().nonnegative()
 export const PromptsQuery = z.object({ revision: count.optional(), offset: count.default(0) })

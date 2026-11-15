@@ -12,6 +12,7 @@ import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { openKnownSession, SessionNavigationError } from '../navigation.ts'
 import { App } from './app.tsx'
+import { Boundary } from './boundary.tsx'
 import { PluginConfig, usePageForm } from './deployment.tsx'
 import { en, zh } from './locales.ts'
 import type { T } from './text.ts'
@@ -42,7 +43,7 @@ function Mounted({ ctx, t }: { ctx: ClientContext; t: T }) {
     }
   }, [ctx, t])
   const form = usePageForm(ctx.get('configForms')?.get<Record<string, unknown>>(ENTRY))
-  return <App t={t} openSession={openSession} deploymentForm={form} />
+  return <Boundary t={t}><App t={t} openSession={openSession} deploymentForm={form} /></Boundary>
 }
 
 export const inject = ['slots', 'locale', 'sessions', 'uiWorkspace']

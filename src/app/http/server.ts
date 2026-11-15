@@ -81,19 +81,30 @@ export function registerHttp(ctx: Context, source: HttpHost | (() => HttpHost | 
   }
   const dispose = ctx.webServer.register({ kind: 'prefix', path: '/orchestrator/api', handler: async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost')
-    if (!sameOrigin(req, ctx.webServer.port ?? 0)) { json(res, 403, { error: 'Same-origin management request required' }); return }
     const method = req.method ?? 'GET'
     // 前缀按路径边界匹配 `/orchestrator/api`，其余 `/orchestrator/*` 交给宿主的页面路由。
     const path = url.pathname.slice('/orchestrator/api'.length).replace(/^\//, '')
     const runtime = resolve()
-    if (!runtime) {
-      const { phase, detail, error, stateDir } = state()
-      // 运行时尚未创建或初始化失败：健康探针返回 200，其余接口以 503 说明阶段，而不是空体 404。
-      if (method === 'GET' && path === 'health') {
+    // 健康探针先于同源校验：监控工具的 GET health 不带同源头也应可用（它只暴露运行状态，不含任何管理能力）。
+    if (method === 'GET' && path === 'health') {
+      if (!runtime) {
+        const { phase, detail, error, stateDir } = state()
         json(res, 200, { ok: false, stage: phase, phase, detail, error: error ?? null, configured: false, paused: false,
           problem: null, listen: listen(), machine: { stateDir }, sources: [] })
         return
       }
+      try {
+        await runtime.ready
+        const route = match(tableFor(runtime), method, path.split('/'))
+        if (!route) throw new RouteError(404, 'Unknown operation')
+        json(res, 200, await route.run({ params: route.params as never, query: {}, body: maxBytes => readBody(req, maxBytes) }))
+      } catch (error) { json(res, ...failure(error)) }
+      return
+    }
+    if (!sameOrigin(req, ctx.webServer.port ?? 0)) { json(res, 403, { error: 'Same-origin management request required' }); return }
+    if (!runtime) {
+      const { phase, detail, error, stateDir } = state()
+      // 其余接口以 503 说明启动阶段，而不是空体 404。
       json(res, 503, { error: detail || 'dsh-superagent is not ready', code: 'startupPending', phase, detail, stateDir })
       return
     }
