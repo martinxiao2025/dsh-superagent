@@ -3,7 +3,7 @@ task_id,title,status,description,priority,owner,acceptance,depends_on,tags,updat
 2,架构自我迭代升级机制,done,版本对照/升级指南/verify-live 闭环;插件可基于任务清单驱动后续迭代,P1,,升级文档与脚本可执行,1,architecture,2026-11-15
 3,验证插件设计并优化提示词,done,对照 tool-design.md 审查工具定义;优化软件开发场景提示词,P1,,提示词变更后主会话与执行器行为符合预期,1,prompts,2026-11-15
 4,文档清理合并,done,原 012 并入 011;文档编号连续且无重复,P2,,文档表无重复行且引用路径存在,2;3,docs,2026-11-15
-5,项目设置独立建表,todo,把 projects 从 Settings 整体快照拆为独立 SQLite 表(参照 git_credential/feishu_credential 的实体化路径);SCHEMA_VERSION 14→15;调度器/队列/面板改读新表;理由:项目是行级实体有 CRUD 与引用保护,快照整体重写放大写放大且设置历史混入项目噪音,P1,,pnpm check 通过;009 第4章更新;项目 CRUD 与引用保护行为不变,1;6,architecture,2026-11-15
+5,项目设置独立建表,todo,"把 projects 从 Settings 整体快照拆为独立 SQLite 表(参照 git_credential/feishu_credential 的实体化路径);SCHEMA_VERSION 14→15;调度器/队列/面板改读新表;理由:项目是行级实体有 CRUD 与引用保护,快照整体重写放大写放大且设置历史混入项目噪音",P1,,pnpm check 通过;009 第4章更新;项目 CRUD 与引用保护行为不变,1;6,architecture,2026-11-15
 6,Excel 任务来源预检的凭据注入实测,blocked,在装有真实 SSH 凭据的实例上实测 task-sources/verify 与首轮轮询的端到端链路(同步工作副本→读取清单→建单→回写状态),P0,,生产实例首轮轮询建单成功且回写后 status 列更新,1,verification,2026-11-15
 7,配置粒度收尾:tick 间隔与抖动进配置,todo,调度器的 TICK_MS 与轮询抖动(±10%)从常量改为 executor 配置项;006 部署文档补充说明,P2,,配置可改且重启后生效;测试覆盖默认值,5,architecture,2026-11-15
 8,日常备份机制,todo,SQLite WAL+secrets 的定期备份与恢复到时间点定义;backupDatabase(VACUUM INTO)已有但缺定时与恢复演练文档,P2,,备份可定时执行;恢复文档含演练步骤,5,operations,2026-11-15
