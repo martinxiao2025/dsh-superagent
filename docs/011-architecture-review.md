@@ -2,7 +2,7 @@
 
 > 评审对象：`dsh-superagent`（DeepSeek Harness 插件）当前工作区代码
 > 权威方案：[009 项目权威设计与实施基线](009-authoritative-project-design.md)
-> 配套：010（任务格式规范，原 016）。原 011/012 已并入 009 后删除；原 014（裁剪清单）的 C 级收尾项并入本文 §9.2、量化数据以其为准被推翻后删除；原 015（差距清单）的关闭记录由本文 §9.1 承接后删除；原文均见 git 历史。
+> 配套：010（任务格式规范，原 016）。原 011/012 已并入 009 后删除；原 014（裁剪清单）的 C 级收尾项并入本文 §9.2、量化数据以其为准被推翻后删除；原 015（差距清单）的关闭记录由本文 §9.1 承接后删除；原 012（独立架构评审）的行动项由本文 §10 承接后于 2026-11-15 删除；原文均见 git 历史。
 > 编号说明：本文原编号 017；2026-11-12 文档清理时按「013→009、016→010、017→011」重排，正文引用已同步。
 > 评审方式：只读。静态阅读 + 依赖图脚本核验 + 与 009/014/015/010（原编号）逐条比对；未运行 `pnpm test`/`build`，未修改任何源码
 > 评审日期：2026-11-11
@@ -315,3 +315,26 @@
     - C8 `views/settings.ts` 拆分：聚合下发多类记录，应拆成 projects / credentials 视图。
     （C3/C4 与第 3 项分层重构同源；C5/B6/A6 所指文件已删除或完成。`docs.spec.ts`
     「测试表无重复行」检查已随本次文档清理落地。）
+
+## 10. 独立评审（原 012）的关闭记录（2026-11-15）
+
+原 `012-independent-architecture-review.md` 是一次不参考既有文档的独立源码分析，其事实层
+（§1–§6 画像/装配/模块/链路/数据流/模式/理念七支柱）在其撰写时点有价值；行动项（§8 R1–R14）
+经逐项核对**已全部消耗**，本文承接其关闭证据后该文件删除（原文见 git 历史）：
+
+| 原方案 | 关闭位置 |
+| --- | --- |
+| R1 断 executor↔app 环 | 本文 §9.2 第 3 项（2026-11-15：`app/later.ts` 叶子） |
+| R2 凭据两域共享骨架 | `src/secrets/credential-service.ts`（共享服务骨架，域差异注入） |
+| R3 Runtime 分阶段装配 | `Runtime.buildSources/buildSessions/buildDomain` 已分阶段 |
+| R4 预检收敛单轨 | 预检统一经 `TaskSourceDriver.verify` 与 `sourceConfig` 注入 |
+| R5 设置解析按修订缓存 | `settingsPolicy(settings, sources)` 每轮一次读取（011 §9.2 第 1 项同批） |
+| R6 列表查询分页下推 | `store.queue.ready/terminal` SQL 下推（007 store-read 记录） |
+| R7 http.ts 三拆 | `src/app/http/{routes,schemas,server,error}.ts` |
+| R8 FieldSpec 下沉 | `src/fields.ts` 中性叶子 |
+| R9 infra 反向依赖清理 | `src/deployment-types.ts` 叶子（2026-11-15） |
+| R10 插件出口收敛 | `src/index.ts` 仅导出 apply/Config/类型 |
+| R11 thread touch 去重 | `src/core/part.ts` 的 `touchThread` |
+| R12 队列↔工单语义解耦 | `settleOutcome` 纯函数（唯一终态映射出口） |
+| R13 DDL 漂移检测加固 | 生成列比对规范化 + 删列前清索引（2026-11-14 批次） |
+| R14 无迁移策略文档化 | 009 §9.2 与 §13 已记录 |
