@@ -114,6 +114,12 @@ export class UsageMeter {
       try {
         this.host.engine.exhaustTicket(ticketId, `Token budget exhausted: ${describe(sum)}`)
       } catch { /* 工单已在别处结束。 */ }
+      // 连续性补洞：被截断回合的工作单元收到一次解释（固定 requestId 幂等、不唤醒）——
+      // 人在该会话继续追问时，模型知道回合为何被取消、工单为何 ended，而不是只见工具 guard 的拒绝文案。
+      // 注入发生在结束事务提交之后，不会被停止路径的 keepInbox:false 清除；主会话经 ticket.ended 通知获知。
+      const detail = `used ${describe(sum)}; the token budget is exhausted, so this ticket was ended (stopped, budget_exceeded) and its turn cancelled.`
+      this.host.sessions.prompt(workerSessionId(ticketId), `budget-hard:${ticketId}`, JSON.stringify({ budget_hard: true, ticket_id: ticketId, detail }),
+        { inject: 'The token budget is exhausted; the ticket ended' }).catch(() => { /* 会话不存在时跳过。 */ })
       return
     }
     if (this.softNotified.has(ticketId)) return

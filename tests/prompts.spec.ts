@@ -113,15 +113,18 @@ it('lists a ticket\'s execution environment in its prompt, and says setup is inc
   })
 })
 
-it('registers the built-in Source skills, Feishu only with a Feishu bot, before the team skills', () => {
+it('registers the admission skill for the orchestrator, then the built-in Source skills, Feishu only with a Feishu bot, before the team skills', () => {
   withStore(store => {
     const config = { ...defaultPrompts(), skills: { release: 'Tag releases.' } }
     const skills = promptsOf(store).skills(config)
-    expect(skills.map(([name]) => name)).toEqual(['feishu', 'github', 'gitlab', 'release'])
-    expect(skills[1]![1]).toContain('## CLI 用法')
+    expect(skills.map(([name]) => name)).toEqual(['admission', 'feishu', 'github', 'gitlab', 'release'])
+    expect(skills[0]![1]).toContain('**规则匹配。**')
     expect(skills[2]![1]).toContain('## CLI 用法')
-    expect(skills[3]![1]).toBe('Tag releases.')
-    expect(new Prompts(store, () => 100000, variables, () => false).skills(config).map(([name]) => name)).toEqual(['github', 'gitlab', 'release'])
+    expect(skills[3]![1]).toContain('## CLI 用法')
+    expect(skills[4]![1]).toBe('Tag releases.')
+    expect(new Prompts(store, () => 100000, variables, () => false).skills(config).map(([name]) => name)).toEqual(['admission', 'github', 'gitlab', 'release'])
+    // worker 会话不注册准入技能：评估规则只在主会话按需加载。
+    expect(promptsOf(store).skills(config, 'worker').map(([name]) => name)).toEqual(['feishu', 'github', 'gitlab', 'release'])
   })
 })
 

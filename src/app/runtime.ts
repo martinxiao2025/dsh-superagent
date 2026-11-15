@@ -239,6 +239,8 @@ export class Runtime extends Service implements SourceHost {
       masterId: this.masterId, context: this.ctx,
       promptVersion: id => this.sessions.promptVersion(id), mayRead: (id, revision) => this.sessions.mayRead(id, revision),
       feishuPageSize: source => feishuSettings(sources, source).readPageSize, sourceLink: link }
+    // 工单转写缓存的失效钩子：会话到达任何新事件即作废其 `transcript:<会话>` 缓存，读侧下次重新拉取。
+    this.disposers.push(this.ctx.on('session/event', session => resources.pages.delete(`transcript:${session.id}`)))
     return { effects, sources, links, link, environment, resources }
   }
 

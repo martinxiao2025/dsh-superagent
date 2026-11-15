@@ -60,7 +60,7 @@ function setup(strength: 'explicit' | 'inferred' = 'inferred', bodies = ['issue 
   // 评估器保留的每次评估状态，在评估结束时释放。
   const kept = assessor as unknown as { evals: Map<string, unknown> }
   const size = () => kept.evals.size
-  return { repo, engine, assessor, tools, size, gate }
+  return { repo, engine, assessor, tools, size, gate, commands: commands as unknown as { lark: ReturnType<typeof vi.fn> } }
 }
 const issue = (n: number): Trigger => ({ id: `issue-${n}`, source: 'feishu', threads: [{ source: 'feishu', id: String(n) }], actor: { source: 'feishu', id: 'ou_bob' }, human: true,
   at: new Date(Date.UTC(2026, 8, 9, 0, 0, n)).toISOString(), text: `issue ${n}`, meta: { chatId: 'oc_team', messageId: `om_${n}` } })
@@ -96,8 +96,7 @@ it('keeps nothing from a context read that finishes after its Eval was decided',
   expect(s.size()).toBe(0)
 })
 
-it('reads the context of a Trigger through its Source, and none for a Source that gives none', async () => {
-  const s = setup()
+it('reads the context of a Trigger through its Source, and none for a Source that gives none', async () => {  const s = setup()
   s.engine.receive(issue(1)); s.engine.evaluateDue()
   const context = await s.assessor.context('issue-1', signal)
   expect(context.thread).toMatchObject({ complete: true, loaded_messages: 6, source_found: true })
@@ -113,6 +112,27 @@ it('reads the context of a Trigger through its Source, and none for a Source tha
   // 即使来源不提供线程上下文，触发器自身的文本仍可读取。
   expect(await s.tools.orchestrator_eval_read!({ trigger_id: 'other-2', resource: 'message', offset: 0 },
     signal)).toMatchObject({ text: 'issue 2' })
+})
+
+it('reuses the loaded thread window for a later Eval on the same thread without refetching it', async () => {
+  const s = setup()
+  const sameThread = (n: number): Trigger => ({ ...issue(n), threads: [{ source: 'feishu', id: 'omt_1' }] })
+  s.engine.receive(sameThread(2)); s.engine.evaluateDue()
+  const first = await s.assessor.context('issue-2', signal)
+  expect(first.thread).toMatchObject({ complete: true, loaded_messages: 6 })
+  const larkCalls = () => s.commands.lark.mock.calls.length
+  const loaded = larkCalls()
+  expect(loaded).toBeGreaterThan(0)
+  s.engine.decide('issue-2', { kind: 'ignore', reason: 'not a request' })
+  // 同一线程的新评估（如超时重排或重启后）：窗口从线程级缓存复用，不再发起点名/话题读取。
+  s.engine.receive(sameThread(3)); s.engine.evaluateDue()
+  const second = await s.assessor.context('issue-3', signal)
+  expect(second.thread).toMatchObject({ complete: true, loaded_messages: 6 })
+  expect(larkCalls()).toBe(loaded)
+  // 缓存窗口同样预填消息读取：按 id 读窗口内消息不再触网。
+  expect(await s.tools.orchestrator_eval_read!({ trigger_id: 'issue-3', resource: 'message', message_id: 'om_2', offset: 0 },
+    signal)).toMatchObject({ text: 'comment 1' })
+  expect(larkCalls()).toBe(loaded)
 })
 it('routes an explicit candidate instead of assessing it: each eval tool names the routing tools', async () => {
   const s = setup('explicit')

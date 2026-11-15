@@ -633,7 +633,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 设置和提示词保存返回已保存的配置。策略同步返回来源、允许名单大小，以及 `added` 和 `removed` 名称。
 
-`orchestrator_eval` 返回上下文而不是指令。评估指令位于 `runtime/admission`（`prompts/admission.md`），规则位于 `runtime/policy`。其上下文包括：
+`orchestrator_eval` 返回上下文而不是指令。评估入口指令位于 `runtime/admission`（`prompts/admission.md`），完整评估规则位于只注册给主会话的准入技能 `skill/admission`（`skills/dsh-superagent-admission/SKILL.md`，经 `skill` 工具按需加载），规则位于 `runtime/policy`。其上下文包括：
 
 - 触发器文本，最多 4,000 个字符，含图片 id 和批次中的其他触发器。
 - 最多八个 `related_tickets`，打开的优先，以及 `tickets_total`。
@@ -694,7 +694,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 没有工具用于忽略未完成的决定、重新运行安装、刷新来源显示名称，或把执行器拥有的人工跟进送入评估。最后一种操作会被 `orchestrator_trigger_requeue` 有意拒绝。其他面板操作都有等价的工具。
 
-大多数内置指令位于 `prompts/*.md`，每行一句，由 `promptFile` 连接。来源技能位于 `skills/dsh-superagent-*/SKILL.md`。工具说明和固定通知（例如重启恢复备注）留在代码中。评估指令只位于 `prompts/admission.md`。
+大多数内置指令位于 `prompts/*.md`，每行一句，由 `promptFile` 连接。来源技能与准入规则技能位于 `skills/dsh-superagent-*/SKILL.md`。工具说明和固定通知（例如重启恢复备注）留在代码中。评估入口指令位于 `prompts/admission.md`，评估详述位于准入技能。
 
 `tests/model-surface.spec.ts` 会检查这些接口是否偏移。[004 提示词](004-prompts.md) 说明团队可编辑的部分。
 

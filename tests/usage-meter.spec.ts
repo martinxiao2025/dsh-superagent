@@ -90,15 +90,18 @@ it('prefers the project budget over the global one', () => {
   expect(relays).toHaveLength(1)
 })
 
-it('ends the ticket at the hard threshold', () => {
-  const { store, relays, exhaust, emit, seed } = fixture({ budget: { totalTokens: 1000 } })
+it('ends the ticket at the hard threshold and explains the cut-off to the worker', () => {
+  const { store, relays, prompts, exhaust, emit, seed } = fixture({ budget: { totalTokens: 1000 } })
   seed()
   emit('worker-t1', { inputTokens: 900, outputTokens: 200 })
   expect(exhaust).toHaveBeenCalledOnce()
   const ended = store.tickets.get('t1')!.ended
   expect(ended).toMatchObject({ outcome: 'stopped', by: 'executor', reason: expect.stringContaining('Token budget exhausted') })
-  // 硬档越过软档：不重复提醒。
+  // 硬档越过软档：不重复提醒；被截断回合的工作单元收到一次 budget_hard 解释（幂等 requestId，不唤醒）。
   expect(relays).toHaveLength(0)
+  expect(prompts.map(prompt => prompt.requestId)).toEqual(['budget-hard:t1'])
+  expect(prompts[0]!.sessionId).toBe('worker-t1')
+  expect(prompts[0]!.text).toContain('"budget_hard":true')
 })
 
 it('ignores usage without a budget and messages without usage accounting', () => {

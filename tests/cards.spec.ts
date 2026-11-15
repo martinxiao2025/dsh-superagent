@@ -25,15 +25,17 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
   ['An out-of-scope proactive ticket ends as dropped', 'work', ['停止并报告 dropped，不扩大范围'], ['在内部报告 blocked']],
   ['An out-of-scope proactive ticket ends as dropped', 'team/scope', ['报告 blocked，或对主动工单报告 dropped']],
   ['A report is progress, ready, blocked, failed or dropped', 'work', ['调用 orchestrator_report，带上 progress、ready、blocked、failed 或 dropped；']],
-  // 评估规则只在主会话的准入文本中陈述一次，orchestrator_eval 不再重复。
+  // 评估规则只在主会话的准入文本与准入技能中陈述一次，orchestrator_eval 不再重复。
   ['An assessment judges every enabled rule and accepts only a settled, bounded change', 'dispatch', [], ['提交 rule_assessments']],
   ['An assessment judges every enabled rule and accepts only a settled, bounded change', 'admission',
+    ['评估的完整规则在技能 dsh-superagent-admission 中：第一次评估任何候选之前先打开它',
+      '永远不要重放旧消息，也不要派发已失效的历史批准']],
+  ['An assessment judges every enabled rule and accepts only a settled, bounded change', 'skill admission',
     ['为每一条启用的规则返回 rule_assessments，且恰好一条',
       '说某条规则不适用的理由不能算作匹配',
       '只有在请求了实现、target_basis 已指定或属于既有标准，且不再有产品/设计决策时才接受',
       '即使没有像素值或 CSS 指令也可能符合条件', '不发送 ACK、不派 worker、不建 worktree，也不主动提出澄清问题',
-      '这个横幅和别的卡片看起来不一样',
-        '永远不要重放旧消息，也不要派发已失效的历史批准']],
+      '这个横幅和别的卡片看起来不一样']],
   ['A stop goes through orchestrator_route, not through an assessment', 'dispatch', [], ['decision=stop']],
   ['A stop goes through orchestrator_route, not through an assessment', 'admission', [], ['decision=stop']],
   // 跟进消息只有一个决定者，即它到达的工单的 worker；主会话仅在有人要求时停止工作。
@@ -104,7 +106,7 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
   ['Removed rules stay removed', '*', [], ['最多三轮调查/实施', '继续 dispatch 直到明确指示', 'page-size']],
 ]
 const textOf = (file: string) => file === '*' ? composePrompt(defaultPrompts(), 'orchestrator') + composePrompt(defaultPrompts(), 'worker')
-  : file.startsWith('skill ') ? bundledSkills[file.slice(6) as 'github' | 'feishu'].content : promptFile(file)
+  : file.startsWith('skill ') ? bundledSkills[file.slice(6) as 'admission' | 'github' | 'feishu'].content : promptFile(file)
 it.each(RULES)('%s (%s)', (_rule, file, says, gone = []) => {
   const text = textOf(file)
   for (const words of says) expect(text).toContain(words)

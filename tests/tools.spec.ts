@@ -42,7 +42,7 @@ it('reads the lists, a ticket, a decision, the settings, the prompts and the mod
   }
   expect(JSON.parse((await read('settings/policy') as { text: string }).text).value.sources.feishu.allowed).toEqual([{ id: 'ou_alice', name: 'Alice' }])
   await expect(read('settings/source:retired')).rejects.toThrow('Unknown settings block')
-  const skills = { built_in: ['dsh-superagent-feishu', 'dsh-superagent-github', 'dsh-superagent-gitlab'], team: [] }
+  const skills = { built_in: ['dsh-superagent-admission', 'dsh-superagent-feishu', 'dsh-superagent-github', 'dsh-superagent-gitlab'], team: [] }
   expect(await read('prompts')).toMatchObject({ revision: 0, read: 'prompts/0', skills, items: [expect.objectContaining({ revision: 0 })], next_offset: null })
   const models = [{ id: 'm1', name: 'One' }, { id: 'm2', name: 'Two' }]
   const catalog = { default: { provider: 'p', model: 'm1' }, groups: [{ id: 'p', name: 'Provider', models }], failures: [] }
@@ -355,6 +355,13 @@ it('reads a ticket with the ids it is tied to, its reports by assignment, and it
   const transcript = JSON.parse((await read(`ticket/${ticket.id}/transcript`) as { text: string }).text) as { preview: string; read: string }
   expect(transcript).toMatchObject({ preview: expect.stringMatching(/^I fixed the margin\./), read: `ticket/${ticket.id}/message/0` })
   expect(transcript.preview.length).toBeLessThanOrEqual(80)
+  // 转写进 TextCache：事件未变时重复读取不再重拉会话事件；会话到达新事件即失效并重新拉取。
+  const fetched = vi.mocked(h.controller.events).mock.calls.length
+  expect(JSON.parse((await read(`ticket/${ticket.id}/transcript`) as { text: string }).text)).toEqual(transcript)
+  expect(vi.mocked(h.controller.events).mock.calls.length).toBe(fetched)
+  h.ctx.emit('session/event', { id: sessionId } as never, { type: 'assistant/message', seq: 2, time: 0, data: {} } as never)
+  await read(`ticket/${ticket.id}/transcript`)
+  expect(vi.mocked(h.controller.events).mock.calls.length).toBe(fetched + 1)
 })
 
 it('reads a trigger once with the message it replies to and the messages around it on its thread, without the CI runs', async () => {

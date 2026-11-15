@@ -22,6 +22,11 @@ export class TextCache {
       this.size -= value.length
     }
   }
+  /** 移除一个条目；transcript 缓存在其会话到达新事件时以此失效。 */
+  delete(key: string): void {
+    this.size -= this.texts.get(key)?.length ?? 0
+    this.texts.delete(key)
+  }
   /** 条目按从最久未使用到最近使用的顺序排列。 */
   entries(): IterableIterator<[string, string]> { return this.texts.entries() }
 }

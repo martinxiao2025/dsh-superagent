@@ -317,7 +317,7 @@ export class Sessions {
     const skillScope = agent.ctx.inject(['skills'], scope => {
       binding.scope = scope
       binding.skills = undefined
-      this.bindSkills(binding, host.prompts.current())
+      this.bindSkills(binding, host.prompts.current(), master ? 'orchestrator' : 'worker')
     })
     binding.disposers.push(() => { skillScope.dispose().catch((error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release a skill scope: %s', String(error)) }) })
     await skillScope
@@ -399,14 +399,14 @@ export class Sessions {
     })
     this.bindings.set(agent, { disposers: this.workOnly(agent, ticketId), subagent: true })
   }
-  /** 在智能体的技能作用域中注册某一提示词版本的技能，替换较早版本的技能。 */
-  private bindSkills(binding: SessionBinding, version: PromptVersion): void {
+  /** 在智能体的技能作用域中注册某一提示词版本的技能（主会话含准入规则技能），替换较早版本的技能。 */
+  private bindSkills(binding: SessionBinding, version: PromptVersion, role: 'orchestrator' | 'worker'): void {
     const { scope, skills: previous } = binding
     if (!scope || previous?.revision === version.revision) return
     previous?.dispose()
     const disposers: (() => void)[] = []
-    for (const [name, content] of this.host.prompts.skills(version.config)) {
-      const bundled = name === 'feishu' || name === 'github' || name === 'gitlab' ? bundledSkills[name] : undefined
+    for (const [name, content] of this.host.prompts.skills(version.config, role)) {
+      const bundled = name === 'admission' || name === 'feishu' || name === 'github' || name === 'gitlab' ? bundledSkills[name] : undefined
       const body = version.config.skills[name] ?? ''
       const description = bundled?.description ?? (body.replace(/\s+/g, ' ').slice(0, 120) || 'Custom dsh-superagent operational skill.')
       disposers.push(scope.skills.register({ name: `${SKILL_PREFIX}${name}`, description, content, source: 'runtime',
@@ -419,7 +419,7 @@ export class Sessions {
     const version = this.host.prompts.current()
     if (!bind) return version
     const binding = this.bindings.get(agent)
-    if (binding) this.bindSkills(binding, version)
+    if (binding) this.bindSkills(binding, version, agent.id === this.host.masterId ? 'orchestrator' : 'worker')
     const { store } = this.host
     const revisions = store.get(KV.sessions.prompts(agent.id)) ?? []
     // 修订数组封顶：只保留最近 N 个，防止提示词多次更新后 KV 无界增长。

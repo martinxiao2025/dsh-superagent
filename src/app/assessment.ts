@@ -41,6 +41,8 @@ type ReadCache = {
 }
 /** 评估运行期间保留的每次评估状态：已提供的读取缓存、已加载的线程上下文（或错误），以及进行中的初始加载。 */
 interface EvalReads { cache: ReadCache; context?: AssessmentContext; error?: string; loading?: Promise<void> }
+/** 线程级窗口缓存：评估超时重排或宿主重启后，同线程的新评估直接复用已读线程窗口，免去 `seed()` 全量重拉。 */
+const THREAD_CACHE_TTL_MS = 10 * 60_000, THREAD_CACHE_LIMIT = 8
 /** 评估来源不提供线程上下文的触发器时返回的消息。 */
 const NO_CONTEXT = 'This Source gives no Thread context; assess the Trigger\'s own text and the batch.'
 /** `MasterAssessor` 使用的宿主依赖。 */
@@ -88,6 +90,8 @@ export type EvalRead = z.infer<typeof EvalReadSchema>
 export class MasterAssessor implements Assessor {
   /** 按 `evalId` 索引的每次评估读取缓存和线程上下文。 */
   private readonly evals = new Map<string, EvalReads>()
+  /** 按线程键索引的已读窗口（不可变历史，TTL 淘汰）：同线程新评估的 `seed()` 优先从这里复用。 */
+  private readonly windows = new Map<string, { at: number; context: AssessmentContext }>()
   private readonly controller = new AbortController()
   /** 注册转发每次评估候选卡片的处理器；链接查找可能会使其延迟数秒。 */
   constructor(private readonly host: AssessorHost) {
@@ -141,6 +145,13 @@ export class MasterAssessor implements Assessor {
     if (reads.context || reads.error !== undefined) return
     const thread = this.host.threadContext(trigger)
     if (!thread) { reads.error = NO_CONTEXT; return }
+    // 线程级复用：同线程的近期评估（超时重排/重启后）若已读过窗口，且缓存窗口覆盖当前触发器的消息，直接采用。
+    const cached = this.windows.get(threadKey(trigger.threads[0]!))
+    if (cached && Date.now() - cached.at < THREAD_CACHE_TTL_MS
+      && (thread.messageId === undefined || cached.context.messages.some(message => message.id === thread.messageId))) {
+      this.adopt(evalId, trigger, thread, cached.context)
+      return
+    }
     let loading = reads.loading
     if (!loading) {
       // 防止异步上下文加载运行期间发生并发完成或替换。
@@ -153,13 +164,8 @@ export class MasterAssessor implements Assessor {
           const commands = this.host.commands.withSignal(signal)
           const context = await admissionContext(thread, commands, this.host.deployment.admissionContextMaxPages.get())
           if (!current()) return
-          reads.context = context
-          // 允许分页从初始窗口的末尾继续。
-          if (context.next) reads.cache.cursors.add(context.next)
-          for (const message of context.messages) if (!message.deleted) {
-            reads.cache.messages.set(message.id, message.text)
-            this.imageReferences(thread, trigger, message.text, message.id, reads.cache)
-          }
+          this.remember(trigger, context)
+          this.adopt(evalId, trigger, thread, context)
         } catch (error) {
           caller?.throwIfAborted()
           if (current()) reads.error = `Thread context unavailable: ${String(error).slice(0, 300)}. Use orchestrator_eval_read before deciding based on missing context.`
@@ -171,12 +177,31 @@ export class MasterAssessor implements Assessor {
     caller?.throwIfAborted()
     if (!this.live(evalId, trigger)) throw new Error(FINISHED)
   }
+  /** 把已读线程窗口登记进 `reads`：作为该评估的上下文，并预填消息缓存与续读游标。 */
+  private adopt(evalId: string, trigger: Trigger, thread: NonNullable<ReturnType<AssessorHost['threadContext']>>, context: AssessmentContext): void {
+    const reads = this.evals.get(evalId)
+    if (!reads) return
+    reads.context = context
+    // 允许分页从初始窗口的末尾继续。
+    if (context.next) reads.cache.cursors.add(context.next)
+    for (const message of context.messages) if (!message.deleted) {
+      reads.cache.messages.set(message.id, message.text)
+      this.imageReferences(thread, trigger, message.text, message.id, reads.cache)
+    }
+  }
+  /** 把新读到的线程窗口存入线程级缓存（容量上限内按插入序淘汰最旧）。 */
+  private remember(trigger: Trigger, context: AssessmentContext): void {
+    const threadKeyOf = threadKey(trigger.threads[0]!)
+    this.windows.delete(threadKeyOf)
+    this.windows.set(threadKeyOf, { at: Date.now(), context })
+    while (this.windows.size > THREAD_CACHE_LIMIT) this.windows.delete(this.windows.keys().next().value!)
+  }
   /**
    * 返回 `orchestrator_eval` 载荷：触发器文本（最多 `TRIGGER_CHARS`）、同批其他触发器、线程上的关联工单、
    * 构建该评估所用的策略版本，以及初始线程窗口（前五条消息及触发器两侧各五条，截断到 `WINDOW_CHARS`，
    * 其最近两条相邻消息为 `NEAR_CHARS`，附总长度和图片 ID；其他已加载消息以 `STUB_CHARS` 预览呈现；
    * `orchestrator_eval_read` 可按 ID 完整读取任意消息）。
-   * 评估说明位于主会话的提示词（`prompts/admission.md`）中，而不是此载荷里。
+   * 评估说明位于主会话的提示词（`prompts/admission.md`）与准入技能（`dsh-superagent-admission`）中，而不是此载荷里。
    */
   async context(triggerId: string, signal?: AbortSignal) {
     const { candidate, trigger } = this.evalFor(triggerId)

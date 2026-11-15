@@ -24,7 +24,7 @@
 | 共享指令与角色 | `runtime/shared`, `runtime/orchestrator`, `runtime/worker` |
 | 工作指令 | `runtime/subscriptions`, `runtime/replies`, `runtime/dispatch`, `runtime/work`, `runtime/admission` |
 | 交接指令 | `runtime/handoff/orchestrator`, `runtime/handoff/worker` |
-| 来源技能 | `skill/feishu`, `skill/github`, `skill/gitlab` |
+| 来源技能 | `skill/admission`, `skill/feishu`, `skill/github`, `skill/gitlab` |
 | 生成段落 | `runtime/environment`, `runtime/policy`, `runtime/policy/none` |
 
 生成段落是可编辑模板。它们必须保留这些占位符：
@@ -54,7 +54,7 @@
 7. `runtime/environment`。
 8. `runtime/policy`，仅用于主会话。
 
-准入指令来自 `prompts/admission.md`。它们描述主动评估，以及何时可以仅凭卡片忽略无关候选。`orchestrator_eval` 返回上下文，而不是重复这些指令。
+准入指令分两层：`prompts/admission.md`（`runtime/admission`）只保留评估入口与不可信数据两段，并指引第一次评估前先打开技能；完整的评估规则（规则匹配、方向判定、视觉与混合反馈、工单范围与读取）在 `skill/admission`（`skills/dsh-superagent-admission/SKILL.md`），只注册给主会话，经 `skill` 工具按需进入上下文——主会话每请求的固定提示词因此减少约 1.9k 字符，评估细节只在真正评估时支付。`orchestrator_eval` 返回上下文，而不是重复这些指令。
 
 环境段落给主会话提供部署级的值，给每个执行器提供其工单专属的值。策略段落在每次模型请求时从设置重新生成。它包含策略版本、接单模式、明确请求豁免，以及以 `- <name> (<id>): <instruction>` 形式列出的已启用规则，或说明未启用任何规则。它放在最后，因此策略变更不会影响前面的提示词文本。
 

@@ -122,14 +122,22 @@ const triggerLine = (trigger: Trigger) => ({ trigger_id: trigger.id, actor: trig
   preview: preview(trigger.text), chars: trigger.text.length, read: `trigger/${trigger.id}` })
 async function transcript(host: ResourceHost, ticketId: string) {
   // 0.2.2 起 `inspect` 已被 `events` 分页取代：一页足够覆盖执行器会话的转写读取。
+  // 原始事件按 `${worker 会话}:transcript` 存入 TextCache；runtime 在该会话到达新事件时删除该键，
+  // 因此事件未变期间的重复读取（排查、worker 自读）不再重拉会话事件。
   // 线上的 `SessionWireEvent.type` 是宽泛 string；转写读取只认三种消息事件，逐条收窄后再交给 transcriptEntry。
-  const page = await host.context.sessionController.events({ address: { kind: 'session', sessionId: workerSessionId(ticketId) as SessionId } },
-    new AbortController().signal)
-  return page.records.flatMap(record => {
-    const event = record.event
-    return event.type === 'user/message' || event.type === 'tool/result' || event.type === 'assistant/message'
-      ? [event as unknown as Parameters<typeof transcriptEntry>[0]] : []
-  })
+  const sessionId = workerSessionId(ticketId), cacheKey = `transcript:${sessionId}`
+  let body = host.pages.get(cacheKey)
+  if (body === undefined) {
+    const page = await host.context.sessionController.events({ address: { kind: 'session', sessionId: sessionId as SessionId } },
+      new AbortController().signal)
+    body = JSON.stringify(page.records.flatMap(record => {
+      const event = record.event
+      return event.type === 'user/message' || event.type === 'tool/result' || event.type === 'assistant/message'
+        ? [event as unknown as Parameters<typeof transcriptEntry>[0]] : []
+    }))
+    host.pages.set(cacheKey, body)
+  }
+  return JSON.parse(body) as Parameters<typeof transcriptEntry>[0][]
 }
 
 const ROUTES: readonly Route[] = [

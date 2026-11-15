@@ -15,6 +15,8 @@ export const stageGuides: Readonly<Record<Stage, string>> = Object.fromEntries(S
 /** Bundled Source skills registered by dsh-superagent; a team may override their text. */
 export const sourceSkills: Readonly<Record<'feishu' | 'github' | 'gitlab', string>> = { feishu: bundledSkills.feishu.content,
   github: bundledSkills.github.content, gitlab: bundledSkills.gitlab.content }
+/** 准入评估的完整规则技能（`skills/dsh-superagent-admission/SKILL.md`）；仅注册给主会话，团队可用 `skill/admission` 覆盖。 */
+export const admissionSkill = bundledSkills.admission.content
 export const cliNotes = promptFile('cli')
 /** Default text for the team-editable prompt sections (communication, ticket scope, and PR delivery). */
 export const teamDefaults = {
