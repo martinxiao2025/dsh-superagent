@@ -29,10 +29,8 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
   await click(find(zh['tab.settings'], '.dt-status-head button'))
   await click(zh['mode.auto'])
   await type(field<HTMLInputElement>(zh.evalTimeout), '180')
-  const [provider, model] = all('.dt-model input')
-  await type(provider as HTMLInputElement, 'worker-provider'); await type(model as HTMLInputElement, 'worker-model')
   await click(zh.save)
-  expect(server.settings.eval).toEqual({ mode: 'auto', timeoutSeconds: 180, model: { provider: 'worker-provider', model: 'worker-model' } })
+  expect(server.settings.eval).toEqual({ mode: 'auto', timeoutSeconds: 180 })
   await click(find(`${zh['promptPart.runtime/work']}${zh['settingsGroupTag']}`, '.dt-settings-link'))
   await type(field<HTMLInputElement>(zh.maxWorkers), '5')
   // 空的根目录使用默认目录，字段会说明它，而不是看起来已设置。
@@ -48,14 +46,9 @@ it('saves the Eval block on the Policy settings and the Executor with its execut
   await click('DSH_SUPERAGENT_DIR')
   expect(field<HTMLTextAreaElement>(zh.prepareCommand).value).toBe('git worktree add "$DSH_SUPERAGENT_DIR"')
   await type(field<HTMLInputElement>(zh.blockedCommands), 'gh-personal  gh.other')
-  const [workerProvider, workerModel, effort] = all('.dt-model input')
-  await type(workerProvider as HTMLInputElement, 'worker-provider'); await type(workerModel as HTMLInputElement,
-    'worker-model'); await type(effort as HTMLInputElement, 'high')
-  expect([...document.querySelectorAll('#dt-worker-model-efforts option')].map(option => option.getAttribute('value'))).toEqual(['high'])
   await click(zh.save)
   expect(server.settings.executor).toEqual({ maxWorkers: 5, directory: '/srv/work',
-    prepare: 'git worktree add "$DSH_SUPERAGENT_DIR"', blockedCommands: ['gh-personal', 'gh.other'], model: { provider: 'worker-provider',
-      model: 'worker-model', reasoningEffort: 'high' } })
+    prepare: 'git worktree add "$DSH_SUPERAGENT_DIR"', blockedCommands: ['gh-personal', 'gh.other'] })
   expect(server.requests.filter(request => request.method === 'PUT').map(request => request.path)).toEqual(['settings/eval',
     'settings/executor'])
 })
@@ -354,7 +347,7 @@ it('lists the settings groups stages first, opens each stage\'s group from its s
   await click(tab(zh['tab.settings']))
   const tag = zh['settingsGroupTag']
   expect(all('.dt-settings-link').map(link => link.textContent)).toEqual(['Git 凭据', '飞书凭据',
-    `项目${tag}`, `评估${tag}`, `执行${tag}`, '提示词', '部署'])
+    `项目${tag}`, `模型${tag}`, `评估${tag}`, `执行${tag}`, '提示词', '部署'])
   expect(document.querySelector('.dt-settings-link[aria-current="page"]')?.textContent).toBe(`项目${tag}`)
   for (const [tab, group] of [['项目', `项目${tag}`], ['评估', `评估${tag}`],
     ['执行', `执行${tag}`]] as [string, string][]) {

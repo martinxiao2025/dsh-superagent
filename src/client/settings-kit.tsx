@@ -68,7 +68,7 @@ function SwitchRow({ label, hint, checked,
       label={label} />
   </div>
 }
-type RoleModel = Settings['eval']['model']
+type RoleModel = Settings['models']['worker']
 export function ModelField({ id, value, onChange }: { id: string; value: RoleModel; onChange: (next: RoleModel) => void }) {
   const { t, call } = usePanel()
   const [catalog, setCatalog] = useState<ApiResponse<'GET models'>>()

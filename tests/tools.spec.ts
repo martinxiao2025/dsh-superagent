@@ -77,7 +77,7 @@ it('saves with the prompt save tool an override without its base, refuses a part
     { config: { ...defaultPrompts(), overrides }, baseRevision: h.runtime.prompts.current().revision })
   await expect(save({ constructor: { text: 'x' } })).rejects.toThrow(new UserError('unknownPromptPart', { part: 'constructor' }))
   await save({ 'runtime/dispatch': { text: '## dispatch\nOurs.' } })
-  const dispatch = { text: '## dispatch\nOurs.', base: builtInBase(builtInParts()['runtime/dispatch'].text) }
+  const dispatch = { text: '## dispatch\nOurs.', base: builtInBase(builtInParts()['runtime/dispatch']!.text) }
   expect(h.runtime.prompts.current().config.overrides).toEqual({ 'runtime/dispatch': dispatch })
   // 已保存的版本覆盖了本版本已不存在的部分：把读取到的配置原样保存会丢弃它。
   const { revision } = h.runtime.prompts.current(), read = { ...defaultPrompts(), overrides: { 'runtime/dispatch': dispatch,

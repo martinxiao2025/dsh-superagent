@@ -347,6 +347,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/core/assignments.ts` | `Assignments`：执行器的事实及其执行器的报告 |
 | `src/core/replies.ts` | `Replies`：Engine 的渠道写入 |
 | `src/core/stage.ts` | `ticketStage` 和 `canRetry`：[003 执行](003-execution.md) 中的工单阶段 |
+| `src/core/stages.ts` | `STAGES`、`StageSchema` 与 `STAGE_BRIEFS`：工作单元全流程的六个规范阶段（记录而非硬状态机），供阶段模型路由与阶段聚焦提示词使用 |
 | `src/core/errors.ts` | `UserError` 和 `USER_ERRORS` |
 | `src/core/reasons.ts` | `Reason`、`REASONS` 和 `reasonText`：核心按错误码记录决定或搁置触发器的原因 |
 | `src/core/ids.ts` | `key`：由输入派生的 id，相同输入得到相同 id |
@@ -447,6 +448,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/thread.tsx`、`ticket.tsx` | 记录页面：带时间线的线程，以及带授权、输入和派工的工单 |
 | `src/client/settings.tsx` | 设置标签页：分组导航和屏幕上的分组 |
 | `src/client/settings-kit.tsx` | 设置块的构件：各阶段分组共享的设置、`useBlockDraft`、字段（包括来源 kind 的字段），以及保存历史 |
+| `src/client/models.tsx` | 模型设置分组：角色位（编排/工作单元）、六个阶段、子代理与工具型小模型的模型矩阵，全部留空继承宿主默认 |
 | `src/client/prompts.tsx` | 提示词设置：页面拥有它读取的视图，编辑器拥有草稿，编辑、完整提示词和历史标签页据此渲染；内置部分的编辑器显示已变化的默认值，并保留或丢弃覆盖 |
 | `src/client/prompt-config.ts` | 按段落、团队段落、技能名、内置部分（`part/<key>`，带 `withOverride`）和提示词视图给出的部分标题组织的提示词配置，以及完整提示词的行差异，均为纯函数 |
 | `src/client/deployment.tsx` | 部署设置，也在 DeepSeek Harness 插件管理器中显示 |

@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { LIMITS } from '../limits.ts'
 import { UserError, type EngineForSettings, type Ticket, type UserErrorCode } from '../core/index.ts'
-import { EvalConfigSchema, ExecutorConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
+import { EvalConfigSchema, ExecutorConfigSchema, ModelsConfigSchema, PolicyConfigSchema, SettingsSchema, policyEffects, policyVersion } from '../policy.ts'
 import type { Settings as SettingsValue, SettingsBlock, SettingsOrigin, SettingsSave } from '../policy.ts'
 import { ProjectSchema, type Project } from '../projects/kind.ts'
 import { codeRepoType } from '../code-repos/types.ts'
@@ -34,7 +34,7 @@ interface Block {
   guard?(current: SettingsValue, candidate: SettingsValue, origin: SettingsOrigin): void
 }
 // 项目（`project:<id>`）独立建表：解析走 `parseProject`、写路径走 `saveProject`，不进入设置快照。
-const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
+const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'models' | 'source', Block> = {
   policy: {
     parse: (value, sources) => {
       const policy = PolicyConfigSchema.parse(value)
@@ -43,6 +43,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
     merge: (settings, value) => ({ ...settings, policy: value as SettingsValue['policy'] }),
   },
   eval: { parse: value => EvalConfigSchema.parse(value), merge: (settings, value) => ({ ...settings, eval: value as SettingsValue['eval'] }) },
+  models: { parse: value => ModelsConfigSchema.parse(value), merge: (settings, value) => ({ ...settings, models: value as SettingsValue['models'] }) },
   executor: {
     parse: value => ExecutorConfigSchema.parse(value),
     merge: (settings, value) => ({ ...settings, executor: value as SettingsValue['executor'] }),
@@ -142,6 +143,7 @@ export class Settings {
     return { revision: store.get(KV.settings.revision) ?? 0,
       pause: { revision: revision('pause'), value: { paused: settings.paused } },
       eval: { revision: revision('eval'), value: settings.eval },
+      models: { revision: revision('models'), value: settings.models },
       executor: { revision: revision('executor'), value: settings.executor },
       policy: { revision: revision('policy'), rules: rules.map(rule => ({ id: rule.id, name: rule.name, enabled: rule.enabled })),
         allowed: Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.allowed.length])), read: 'settings/policy' },
@@ -161,7 +163,8 @@ export class Settings {
     const settings = store.settings(), [family, id] = block.includes(':') ? block.split(/:(.*)/s) : [block, '']
     const instance = family === 'source' ? sources.instances(settings).find(item => item.id === id) : undefined
     const project = family === 'project' ? store.projects.get(id!) : undefined
-    const value = block === 'pause' ? { paused: settings.paused } : block === 'policy' || block === 'eval' || block === 'executor' ? settings[block]
+    const value = block === 'pause' ? { paused: settings.paused }
+      : block === 'policy' || block === 'eval' || block === 'executor' || block === 'models' ? settings[block]
       : instance ? { name: instance.name, enabled: instance.enabled, config: instance.config }
         : project ?? undefined
     if (value === undefined) throw new UserError('unknownBlock', { block })
@@ -192,11 +195,14 @@ export class Settings {
     // 停用一条正在工作的记录会结束它名下未完成工单，而不是让它们失去来源后悬挂。
     const disabling = kind === 'source' && current.sources[id]?.enabled !== false && !(parsed as { enabled: boolean }).enabled
     const candidate = rules.merge(current, parsed, id)
-    const model = block === 'eval' ? candidate.eval.model : block === 'executor' ? candidate.executor.model : null
-    const previous = block === 'eval' ? current.eval.model : block === 'executor' ? current.executor.model : null
-    if (model && JSON.stringify(model) !== JSON.stringify(previous)) {
-      try { await resolveRoleModel(this.host.context, model) }
-      catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
+    // models 块保存时校验每个非空模型都可解析（角色位、阶段、子代理与工具型）；provider 不可用即拒绝保存。
+    if (kind === 'models') {
+      const models = parsed as SettingsValue['models']
+      for (const model of [models.orchestrator, models.worker, models.subagent, models.utility, ...Object.values(models.stages)]) {
+        if (!model) continue
+        try { await resolveRoleModel(this.host.context, model) }
+        catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
+      }
     }
     rules.guard?.(current, candidate, origin)
     if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)

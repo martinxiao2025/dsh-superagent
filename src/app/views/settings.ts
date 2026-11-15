@@ -29,13 +29,13 @@ function openTicketCount(store: Store, id: string): number {
  */
 export function settingsView(store: Store, sources: SourceRegistry, health: HealthMap, setup: SetupState, stateDir: string) {
   const settings = store.settings()
-  const block = <V>(name: 'policy' | 'eval' | 'executor', value: V) => ({ value, revision: store.blockRevision(name) })
+  const block = <V>(name: 'policy' | 'eval' | 'executor' | 'models', value: V) => ({ value, revision: store.blockRevision(name) })
   return {
     policyVersion: policyVersion(settings),
     // 已安装的来源类型目录；面板用它渲染「新增来源」的选项。
     kinds: sources.kindsList().map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
-    blocks: { policy: block('policy', settings.policy), eval: block('eval', settings.eval), executor: block('executor',
-      settings.executor) },
+    blocks: { policy: block('policy', settings.policy), models: block('models', settings.models), eval: block('eval', settings.eval),
+      executor: block('executor', settings.executor) },
     sources: sources.instances(settings).map(instance => {
       const kind = sources.kindByName(instance.kind)
       const problem = problemOf(instance.id, setup)

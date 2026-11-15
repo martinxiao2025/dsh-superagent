@@ -1,6 +1,6 @@
-/** 执行器会话工具：读取工单上下文、确认请求、管理线程、交回超出范围的触发器，以及上报状态。 */
+/** 执行器会话工具：读取工单上下文、确认请求、管理线程、交回超出范围的触发器、声明阶段与上报状态。 */
 import { z } from 'zod'
-import { liveTicket, type EngineForExecutor, type Ticket } from '../../core/index.ts'
+import { STAGES, STAGE_BRIEFS, liveTicket, type EngineForExecutor, type Ticket } from '../../core/index.ts'
 import { IM_WORDS } from '../../infra/text.ts'
 import { readResource, type ResourceHost } from '../resources.ts'
 import type { Store } from '../store.ts'
@@ -9,8 +9,8 @@ import type { Sessions } from '../sessions.ts'
 import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 
 export interface ExecutorToolsHost {
-  readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext'>
-  readonly store: Pick<Store, 'tickets' | 'triggers' | 'replyStatus' | 'atomic'>
+  readonly engine: Pick<EngineForExecutor, 'report' | 'reply' | 'markUnrelated' | 'handback' | 'followForContext' | 'stage'>
+  readonly store: Pick<Store, 'tickets' | 'triggers' | 'replyStatus' | 'atomic' | 'settings'>
   readonly sessions: Pick<Sessions, 'relay' | 'notify'>
   readonly resources: ResourceHost
   sendReplies(): Promise<void>
@@ -71,6 +71,23 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         reason: z.string().trim().min(1).max(300).describe('One sentence on what it asks for beyond this ticket.'),
       }).strict(),
       execute: async args => ({ trigger_id: args.trigger_id, queued: host.engine.handback(ticketId, args.trigger_id, args.reason) }),
+    }),
+    tool({
+      name: 'orchestrator_stage',
+      description: `Declare the phase of the development flow this ticket is in, one of ${STAGES.join(', ')}, as the stages map says: the phase's focused prompt and its configured model apply from the next request. Phases are a record, not a gate: declare the one you are actually in, again when it changes. Briefs: ${STAGES.map(stage => `${stage} = ${STAGE_BRIEFS[stage]}`).join('; ')}.`,
+      schema: z.object({
+        stage: z.enum(STAGES),
+        summary: z.string().trim().min(1).max(300).optional().describe('One sentence on what this phase will do (or found, when re-declaring it).'),
+      }).strict(),
+      execute: async args => {
+        const current = host.store.tickets.get(ticketId)
+        if (!current || !liveTicket(current)) throw new Error('Ticket ended; do not resume it')
+        const updated = host.store.atomic(() => host.engine.stage(ticketId, args.stage, args.summary))
+        const models = host.store.settings().models
+        const route = models.stages[args.stage] || models.worker
+        return { stage: args.stage, recorded: updated.stageHistory?.at(-1)?.at,
+          model: route ? `${route.provider}/${route.model}` : 'host default' }
+      },
     }),
     tool({
       name: 'orchestrator_report',

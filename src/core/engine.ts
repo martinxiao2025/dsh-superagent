@@ -3,6 +3,7 @@ import { UserError } from './errors.ts'
 import { key } from './ids.ts'
 import { isoTime, liveTicket, threadKey } from './model.ts'
 import type { ChannelRef, Decision, Mandate, PolicyEffect, ThreadRef, Ticket, Trigger } from './model.ts'
+import type { Stage, StageChange } from './stages.ts'
 import type { Candidate, Repositories } from './ports.ts'
 import { EvaluationQueue, touchThread, type EngineOptions } from './part.ts'
 import { Assignments, type WorkerReport } from './assignments.ts'
@@ -218,6 +219,23 @@ export class Engine {
   // 执行器
 
   /**
+   * 工作单元声明其全流程阶段（`orchestrator_stage`）：记录性更新，前进不强制（可回退或重复）。
+   * 会话层按工单的当前阶段为每个模型请求覆盖路由（`settings.models.stages`）。
+   * @returns 更新后的工单（含新追加的 `stageHistory` 条目）。
+   * @throws 当工单未知或已结束时抛出 UserError。
+   */
+  stage(ticketId: string, stage: Stage, summary?: string): Ticket {
+    return this.repo.atomic(() => {
+      const ticket = this.repo.tickets.get(ticketId)
+      if (!ticket) throw new UserError('unknownTicket')
+      if (ticket.ended) throw new UserError('ticketEnded')
+      const change: StageChange = { stage, at: this.now(), ...(summary ? { summary } : {}) }
+      const updated: Ticket = { ...ticket, stage, stageHistory: [...(ticket.stageHistory ?? []), change] }
+      this.repo.tickets.save(updated)
+      return updated
+    })
+  }
+  /**
    * 执行器提供的事实：某个任务分配正在运行；等待它的输入会被发出。
    * @throws 当工单未知时抛出 UserError。
    */
@@ -317,4 +335,4 @@ export type EngineForPeople = Pick<Engine, 'stopTicket' | 'retryTicket' | 'reeva
 export type EngineForSettings = Pick<Engine, 'policyChanged' | 'stopTicket'>
 /** 执行器告知引擎的内容，以及其工作单元向引擎询问的内容。 */
 export type EngineForExecutor = Pick<Engine, 'assignmentStarted' | 'inputsDelivered' | 'inputsRead' | 'turnEnded' | 'deliveryFailed'
-  | 'assignmentInterrupted' | 'report' | 'markUnrelated' | 'handback' | 'followForContext' | 'reply'>
+  | 'assignmentInterrupted' | 'report' | 'markUnrelated' | 'handback' | 'followForContext' | 'reply' | 'stage'>

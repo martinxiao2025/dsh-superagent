@@ -1,4 +1,5 @@
 /** Built-in prompt sections, role policies, and transcript projections for orchestrator and worker Sessions. */
+import { STAGES, type Stage } from '../core/stages.ts'
 import { bundledSkills, promptFile } from './skill-files.ts'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 export { textPage } from './cards.ts'
@@ -10,6 +11,8 @@ export const workerPrompt = promptFile('worker')
 /** Built-in policy sections referenced by role prompts; a team may override them. */
 export const guides: Readonly<Record<string, string>> = Object.fromEntries(['subscriptions', 'replies', 'dispatch', 'work']
   .map(name => [name, promptFile(name)]))
+/** Built-in per-stage focused sections（`prompts/stages/<stage>.md`）；团队可用 `runtime/stages/<stage>` 覆盖。 */
+export const stageGuides: Readonly<Record<Stage, string>> = Object.fromEntries(STAGES.map(stage => [stage, promptFile(`stages/${stage}`)])) as Readonly<Record<Stage, string>>
 /** Bundled Source skills registered by dsh-superagent; a team may override their text. */
 export const sourceSkills: Readonly<Record<'feishu' | 'github' | 'gitlab', string>> = { feishu: bundledSkills.feishu.content,
   github: bundledSkills.github.content, gitlab: bundledSkills.gitlab.content }

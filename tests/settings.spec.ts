@@ -25,13 +25,13 @@ it('refuses a save of a block that another save changed during its model or acco
   const llm = (h.ctx as unknown as { llm: { resolveCallConfig: ReturnType<typeof vi.fn> } }).llm
   const check = deferred<unknown>()
   llm.resolveCallConfig.mockImplementationOnce(() => check.promise)
-  const executor = store.settings().executor
-  const revision = store.blockRevision('executor')
-  const slow = settings.save('executor', { ...executor, model, maxWorkers: 5 }, revision, 'panel')
-  await settings.save('executor', { ...executor, maxWorkers: 2 }, revision, 'panel')
+  const models = store.settings().models
+  const revision = store.blockRevision('models')
+  const slow = settings.save('models', { ...models, worker: model }, revision, 'panel')
+  await settings.save('models', { ...models, utility: { provider: 'u', model: 'tiny' } }, store.blockRevision('models'), 'panel')
   check.resolve(model)
   await expect(slow).rejects.toThrow(SettingsConflict)
-  expect(store.settings().executor).toMatchObject({ maxWorkers: 2, model: executor.model })
+  expect(store.settings().models).toEqual({ ...models, utility: { provider: 'u', model: 'tiny' } })
   // 被同一来源的另一次保存抢先的账户检查同样会被拒绝。
   const accounts = deferred<void>()
   vi.spyOn(Setup.prototype, 'checkAccounts').mockImplementationOnce(() => accounts.promise)

@@ -190,6 +190,7 @@ const settingsView = (): ApiResponse<'GET settings'> => ({
   policyVersion: 'abcdef1234567890',
   kinds: KINDS.map(kind => ({ kind: kind.kind, title: kind.title, description: kind.description, fields: kind.fields })),
   blocks: { policy: { value: server.settings.policy, revision: server.revisions.policy ?? 0 },
+    models: { value: server.settings.models, revision: server.revisions.models ?? 0 },
     eval: { value: server.settings.eval, revision: server.revisions.eval ?? 0 },
     executor: { value: server.settings.executor, revision: server.revisions.executor ?? 0 } },
   sources: sourceSettings(),

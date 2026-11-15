@@ -1,5 +1,6 @@
 /** 主动式智能体的领域模型：概念及其不变量，独立于任何来源、策略或执行器。 */
 import type { Reason } from './reasons.ts'
+import type { Stage, StageChange } from './stages.ts'
 
 /** 用来源自身词汇表示的操作者身份；策略决定哪些操作者可以在该来源上发起工作。 */
 export interface ActorRef { source: string; id: string }
@@ -283,6 +284,13 @@ export interface Ticket {
   mandate: Mandate
   /** 接受它时那些消息的渠道，其回复会发往那里。 */
   channels: ChannelRef[]
+  /**
+   * 工作单元当前声明（或最近一次声明）的全流程阶段（`orchestrator_stage`）；仅供记录与每阶段模型路由，
+   * 不驱动状态机——阶段前进不强制。未声明时工作单元按未分段提示词运行（与既有行为一致）。
+   */
+  stage?: Stage
+  /** 阶段声明的时间线（追加）；与 `stage` 一起由 `Engine.stage` 维护。 */
+  stageHistory?: StageChange[]
   /** 工单何时、由谁、以何种方式结束，以及结果之外的人或主机给出的原因；未结束的工单没有此字段。 */
   ended?: { at: string; by: TicketEndBy; outcome: TicketOutcome; reason?: string }
   /** 向人提出的未解决问题；由执行器或工单结束时清除。 */

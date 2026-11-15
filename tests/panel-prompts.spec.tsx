@@ -192,13 +192,13 @@ it('keeps both sides\' first overrides when a draft moves onto a version saved m
   await mount()
   await click(builtInItem(zh['promptPart.runtime/shared']))
   await type(field<HTMLTextAreaElement>(zh.promptBody), 'Shared, ours.')
-  const theirs = { 'runtime/dispatch': { text: '## dispatch\nTheirs.', base: builtInBase(builtInParts()['runtime/dispatch'].text) } }
+  const theirs = { 'runtime/dispatch': { text: '## dispatch\nTheirs.', base: builtInBase(builtInParts()['runtime/dispatch']!.text) } }
   server.prompts.revision = 1; server.prompts.current = promptVersion(1, { ...defaultPrompts(), overrides: theirs })
   await click(zh.save)
   expect(document.querySelector('.dt-savebar')?.textContent).not.toContain('undefined')
   await click(zh.save)
   expect(server.prompts.current.config.overrides).toEqual({ ...theirs,
-    'runtime/shared': { text: 'Shared, ours.', base: builtInBase(builtInParts()['runtime/shared'].text) } })
+    'runtime/shared': { text: 'Shared, ours.', base: builtInBase(builtInParts()['runtime/shared']!.text) } })
 })
 
 it('shows a draft\'s template of a generated part filled, and names a part by its label when a save is refused', async () => {
@@ -224,7 +224,7 @@ it('lists the overrides of parts this version no longer has, which the next save
 })
 
 it('loads a version from the history without its overrides of parts this version no longer has, so it saves', async () => {
-  const dispatch = { text: '## dispatch\nOurs.', base: builtInBase(builtInParts()['runtime/dispatch'].text) }
+  const dispatch = { text: '## dispatch\nOurs.', base: builtInBase(builtInParts()['runtime/dispatch']!.text) }
   at({ page: 'settings', query: { group: 'prompts' } })
   await mount()
   await click(tab(zh.promptViewHistory))

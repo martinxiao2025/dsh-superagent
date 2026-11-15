@@ -19,6 +19,28 @@ export const RuleSchema = z.object({ id: RuleIdSchema, name: z.string().trim().m
 export type Rule = z.infer<typeof RuleSchema>
 export const RoleModelSchema = z.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1), reasoningEffort: z.string().trim().min(1).optional() }).strict()
 export type RoleModel = z.infer<typeof RoleModelSchema>
+/** 每个阶段的模型位；未配置（null）的阶段回落 `worker`。显式键使读取方无需处理缺键。 */
+const StageModelsSchema = z.object({
+  investigate: RoleModelSchema.nullable().default(null),
+  design: RoleModelSchema.nullable().default(null),
+  implement: RoleModelSchema.nullable().default(null),
+  verify: RoleModelSchema.nullable().default(null),
+  review: RoleModelSchema.nullable().default(null),
+  deliver: RoleModelSchema.nullable().default(null),
+}).strict()
+/**
+ * 各角色的模型配置：两个角色位（编排主会话与工作单元）、六个工作阶段（未配置的阶段回落
+ * `worker`）、子代理默认模型（未显式选择时），以及工具型小模型（`utility`，供轻量结构化任务）。
+ * 任何一项留 null 表示继承宿主默认——零配置即零行为变化。
+ */
+export const ModelsConfigSchema = z.object({
+  orchestrator: RoleModelSchema.nullable().default(null),
+  worker: RoleModelSchema.nullable().default(null),
+  stages: StageModelsSchema.default(() => StageModelsSchema.parse({})),
+  subagent: RoleModelSchema.nullable().default(null),
+  utility: RoleModelSchema.nullable().default(null),
+}).strict()
+export type ModelsConfig = z.infer<typeof ModelsConfigSchema>
 
 export const AllowedSchema = z.object({ id: z.string().trim().min(1).max(200), name: z.string().trim().max(100).optional() }).strict()
 const Weak = z.enum(['inferred', 'ignore'])
@@ -33,13 +55,11 @@ export const PolicyConfigSchema = z.object({
 export const EvalConfigSchema = z.object({
   mode: z.enum(['off', 'observe', 'auto']).default('observe'),
   timeoutSeconds: z.number().int().min(LIMITS.evalTimeoutSeconds.min).max(LIMITS.evalTimeoutSeconds.max).default(120),
-  model: RoleModelSchema.nullable().default(null),
 }).strict()
 const CommandNameSchema = z.string().regex(/^[A-Za-z0-9._-]+$/).refine(name => name !== '.' && name !== '..', 'Not a command name')
   .refine(name => !WORKER_COMMANDS.includes(name), `${WORKER_COMMANDS.join(', ')} cannot be blocked`)
-/** 执行器设置：工作单元模型、全局并发数、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令。 */
+/** 执行器设置：全局并发数、工单目录根（为空时默认为 `<stateDir>/work`）、`prepare` 命令，以及被屏蔽的命令；模型在 `models` 块。 */
 export const ExecutorConfigSchema = z.object({
-  model: RoleModelSchema.nullable().default(null),
   maxWorkers: z.number().int().min(LIMITS.maxWorkers.min).max(LIMITS.maxWorkers.max).default(3),
   directory: z.string().trim().refine(path => path === '' || isAbsolute(path), 'An absolute path, or empty for <stateDir>/work').default(''),
   prepare: z.string().max(LIMITS.prepareCommand).default(''),
@@ -60,10 +80,12 @@ export const SettingsSchema = z.object({
   /** 消息来源（飞书）；项目独立建表（`Store.projects`），不再随设置快照整体重写。 */
   sources: RecordSchema(SourceInstanceSchema),
   policy: PolicyConfigSchema.default(() => PolicyConfigSchema.parse({})),
+  /** 各角色的模型配置（角色位、六阶段、子代理与工具型小模型）；保存时由 Settings 服务校验可解析。 */
+  models: ModelsConfigSchema.default(() => ModelsConfigSchema.parse({})),
   eval: EvalConfigSchema.default(() => EvalConfigSchema.parse({})),
   executor: ExecutorConfigSchema.default(() => ExecutorConfigSchema.parse({})),
 }).strict()
 export type Settings = z.infer<typeof SettingsSchema>
-export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}` | `project:${string}`
+export type SettingsBlock = 'policy' | 'eval' | 'executor' | 'models' | `source:${string}` | `project:${string}`
 export type SettingsSave = SettingsBlock | 'pause'
 export type SettingsOrigin = 'panel' | 'tool' | 'sync'

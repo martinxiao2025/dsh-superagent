@@ -1,8 +1,9 @@
 /** 独立于访问设置，管理带版本的角色提示词、行为策略和运营技能。 */
 import { z } from 'zod'
+import { STAGE_BRIEFS, STAGES, type Stage } from '../core/stages.ts'
 import { UserError, key } from '../core/index.ts'
 import { policyVersion, type Settings, type SettingsOrigin } from '../policy.ts'
-import { masterPrompt, workerPrompt, sharedPrompt, guides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, cliNotes } from './context.ts'
+import { masterPrompt, workerPrompt, sharedPrompt, guides, stageGuides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, cliNotes } from './context.ts'
 import { environmentLines, type Variable } from './execution-environment.ts'
 import { promptsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
@@ -20,9 +21,10 @@ export const SKILL_NAME = /^[a-z][a-z0-9-]*$/
 export const SKILL_PREFIX = 'dsh-superagent-'
 const SkillNameSchema = z.string().regex(SKILL_NAME).refine(name => !(Object.keys(sourceSkills) as string[]).includes(name),
   'This name belongs to a built-in skill')
-/** 团队可以覆盖的内置部分，按键列出：两个角色的部分、来源技能，以及生成部分的模板。 */
+/** 团队可以覆盖的内置部分，按键列出：两个角色的部分、六个工作阶段、来源技能，以及生成部分的模板。 */
 const PART_KEYS = ['runtime/shared', 'runtime/orchestrator', 'runtime/worker', 'runtime/subscriptions', 'runtime/replies',
-  'runtime/dispatch', 'runtime/work', 'runtime/admission', 'runtime/handoff/orchestrator', 'runtime/handoff/worker', 'runtime/environment',
+  'runtime/dispatch', 'runtime/work', 'runtime/admission', 'runtime/handoff/orchestrator', 'runtime/handoff/worker',
+  ...STAGES.map(stage => `runtime/stages/${stage}`), 'runtime/environment',
   'runtime/policy', 'runtime/policy/none', 'skill/feishu', 'skill/github', 'skill/gitlab'] as const
 export type PartKey = typeof PART_KEYS[number]
 /** 团队为某个内置部分提供的文本，以及 `base`，即它编辑自的内置文本的键。 */
@@ -50,7 +52,7 @@ let parts: Readonly<Record<PartKey, BuiltInPart>> | undefined
  * 两个角色提示词的内置部分、三个来源技能，以及生成部分的模板（其数据由系统填入），按键索引，覆盖项按该键引用它们。
  * 首次使用时构建，因为它读取的文本存在循环导入。
  */
-export const builtInParts = (): Readonly<Record<PartKey, BuiltInPart>> => parts ??= {
+export const builtInParts = (): Readonly<Record<PartKey, BuiltInPart>> => parts ??= ({
   'runtime/shared': { roles: BOTH, text: sharedPrompt }, 'runtime/orchestrator': { roles: MAIN, text: masterPrompt },
   'runtime/worker': { roles: WORKER, text: workerPrompt },
   'runtime/subscriptions': { roles: BOTH, text: `## 订阅\n${guides.subscriptions}` },
@@ -59,6 +61,14 @@ export const builtInParts = (): Readonly<Record<PartKey, BuiltInPart>> => parts 
   'runtime/admission': { roles: MAIN, text: mainAdmissionPolicy },
   'runtime/handoff/orchestrator': { roles: MAIN, text: handoffPolicy('orchestrator') },
   'runtime/handoff/worker': { roles: WORKER, text: handoffPolicy('worker') },
+  // 六个工作阶段的聚焦段：worker 声明当前阶段（orchestrator_stage）后，随该阶段注入。
+  'runtime/stages/investigate': { roles: WORKER, text: stageGuides.investigate },
+  'runtime/stages/design': { roles: WORKER, text: stageGuides.design },
+  'runtime/stages/implement': { roles: WORKER, text: stageGuides.implement },
+  'runtime/stages/verify': { roles: WORKER, text: stageGuides.verify },
+  'runtime/stages/review': { roles: WORKER, text: stageGuides.review },
+  'runtime/stages/deliver': { roles: WORKER, text: stageGuides.deliver },
+
   'runtime/environment': { roles: BOTH, text: `${ENVIRONMENT_HEADING}\n{variables}`, placeholders: ['{variables}'] },
   'runtime/policy': { roles: MAIN, text: `${POLICY_HEAD} 按名称和 ID 列出的启用规则：\n{rules}`, placeholders: ['{version}', '{mode}', '{rules}'] },
   'runtime/policy/none': { roles: MAIN, text: `${POLICY_HEAD} 没有启用任何规则：主动候选只能被忽略。`,
@@ -66,7 +76,7 @@ export const builtInParts = (): Readonly<Record<PartKey, BuiltInPart>> => parts 
   'skill/feishu': { roles: BOTH, text: `${sourceSkills.feishu}\n\n## CLI 用法\n${cliNotes}` },
   'skill/github': { roles: BOTH, text: `${sourceSkills.github}\n\n## CLI 用法\n${cliNotes}` },
   'skill/gitlab': { roles: BOTH, text: `${sourceSkills.gitlab}\n\n## CLI 用法\n${cliNotes}` },
-}
+}) as Record<PartKey, BuiltInPart>
 /** 内置文本的键，覆盖项的 `base` 会记录它。 */
 export const builtInBase = (text: string): string => key('prompt-built-in', text)
 /** 键所指向的内置部分（如果有）；对象原型上的名称不指向任何部分。 */
@@ -74,7 +84,7 @@ export const builtInPart = (part: string): BuiltInPart | undefined =>
   Object.hasOwn(builtInParts(), part) ? builtInParts()[part as PartKey] : undefined
 /** 内置部分的文本：团队覆盖项，否则为内置文本。 */
 const builtIn = (config: PromptConfig, part: PartKey): string =>
-  (config.overrides && Object.hasOwn(config.overrides, part) ? config.overrides[part]!.text : undefined) ?? builtInParts()[part].text
+  (config.overrides && Object.hasOwn(config.overrides, part) ? config.overrides[part]!.text : undefined) ?? builtInParts()[part]!.text
 /** 一次性填充模板的占位符，这样填入的文本不会被再次当作占位符读取。 */
 const fill = (template: string, values: Record<string, string>): string =>
   template.replace(/\{(\w+)\}/g, (match, name: string) => Object.hasOwn(values, name) ? values[name]! : match)
@@ -97,24 +107,32 @@ export function policySection(settings: Settings, config: PromptConfig = default
 /**
  * 按顺序组装某个角色的系统提示词部分：固定模板、团队部分、生成的执行环境，最后是主会话生成的策略部分；
  * 策略部分之后没有任何内容，它的变化不影响其余部分。
+ * `stage` 是工作单元当前声明的阶段：注入该阶段的聚焦段与一行阶段地图；未声明时与既有组合逐字一致（零配置零变化）。
  */
-export function promptParts(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }) {
+export function promptParts(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }, stage?: Stage) {
   // 内置部分会指明其文本被覆盖时使用的键，交接部分中该键即角色名。
   const fixed = (name: string, part = name) => ({ name, kind: 'fixed' as const, key: part, text: builtIn(config, part as PartKey) })
   const team = (name: TeamSection) => ({ name, kind: 'team' as const, heading: `## ${TEAM_HEADINGS[name]}`,
     text: config[name] ? `## ${TEAM_HEADINGS[name]}\n${config[name]}` : '' })
+  /** 阶段地图：六个规范阶段的一行职责，帮助 worker 在声明阶段时选择正确的名字。 */
+  const stagesMap = stage
+    ? [{ name: 'runtime/stages', kind: 'generated' as const, key: 'runtime/stages',
+      text: `## 阶段\n全流程阶段（orchestrator_stage 声明，记录而非门槛）：${STAGES.map(name => `${name}＝${STAGE_BRIEFS[name]}`).join('；')}。当前阶段：${stage}。` }]
+    : []
   return [
     fixed('runtime/shared'), fixed(`runtime/${role}`),
     ...TEAM_SECTIONS.map(team),
     ...['subscriptions', 'replies', role === 'orchestrator' ? 'dispatch' : 'work'].map(name => fixed(`runtime/${name}`)),
     ...role === 'orchestrator' ? [fixed('runtime/admission')] : [],
+    ...stagesMap,
+    ...role === 'worker' && stage ? [fixed(`runtime/stages/${stage}`)] : [],
     fixed('runtime/handoff', `runtime/handoff/${role}`),
     ...environment ? [{ name: 'runtime/environment', kind: 'generated' as const, key: 'runtime/environment', text: environment }] : [],
     ...role === 'orchestrator' && policy ? [{ name: 'runtime/policy', kind: 'generated' as const, ...policy }] : [],
   ].filter(part => part.text)
 }
-export function composePrompt(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }): string {
-  return promptParts(config, role, environment, policy).map(part => part.text).join('\n\n')
+export function composePrompt(config: PromptConfig, role: Role, environment?: string, policy?: { key: string; text: string }, stage?: Stage): string {
+  return promptParts(config, role, environment, policy, stage).map(part => part.text).join('\n\n')
 }
 export function composeSkill(config: PromptConfig, name: string): string {
   return name === 'feishu' || name === 'github' || name === 'gitlab' ? builtIn(config, `skill/${name}`) : config.skills[name] ?? ''
@@ -137,9 +155,10 @@ export class Prompts {
     private readonly feishu: () => boolean) {
     this.versions = new Versions(store, KV.prompts.revision, KV.prompts.version)
   }
-  /** 某个角色的提示词；主会话的策略部分在每次模型请求时按当前设置生成。 */
-  compose(config: PromptConfig, role: Role, variables = this.environment()): string {
-    return composePrompt(config, role, environmentSection(config, variables), role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined)
+  /** 某个角色的提示词；主会话的策略部分在每次模型请求时按当前设置生成；工作单元可传当前阶段以注入聚焦段。 */
+  compose(config: PromptConfig, role: Role, variables = this.environment(), stage?: Stage): string {
+    return composePrompt(config, role, environmentSection(config, variables),
+      role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined, stage)
   }
   /** 返回要在每个会话中注册的技能：内置来源技能（仅当配置了飞书机器人时才包含 `feishu`），随后是团队技能。 */
   skills(config: PromptConfig): [string, string][] {
@@ -207,7 +226,7 @@ export class Prompts {
       if (previous.revision === 0 && !this.versions.get(0)) this.versions.keep(previous)
       // 每个覆盖项编辑自的内置文本，保留以便展示升级对其做了哪些更改。
       for (const [part, { base }] of Object.entries(config.overrides ?? {})) {
-        const text = builtInParts()[part as PartKey].text
+        const text = builtInParts()[part as PartKey]!.text
         if (base === builtInBase(text) && this.store.get(KV.prompts.builtIn(base)) === undefined) this.store.set(KV.prompts.builtIn(base), text)
       }
       return this.versions.save(revision => ({ revision, previousRevision: previous.revision, savedAt: new Date().toISOString(), source, config }))

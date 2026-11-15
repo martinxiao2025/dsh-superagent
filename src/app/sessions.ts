@@ -13,7 +13,7 @@ import { AgentDelivery, messageId } from './delivery.ts'
 import type { Effects } from './effects.ts'
 import type { Variable } from './execution-environment.ts'
 import { RetryHealth, modelRetryProjectionDefinition, type BudgetRetryStatus } from './retry-health.ts'
-import { initializeRoleModel } from './role-models.ts'
+import { applyRequestModel } from './role-models.ts'
 import { bundledSkills } from './skill-files.ts'
 import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
 import type { Store } from './store.ts'
@@ -176,8 +176,6 @@ export class Sessions {
       result = await ctx.sessionController.resolveAgent(id as SessionId)
     }
     if ('error' in result) throw result.error
-    const settings = this.host.store.settings()
-    await initializeRoleModel(ctx, result.agent, role === 'orchestrator' ? settings.eval.model : settings.executor.model)
     await this.decorate(result.agent)
     ctx.permissionPresets.set(result.agent.session, 'danger-full-access')
     await ctx.sessionController.rename({ sessionId: id as SessionId, title })
@@ -294,7 +292,8 @@ export class Sessions {
     binding.disposers.push(agent.ctx.systemPrompt.section({ name: 'dsh-superagent-policy', order: 9999, interpolate: false, text: context => {
       const version = this.promptFor(agent, context.signal !== undefined)
       const current = ticket && host.store.tickets.get(ticket.id)
-      const composed = host.prompts.compose(version.config, master ? 'orchestrator' : 'worker', current ? host.environment(current) : undefined)
+      const composed = host.prompts.compose(version.config, master ? 'orchestrator' : 'worker', current ? host.environment(current) : undefined,
+        current?.stage)
       return `[dsh-superagent prompt revision ${version.revision}]\n${composed}\n${current ? mandateInstructions(current.mandate) : ''}`
     }, ...(master ? { complete: true } : {}) }))
     // 重新创建的技能作用域（例如技能服务重启后）初始为空，因此在重新绑定前重置 `binding.skills`。
@@ -309,6 +308,13 @@ export class Sessions {
     if (this.bindings.get(agent) !== binding) return () => this.teardownBinding(agent, binding)
     const register = this.registerTool(agent, binding)
     for (const tool of host.tools(agent, ticket)) register(tool.name, tool.description, tool.schema, tool.execute)
+    // 每请求模型覆盖：主会话用角色位；工作单元按工单当前阶段解析（未声明阶段回落 worker 位）。
+    applyRequestModel(this.ctx, agent, () => {
+      const models = host.store.settings().models
+      if (master) return models.orchestrator
+      const stage = host.store.tickets.get(ticket!.id)?.stage
+      return (stage && models.stages[stage]) || models.worker
+    })
     if (master) {
       binding.disposers.push(agent.ctx.tools.restrict({ allow: this.inherited(agent, MASTER_TOOLS) }),
         agent.ctx.tools.guard(execution => noWait(execution, () => this.routed(agent))))
@@ -364,6 +370,13 @@ export class Sessions {
     }
     const ticketId = parent === undefined ? undefined : ticketOfSession(parent)
     if (ticketId === undefined || !this.host.store.tickets.get(ticketId)) return
+    // 子代理默认模型：仅在部署显式配置了 `models.subagent` 且子代理没有自己的选择（DSH 的 subagent
+    // 工具可带 model 参数，表现为会话上的 `model/selection` 事件）时应用，让显式选择始终优先。
+    applyRequestModel(this.ctx, agent, () => {
+      const configured = this.host.store.settings().models.subagent
+      if (!configured || agent.session.snapshotEvents().some(event => event.type === 'model/selection')) return undefined
+      return configured
+    })
     this.bindings.set(agent, { disposers: this.workOnly(agent, ticketId), subagent: true })
   }
   /** 在智能体的技能作用域中注册某一提示词版本的技能，替换较早版本的技能。 */

@@ -9,8 +9,8 @@ export const TABS = ['overview', 'projects', 'source', 'trigger', 'eval', 'execu
 export type Tab = typeof TABS[number]
 /** 主菜单：概览之后先进入项目这一交付单元；消息来源从概览与项目设置进入。 */
 export const MENU_TABS: readonly Tab[] = ['overview', 'projects', 'trigger', 'eval', 'execution', 'settings']
-/** 设置分组按创建与使用流程排列：先凭据，再项目（含仓库与任务来源），最后系统级配置。 */
-export const SETTINGS_GROUPS = ['gitCredentials', 'feishuCredentials', 'projects', 'eval', 'execution', 'prompts', 'deployment'] as const
+/** 设置分组按创建与使用流程排列：先凭据，再项目（含仓库与任务来源），然后模型与系统级配置。 */
+export const SETTINGS_GROUPS = ['gitCredentials', 'feishuCredentials', 'projects', 'models', 'eval', 'execution', 'prompts', 'deployment'] as const
 export type SettingsGroup = typeof SETTINGS_GROUPS[number]
 export type Route = { page: 'overview' | 'source'; id?: undefined; query?: undefined }
   | { page: 'projects'; id?: string; query?: undefined }

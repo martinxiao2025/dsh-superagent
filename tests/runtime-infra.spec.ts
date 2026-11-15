@@ -387,9 +387,9 @@ it('refuses a settings save with an unknown model or a Source kind that is not i
     return { status, body: JSON.parse(text) as Record<string, unknown> }
   }
   vi.mocked(h.services.llm as { resolveCallConfig: ReturnType<typeof vi.fn> }).resolveCallConfig.mockRejectedValueOnce(new Error('unknown provider nowhere'))
-  const evalBlock = { ...h.runtime.store.settings().eval, model: { provider: 'nowhere', model: 'x' } }
-  expect(await request('PUT', 'settings/eval', { value: evalBlock, revision: h.runtime.store.blockRevision('eval') }))
-    .toMatchObject({ status: 400, body: { code: 'modelUnavailable', values: { block: 'eval', error: 'unknown provider nowhere' } } })
+  const modelsBlock = { ...h.runtime.store.settings().models, worker: { provider: 'nowhere', model: 'x' } }
+  expect(await request('PUT', 'settings/models', { value: modelsBlock, revision: h.runtime.store.blockRevision('models') }))
+    .toMatchObject({ status: 400, body: { code: 'modelUnavailable', values: { block: 'models', error: 'unknown provider nowhere' } } })
   const stored = h.runtime.store.settings()
   h.runtime.store.saveSettings({ ...stored, sources: { ...stored.sources, slack: { kind: 'slack', name: 'Slack', enabled: false, config: {} } } })
   expect(await request('PUT', 'settings/source:slack', { value: { name: 'Slack', enabled: true, config: {} }, revision: 0 }))

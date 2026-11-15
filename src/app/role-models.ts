@@ -1,4 +1,8 @@
-/** 在新建会话上解析并预置按角色配置的默认模型，而不改动全局 DSH 默认值。 */
+/**
+ * 每请求模型路由：按角色与阶段在每次模型请求上覆盖 provider/model/effort。
+ * 覆盖点是 DSH 的 `agent/request` waterfall——监听器拿到 `next()` 的默认配置后按需改写；
+ * 未配置（null）时原样放行，即继承宿主默认，零配置零行为变化。
+ */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -10,35 +14,42 @@ export async function resolveRoleModel(ctx: Context, model: RoleModel): Promise<
     ...(model.reasoningEffort ? { reasoningEffort: ReasoningEffortId(model.reasoningEffort) } : {}) })
   return { provider: value.provider, model: value.model, ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}) }
 }
-
-/** 在全新会话首次请求之前预置其角色配置的模型，保留之后的手动或持久化选择不变。 */
-export async function initializeRoleModel(ctx: Context, agent: Agent, model: RoleModel | null): Promise<void> {
-  if (!model) return
-  if (agent.session.requestHeader() || agent.session.snapshotEvents().some(event => event.type === 'model/selection')) return
-  const selected = await resolveRoleModel(ctx, model)
-  // 避免使用 selectModel，因为它会改动全局 DSH 默认值；仅为首个请求注入该选择。
-  agent.session.append('model/selection', selected)
-  let initial = true
-  let assembled: ModelSelection | undefined
+/**
+ * 在智能体上安装每请求模型覆盖（随 `agent.ctx.effect` 生存，智能体释放时自动拆除）：
+ * `override` 在每次模型请求时调用，返回该请求应使用的配置；返回 `null`/`undefined` 时该请求
+ * 继承既有选择（宿主默认或会话内手动选择）。同一路由的解析结果按配置缓存，失败即逐出。
+ */
+export function applyRequestModel(ctx: Context, agent: Agent, override: () => RoleModel | null | undefined): void {
+  const cache = new Map<string, Promise<ModelSelection>>()
+  const resolve = (model: RoleModel): Promise<ModelSelection> => {
+    const route = JSON.stringify(model)
+    const cached = cache.get(route)
+    if (cached) return cached
+    const promise = resolveRoleModel(ctx, model)
+    promise.catch(() => cache.delete(route))
+    cache.set(route, promise)
+    return promise
+  }
   agent.ctx.effect(() => {
+    let applied: ModelSelection | undefined
     const disposers = [
       agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
-        const selection = initial ? selected : undefined
+        const model = override()
+        // 组装先于每一步的请求：这里同样应用覆盖，使 {provider}/{model} 变量与本次请求的实际路由一致。
+        applied = model ? await resolve(model) : undefined
         const result = await next()
-        assembled = selection
-        return selection ? { ...result, variables: { ...result.variables, provider: selection.provider, model: selection.model } } : result
+        return applied ? { ...result, variables: { ...result.variables, provider: applied.provider, model: applied.model } } : result
       }, { prepend: true }),
       agent.ctx.on('agent/request', async (_payload, next) => {
-        const result = await next()
-        if (!assembled) return result
-        const { reasoningEffort: _inherited, ...rest } = result
-        return { ...rest, ...assembled }
+        const model = override()
+        if (!model) { applied = undefined; return next() }
+        const selected = await resolve(model)
+        applied = selected
+        // 剥掉继承的 reasoningEffort 再整体叠加，与既有"覆盖优先"语义一致。
+        const { reasoningEffort: _inherited, ...rest } = await next()
+        return { ...rest, ...selected }
       }, { prepend: true }),
-      ctx.on('session/event', (session, event) => {
-        if (session === agent.session && (event.type === 'request/header' || event.type === 'model/selection')) initial = false
-      }),
     ]
     return () => disposers.forEach(dispose => dispose())
   })
-  await ctx.sessionPersistence.flush()
 }

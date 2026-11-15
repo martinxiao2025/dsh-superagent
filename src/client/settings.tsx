@@ -1,19 +1,20 @@
-/** 设置标签页外壳，按创建流程在凭据、项目、阶段配置、提示词与部署之间路由。 */
+/** 设置标签页外壳，按创建流程在凭据、项目、模型、提示词与部署之间路由。 */
 import type { StateView } from './api.ts'
 import { DeploymentPage, type DeploymentForm } from './deployment.tsx'
 import { EvalSettings } from './eval.tsx'
 import { ExecutionSettings } from './execution.tsx'
 import { FeishuCredentialSettings } from './feishu-credentials.tsx'
 import { GitCredentialSettings } from './git-credentials.tsx'
+import { ModelsSettings } from './models.tsx'
 import { ProjectSettings } from './projects.tsx'
 import { PromptsPage } from './prompts.tsx'
 import { usePanel } from './provider.tsx'
 import { SETTINGS_GROUPS, settingsRoute, type SettingsGroup } from './route.ts'
 import { SettingsProvider } from './settings-kit.tsx'
 
-const STAGE_GROUPS: readonly SettingsGroup[] = ['gitCredentials', 'feishuCredentials', 'projects', 'eval', 'execution']
+const STAGE_GROUPS: readonly SettingsGroup[] = ['gitCredentials', 'feishuCredentials', 'projects', 'models', 'eval', 'execution']
 /** 与主菜单同名但含义是配置的分组；导航上追加“配置”标记，避免与运行页混淆。 */
-const CONFIG_GROUPS: readonly SettingsGroup[] = ['projects', 'eval', 'execution']
+const CONFIG_GROUPS: readonly SettingsGroup[] = ['projects', 'models', 'eval', 'execution']
 export function SettingsPage({ group, query, state, deploymentForm }: {
   group: SettingsGroup; query: { source?: string; version?: string; tab?: string }; state: StateView; deploymentForm: DeploymentForm
 }) {
@@ -24,6 +25,7 @@ export function SettingsPage({ group, query, state, deploymentForm }: {
       case 'feishuCredentials': return <SettingsProvider>
         <FeishuCredentialSettings initialTab={query.tab} focus={query.source} /></SettingsProvider>
       case 'projects': return <SettingsProvider><ProjectSettings {...query.source ? { focus: query.source } : {}} /></SettingsProvider>
+      case 'models': return <SettingsProvider><ModelsSettings /></SettingsProvider>
       case 'eval': return <SettingsProvider><EvalSettings version={query.version} /></SettingsProvider>
       case 'execution': return <SettingsProvider><ExecutionSettings /></SettingsProvider>
       case 'prompts': return <PromptsPage />
