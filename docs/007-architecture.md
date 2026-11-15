@@ -391,6 +391,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/app/tools/host.ts` | `MainToolsHost`（主会话工具的宿主依赖）与 `routed` 响应格式化；定义文件共享的类型出口 |
 | `src/app/tools/main.ts` | 主会话的工具注册表：把 `definitions/` 的工具工厂组装成数组 |
 | `src/app/tools/definitions/route.ts`、`src/app/tools/definitions/ticket.ts`、`src/app/tools/definitions/eval.ts`、`src/app/tools/definitions/replies.ts`、`src/app/tools/definitions/settings.ts`、`src/app/tools/definitions/prompts.ts` | 主会话各工具的定义：路由（RouteItemSchema/FIELDS/route）、工单动作、评估、回复与线程、设置与策略同步、提示词保存 |
+| `src/app/tools/definitions/retro.ts` | `orchestrator_retrospective`：按修订/模型/阶段分桶的用量与工单结果聚合（自我升级闭环的度量入口；改进经 `orchestrator_prompts_save`/`orchestrator_settings_save` 落地） |
 | `src/app/tools/executor.ts` | 执行器会话的工具 |
 | `src/app/http/routes.ts` | `/orchestrator/api` 路由表与视图组装：`HttpHost`（HTTP 层唯一能力面）、`stateView` 等面板视图的类型出口 |
 | `src/app/http/schemas.ts` | 每条路由的 zod 请求校验 schema，与 `Api` 类型契约一一对应 |

@@ -32,7 +32,7 @@ import type { ResetReport } from '../reset.ts'
 import type { GitCredentials } from '../../git-credentials/service.ts'
 import type { FeishuCredentials } from '../../feishu-credentials/service.ts'
 import { TASK_TEMPLATE_FILENAME, taskTemplate } from '../../task-sources/excel-template.ts'
-import { ProjectTasksQuery, PromptsQuery, QueueQuery, TicketsQuery, ThreadsQuery, ThreadQuery, DecisionsQuery,
+import { ProjectTasksQuery, PromptsQuery, QueueQuery, TicketsQuery, ThreadsQuery, ThreadQuery, DecisionsQuery, RetroQuery,
   SettingsBlockSchema, SaveRequest, CreateProjectRequest, CreateSourceRequest, VerifySourceRequest, VerifyCodeRepoRequest,
   VerifyTaskSourceRequest, CreateGitCredentialRequest, UpdateGitCredentialRequest, RotateGitCredentialRequest,
   VerifyGitCredentialRequest, CreateFeishuCredentialRequest, UpdateFeishuCredentialRequest, RotateFeishuCredentialRequest,
@@ -289,6 +289,8 @@ export function routes(runtime: HttpHost, listen: () => { host: string; port: nu
       const since = window ? new Date(Date.now() - 86_400_000).toISOString() : ''
       return decisionList(views(runtime), kind.split(',').filter(Boolean), offset, limit, since)
     },
+    // 自我升级闭环的回顾聚合：按修订/模型/阶段分桶的工单结果与用量。
+    'GET retro': ({ query }) => ({ by: RetroQuery.parse(query).by, buckets: store.read.retro(RetroQuery.parse(query).by) }),
     'POST decisions/:id/dismiss': ({ params }) => { runtime.engine.dismiss(params.id); return { dismissed: true } },
     'GET tickets': ({ query }) => {
       const { state, offset, limit } = TicketsQuery.parse(query)

@@ -73,6 +73,31 @@ export function storeReads(db: DatabaseSync) {
   droppedReplies: (limit = 20): Dropped[] =>
     values('SELECT value FROM outbox WHERE dropped IS NOT NULL ORDER BY dropped DESC LIMIT ?', limit),
   droppedSince: (since: string): number => Number(db.prepare('SELECT COUNT(*) AS n FROM outbox WHERE dropped >= ?').get(since)?.n ?? 0),
+  /**
+   * 回顾聚合：按 `by`（修订/模型/阶段）分桶的工单结果与用量，供自我升级闭环对照。
+   * join 工单取结果分布；`failed` 统计未结束（或无工单）的请求；`revisions` 是该桶涉及的修订范围。
+   */
+  retro: (by: 'revision' | 'model' | 'stage', limit = 20): { key: string; tickets: number; requests: number; input: number;
+    output: number; completed: number; merged: number; closed: number; dropped: number; stopped: number; failed: number; revisions: number[] }[] => {
+    const bucket = by === 'revision' ? "u.value ->> '$.promptRevision'" : by === 'model' ? "u.value ->> '$.model'" : "u.value ->> '$.stage'"
+    const rows = db.prepare(`SELECT ${bucket} AS key, COUNT(DISTINCT u.value ->> '$.ticket') AS tickets, COUNT(*) AS requests,
+      SUM(COALESCE(u.value ->> '$.input', 0) + COALESCE(u.value ->> '$.cacheRead', 0) + COALESCE(u.value ->> '$.cacheWrite', 0)) AS input,
+      SUM(COALESCE(u.value ->> '$.output', 0)) AS output,
+      SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'completed' THEN 1 ELSE 0 END) AS completed,
+      SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'merged' THEN 1 ELSE 0 END) AS merged,
+      SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'closed' THEN 1 ELSE 0 END) AS closed,
+      SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'dropped' THEN 1 ELSE 0 END) AS dropped,
+      SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'stopped' THEN 1 ELSE 0 END) AS stopped,
+      SUM(CASE WHEN t.value IS NULL OR t.value ->> '$.ended' IS NULL THEN 1 ELSE 0 END) AS failed
+      FROM usage u LEFT JOIN ticket t ON t.id = u.value ->> '$.ticket'
+      WHERE key IS NOT NULL GROUP BY key ORDER BY requests DESC LIMIT ?`).all(limit)
+    return rows.map(row => ({ key: String(row.key), tickets: Number(row.tickets), requests: Number(row.requests),
+      input: Number(row.input ?? 0), output: Number(row.output ?? 0),
+      completed: Number(row.completed ?? 0), merged: Number(row.merged ?? 0), closed: Number(row.closed ?? 0),
+      dropped: Number(row.dropped ?? 0), stopped: Number(row.stopped ?? 0), failed: Number(row.failed ?? 0),
+      revisions: by === 'revision' ? [Number(row.key)] : [Number(row.minRev), Number(row.maxRev)]
+        .map(value => Number(value)).filter(value => Number.isFinite(value) && value > 0) }))
+  },
   subscribedThreads: (source?: string): Thread[] => source
     ? values('SELECT value FROM thread WHERE subscribed = ? ORDER BY rowid', source)
     // 强制使用部分索引，避免 SQLite 按 rowid 顺序扫描整张表。

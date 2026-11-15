@@ -92,6 +92,9 @@ export interface Api {
   'POST triggers/:id/requeue': { response: { queued: boolean } }
   'GET decisions': { query?: Paged & { kind?: string; window?: '24h' }; response: DecisionListView }
   'POST decisions/:id/dismiss': { response: { dismissed: true } }
+  'GET retro': { query?: { by?: 'revision' | 'model' | 'stage' }; response: { by: 'revision' | 'model' | 'stage';
+    buckets: { key: string; tickets: number; requests: number; input: number; output: number; completed: number; merged: number;
+      closed: number; dropped: number; stopped: number; failed: number; revisions: number[] }[] } }
   'GET tickets': { query?: Paged & { state?: TicketFilter }; response: TicketListView }
   'GET tickets/:id': { response: TicketPageView }
   'POST tickets/:id/retry': { response: { retried: true } }

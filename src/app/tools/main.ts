@@ -5,6 +5,7 @@ import type { MainToolsHost } from './host.ts'
 import { evalTools } from './definitions/eval.ts'
 import { promptsTool } from './definitions/prompts.ts'
 import { replyTools } from './definitions/replies.ts'
+import { retroTool } from './definitions/retro.ts'
 import { routeTool } from './definitions/route.ts'
 import { settingsTools } from './definitions/settings.ts'
 import { ticketTools } from './definitions/ticket.ts'
@@ -23,6 +24,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     ...evalTools(host, agent),
     ...replyTools(host),
     ...settingsTools(host),
+    retroTool(host),
     promptsTool(host, agent),
   ]
 }

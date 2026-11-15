@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { Engine, Ticket } from '../src/core/index.ts'
+import { KV } from '../src/kv.ts'
 import { Store } from '../src/app/store.ts'
 import { UsageMeter } from '../src/app/usage-meter.ts'
 
@@ -108,4 +109,22 @@ it('ignores usage without a budget and messages without usage accounting', () =>
   expect(relays).toHaveLength(0)
   expect(meter.subagentsBlocked('t1')).toBe(false)
   expect(store.usage.recent(10)).toHaveLength(1)
+})
+
+it('aggregates the retrospective by revision with the ticket outcomes joined in', () => {
+  const { store, emit, seed } = fixture()
+  seed()
+  const done = { ...ticket(), id: 't2' }
+  store.tickets.save({ ...done, ended: { at: '2026-01-02T00:00:00Z', by: 'executor' as const, outcome: 'completed' as const } })
+  // 两个请求绑定修订 3：t1 一个请求、t2 一个请求。
+  store.set(KV.sessions.prompts('worker-t1'), [3])
+  store.set(KV.sessions.prompts('worker-t2'), [3])
+  emit('worker-t1', { inputTokens: 100, outputTokens: 10 })
+  emit('worker-t2', { inputTokens: 200, outputTokens: 20 })
+  const buckets = store.read.retro('revision')
+  // 计费输入含 cacheRead（各 100）：500 = (100+100) + (200+100)。
+  expect(buckets).toEqual([expect.objectContaining({ key: '3', tickets: 2, requests: 2, input: 500, output: 30, completed: 1 })])
+  const models = store.read.retro('model')
+  expect(models[0]).toMatchObject({ key: 'unknown', requests: 2 })
+  expect(store.read.retro('stage')).toEqual([])
 })

@@ -344,6 +344,7 @@ const SourceSave = z.object({ name: z.string().trim().min(1), enabled: z.boolean
 const ROUTES: { [K in keyof Api]: Route<K> } = {
   'GET state': { answer: stateView },
   'GET overview': { answer: overviewView },
+  'GET retro': { answer: () => ({ by: 'revision' as const, buckets: [] }) },
   'GET search': { query: ['q'], answer: async ({ query }) => {
     const q = query.q ?? ''
     await server.searching?.(q)
