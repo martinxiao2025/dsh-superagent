@@ -6,3 +6,4 @@ coverage/
 .mimosa/
 .dsh-dev-state/
 .zcode/
+backup-state/
