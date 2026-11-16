@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { STAGE_BRIEFS, STAGES, type Stage } from '../core/stages.ts'
 import { UserError, key } from '../core/index.ts'
 import { policyVersion, type Settings, type SettingsOrigin } from '../policy.ts'
-import { masterPrompt, workerPrompt, sharedPrompt, guides, stageGuides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, admissionSkill, cliNotes } from './context.ts'
+import { masterPrompt, workerPrompt, sharedPrompt, guides, stageGuides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, admissionSkill, reviewSkill, cliNotes } from './context.ts'
 import { environmentLines, type Variable } from './execution-environment.ts'
 import { promptsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
@@ -19,13 +19,13 @@ const TEAM_HEADINGS: Record<TeamSection, string> = { communication: '沟通方�
 export const SKILL_NAME = /^[a-z][a-z0-9-]*$/
 /** 在 DSH 会话中注册技能名称时添加的前缀。 */
 export const SKILL_PREFIX = 'dsh-superagent-'
-const SkillNameSchema = z.string().regex(SKILL_NAME).refine(name => !['admission', ...Object.keys(sourceSkills)].includes(name),
+const SkillNameSchema = z.string().regex(SKILL_NAME).refine(name => !['admission', 'review', ...Object.keys(sourceSkills)].includes(name),
   'This name belongs to a built-in skill')
 /** 团队可以覆盖的内置部分，按键列出：两个角色的部分、六个工作阶段、技能，以及生成部分的模板。 */
 const PART_KEYS = ['runtime/shared', 'runtime/orchestrator', 'runtime/worker', 'runtime/subscriptions', 'runtime/replies',
   'runtime/dispatch', 'runtime/work', 'runtime/admission', 'runtime/handoff/orchestrator', 'runtime/handoff/worker',
   ...STAGES.map(stage => `runtime/stages/${stage}`), 'runtime/environment',
-  'runtime/policy', 'runtime/policy/none', 'skill/admission', 'skill/feishu', 'skill/github', 'skill/gitlab'] as const
+  'runtime/policy', 'runtime/policy/none', 'skill/admission', 'skill/review', 'skill/feishu', 'skill/github', 'skill/gitlab'] as const
 export type PartKey = typeof PART_KEYS[number]
 /** 团队为某个内置部分提供的文本，以及 `base`，即它编辑自的内置文本的键。 */
 const OverrideSchema = z.object({ text: z.string(),
@@ -75,6 +75,8 @@ export const builtInParts = (): Readonly<Record<PartKey, BuiltInPart>> => parts 
     placeholders: ['{version}', '{mode}'] },
   // 准入详述只随技能按需进入上下文（主会话每请求固定提示词因此省 ~1.9k 字符）；admission.md 保留入口与强指引。
   'skill/admission': { roles: MAIN, text: admissionSkill },
+  // 审查处置与记功流程只随技能按需进入上下文（两角色每请求固定 team 段各省 ~5k 字符）；team 段留触发指引。
+  'skill/review': { roles: WORKER, text: reviewSkill },
   'skill/feishu': { roles: BOTH, text: `${sourceSkills.feishu}\n\n## CLI 用法\n${cliNotes}` },
   'skill/github': { roles: BOTH, text: `${sourceSkills.github}\n\n## CLI 用法\n${cliNotes}` },
   'skill/gitlab': { roles: BOTH, text: `${sourceSkills.gitlab}\n\n## CLI 用法\n${cliNotes}` },
@@ -137,7 +139,8 @@ export function composePrompt(config: PromptConfig, role: Role, environment?: st
   return promptParts(config, role, environment, policy, stage).map(part => part.text).join('\n\n')
 }
 export function composeSkill(config: PromptConfig, name: string): string {
-  return name === 'admission' || name === 'feishu' || name === 'github' || name === 'gitlab' ? builtIn(config, `skill/${name}`) : config.skills[name] ?? ''
+  return name === 'admission' || name === 'review' || name === 'feishu' || name === 'github' || name === 'gitlab'
+    ? builtIn(config, `skill/${name}`) : config.skills[name] ?? ''
 }
 
 /** 自其 `base` 以来内置文本已变化的覆盖项（若保留则带有该文本），或本版本已不存在的部分的覆盖项。 */
@@ -163,9 +166,10 @@ export class Prompts {
       role === 'orchestrator' ? policySection(this.store.settings(), config) : undefined, stage)
   }
   /** 返回要在会话中注册的技能：`role` 为 `orchestrator`（或缺省的主会话视角）时先注册准入规则技能 `admission`，
-   * 再是内置来源技能（仅当配置了飞书机器人时才包含 `feishu`），随后是团队技能；worker 会话不注册准入技能。 */
+   * worker 会话注册审查处置技能 `review`；再是内置来源技能（仅当配置了飞书机器人时才包含 `feishu`）与团队技能。 */
   skills(config: PromptConfig, role: Role = 'orchestrator'): [string, string][] {
-    return [...role === 'orchestrator' ? ['admission'] : [], ...this.feishu() ? ['feishu'] : [], 'github', 'gitlab',
+    return [...role === 'orchestrator' ? ['admission'] : [], ...role === 'worker' ? ['review'] : [],
+      ...this.feishu() ? ['feishu'] : [], 'github', 'gitlab',
       ...Object.keys(config.skills)].map(name => [name, composeSkill(config, name)])
   }
   current(): PromptVersion {

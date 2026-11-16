@@ -302,6 +302,7 @@ export const settingsText = {
   'promptPart.runtime/stages/deliver': ['阶段聚焦：交付', 'Stage focus: Deliver'],
   'promptPart.runtime/stages': ['阶段地图', 'Stage map'],
   'promptPart.skill/admission': ['准入技能', 'Admission skill'],
+  'promptPart.skill/review': ['审查处置技能', 'Review skill'],
   'promptPart.skill/feishu': ['飞书技能', 'Feishu skill'],
   'promptPart.skill/github': ['GitHub 技能', 'GitHub skill'],
   'promptPart.skill/gitlab': ['GitLab 技能', 'GitLab skill'],

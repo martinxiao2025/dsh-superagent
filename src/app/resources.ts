@@ -22,7 +22,7 @@ import type { TextCache } from './cache.ts'
 
 /** 通过 orchestrator_read 暴露的资源描述符，标记执行器会话也可为自己的工单读取哪些资源。 */
 export const RESOURCES: readonly { name: string; holds: string; executor?: true }[] = [
-  { name: 'tickets', holds: 'ticket cards, newest first; a card\'s state is person/review after a ready report, person/blocked or person/failed after those reports, person/answer with a question, person/delivery when an input could not reach the worker, working or working/queued while it works, idle once the worker ended its turn without a report, else how the ticket ended' },
+  { name: 'tickets', holds: 'ticket cards, newest first; a card\'s state says who waits: person/<why> when a person must act (review, blocked, failed, answer, delivery), working or working/queued while it works, idle after a turn that ended without a report, else how it ended' },
   { name: 'triggers', holds: 'trigger cards with where each went, newest first' },
   { name: 'threads', holds: 'subscribed threads, newest activity first, with their labels, tickets, current assessment and polling errors' },
   { name: 'thread/<key>', holds: 'one thread: its label and link, its tickets and latest decisions, and its triggers, newest first', executor: true },
@@ -50,8 +50,8 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'prompt-preview/<id>', holds: 'a composed prompt that orchestrator_prompts_save previewed' },
   { name: 'models', holds: 'model providers, the DSH default and each role\'s model' },
   { name: 'models/<provider>', holds: 'one provider\'s models' },
-  { name: 'usage', holds: 'token accounting: the Executor Session reads its ticket\'s totals, budget and recent requests; the main '
-    + 'Session reads the installation-wide totals by model and a page of recent requests', executor: true },
+  { name: 'usage', holds: 'token accounting: a ticket\'s totals, budget and recent requests; the main Session adds installation-wide totals by model '
+    + 'and paged recent requests', executor: true },
   { name: 'feishu/<trigger-id>/…', holds: 'a Feishu original, as the dsh-superagent-feishu skill describes', executor: true },
 ]
 export const resourceGrammar = (executor: boolean): string => RESOURCES.filter(resource => !executor || resource.executor)
