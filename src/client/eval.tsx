@@ -8,7 +8,7 @@ import { Button, DisclosureRow, Icon, InfoTip, Input, Pill, SegmentedControl, Sw
 import { SaveBar } from './draft.tsx'
 import { useAction, usePanel } from './provider.tsx'
 import { DecisionLine } from './rows.tsx'
-import { ConfigHistory, Field, Fields, ModelField, SourceField, numberOf, useBlockDraft, useSettings } from './settings-kit.tsx'
+import { ConfigHistory, Field, Fields, numberField, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
 import { localized, valueLabel, when } from './text.ts'
 import { Hint, LabelValue, LoadMore, LoadState, Section, StatusHead } from './widgets.tsx'
 
@@ -192,8 +192,8 @@ function PolicyBlock() {
 function EvalBlock() {
   const { t } = usePanel()
   const block = useSettings().settings.blocks.eval
-  const saved = { ...block.value, timeoutSeconds: String(block.value.timeoutSeconds) }
-  const draft = useBlockDraft('eval', saved, block.revision, value => ({ ...value, timeoutSeconds: numberOf(value.timeoutSeconds) }))
+  const saved = { ...block.value, timeoutSeconds: numberField.read(block.value.timeoutSeconds) }
+  const draft = useBlockDraft('eval', saved, block.revision, value => ({ ...value, timeoutSeconds: numberField.write(value.timeoutSeconds) }))
   const value = draft.value
   const edit = (next: Partial<typeof value>) => draft.edit({ ...value, ...next })
   return <form className="dt-form dt-block" onSubmit={event => { void draft.submit(event) }}>

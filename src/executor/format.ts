@@ -20,6 +20,8 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
 export const WorktreeNameSchema = z.string().max(32).regex(/^[a-z]+(?:-[a-z0-9]+){0,3}$/, 'Use 1–4 short English words in lowercase kebab-case, at most 32 characters').describe('Meaningful short English ticket name, e.g. fix-plan-color. Translate Chinese titles into English; no Chinese, pinyin or generic ticket names. 1–4 lowercase words in kebab-case, at most 32 characters.')
 /** 工作单元消息中内联触发器文本的字符上限；更长的文本通过其资源读取。 */
 const TRIGGER_CHARS = 600
+/** 工单消息中内联任务分派文本的字符上限；更长的分派经 `ticket/<id>/assignment` 资源读取。 */
+export const ASSIGNMENT_CHARS = 1500
 /** 返回最多 `limit` 个字符的 `text`，或返回带截断预览、总字符数和读取全文资源路径的对象。 */
 export const capped = (text: string, limit: number, read: string) =>
   text.length <= limit ? { text } : { text: `${text.slice(0, limit)}…`, chars: text.length, read }

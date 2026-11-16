@@ -364,6 +364,31 @@ it('reads a ticket with the ids it is tied to, its reports by assignment, and it
   expect(vi.mocked(h.controller.events).mock.calls.length).toBe(fetched + 1)
 })
 
+it('marks a transcript read when older events exist beyond its window, keeping the message indices stable', async () => {
+  const { ticket } = await h.acceptedTicket(feishu('2', '@bot 再修一个'))
+  vi.mocked(h.controller.events).mockResolvedValueOnce({ records: [{ type: 'event', event: { type: 'assistant/message', seq: 1, time: 0,
+    data: { message: { role: 'assistant', content: [{ type: 'text', text: 'Recent fix.' }] } } } }],
+    hasMore: true, cursor: 1 } as never)
+  const page = await read(`ticket/${ticket.id}/transcript`) as { text: string }
+  const lines = page.text!.split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  // 首行显式标记窗口外还有更早事件，并指向原始任务分派资源；正文行号不受标记影响。
+  expect(lines[0]).toMatchObject({ older_events: true, note: expect.stringContaining(`ticket/${ticket.id}/assignment`) })
+  expect(lines.at(-1)).toMatchObject({ read: `ticket/${ticket.id}/message/0` })
+  expect(await read(`ticket/${ticket.id}/message/0`)).toMatchObject({ text: expect.stringContaining('Recent fix.') })
+})
+
+it('pages the installation-wide usage records for the main session without repeating the newest page', async () => {
+  const record = (n: number) => ({ at: `2026-10-05T00:0${n}:00.000Z`, session: 'worker-t0', scope: 'worker' as const, ticket: 't0',
+    provider: 'p', model: `m${n}`, input: n, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0 })
+  for (let n = 0; n < 5; n += 1) h.runtime.store.usage.add(record(n))
+  const first = await read('usage', { limit: 2 }) as { items: { model: string }[]; next_offset: number }
+  expect(first.items.map(item => item.model)).toEqual(['m4', 'm3'])
+  const second = await read('usage', { offset: 2, limit: 2 }) as { items: { model: string }[]; next_offset: number }
+  // 修复前 offset>0 永远返回最新一页（m4、m3 重复出现）；修复后按偏移前进。
+  expect(second.items.map(item => item.model)).toEqual(['m2', 'm1'])
+  expect(second.next_offset).toBe(4)
+})
+
 it('reads a trigger once with the message it replies to and the messages around it on its thread, without the CI runs', async () => {
   const at = (minute: number) => `2026-10-06T00:0${minute}:00.000Z`
   const message = (id: string, minute: number, overrides: Record<string, unknown> = {}) => ({ ...feishu(id, `message ${id}`, { root_id: 'om_root', ...overrides }), at: at(minute) })

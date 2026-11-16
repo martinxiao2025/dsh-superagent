@@ -1,7 +1,6 @@
-/** 代码仓库记录与类型描述：记录只保存名称、启停与配置；类型提供 schema、面板字段与只读事实。 */
+/** 代码仓库类型描述：类型提供 schema、面板字段与只读事实。 */
 import { z } from 'zod'
 import type { ResolvedSource } from '../deployment.ts'
-import { LIMITS } from '../limits.ts'
 import type { FieldSpec, Localized } from '../fields.ts'
 
 /** 代码仓库记录可选的类型；GitHub 与 GitLab 只负责克隆、同步与凭据，不产生任务。 */
@@ -19,15 +18,6 @@ export function repositoryOfRemote(remote: string): { host: string; repository: 
   if (ssh) return { host: ssh[2]!, repository: ssh[3]! }
   return undefined
 }
-/** 一条代码仓库记录：正文由类型 schema 校验，这里只约束记录外壳。 */
-export const CodeRepoRecordSchema = z.object({
-  kind: CodeRepoKindSchema,
-  /** 面板显示的名称，必填。 */
-  name: z.string().trim().min(1).max(LIMITS.sourceName),
-  enabled: z.boolean().default(true),
-  config: z.record(z.string(), z.unknown()).default({}),
-}).strict()
-export type CodeRepoRecord = z.infer<typeof CodeRepoRecordSchema>
 
 /** 代码仓库类型的静态描述；与记录的 `kind` 一一对应。 */
 export interface CodeRepoType<C extends Record<string, unknown> = Record<string, unknown>> {

@@ -1,6 +1,5 @@
-/** 已订阅线程的共享轮询辅助函数、重叠安全的游标和适配定时器的延迟。 */
+/** 已订阅线程的共享轮询辅助函数与重叠安全的游标。 */
 import { liveTicket, type Thread } from '../core/index.ts'
-import { health, type Health } from '../infra/health.ts'
 import { type SourceContext } from './host.ts'
 
 /** 已订阅线程在没有存活工单时，最后一次触发器或工单结束后仍继续轮询的时长。 */
@@ -29,17 +28,4 @@ export async function pollThreads(ctx: SourceContext, source: string, stopped: (
       ctx.threads.patch(thread.key, { pollError: String(error) })
     }
   }
-}
-/** 连续失败达到阈值时返回 error 健康，否则返回 undefined，让单次网络中断在下一次轮询时安静重试。 */
-export function pollFailure(failures: number, threshold: number, error: unknown): Health | undefined {
-  return failures >= threshold ? health('error', 'pollFailures', { count: String(failures), error: String(error) }) : undefined
-}
-/** 等待 `ms` 或直到 `signal` 中止，使用全局 `setTimeout` 以便测试的假定时器驱动轮询循环。 */
-export function pause(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise(resolve => {
-    if (signal.aborted) { resolve(); return }
-    const stop = () => { clearTimeout(timer); resolve() }
-    const timer = setTimeout(() => { signal.removeEventListener('abort', stop); resolve() }, ms)
-    signal.addEventListener('abort', stop, { once: true })
-  })
 }

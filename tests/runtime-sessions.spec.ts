@@ -10,6 +10,7 @@ import { expect, it, vi } from 'vitest'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { mandateInstructions } from '../src/executor/format.ts'
 import { masterPrompt } from '../src/app/context.ts'
+import { composeSkill, defaultPrompts } from '../src/app/prompts.ts'
 import { policyVersion } from '../src/policy.ts'
 import { key } from '../src/core/index.ts'
 import { Commands } from '../src/infra/commands.ts'
@@ -123,13 +124,17 @@ it('passes team text with template braces to every Session literally, without re
   }
 })
 
-it('credits each human reviewer once in the default delivery requirements on every commit of the PR, never with an empty commit', async () => {
+it('credits each human reviewer once in the review skill, with a trigger line in the default delivery requirements, never with an empty commit', async () => {
   const delivery = h.runtime.prompts.current().config.delivery
-  expect(delivery).toContain('Co-authored-by: <name or login> <id+login@users.noreply.github.com>')
-  expect(delivery).toContain('在该 PR 分支的每个提交上')
-  expect(delivery).toContain('git filter-branch -f --msg-filter')
-  expect(delivery).toContain('绝不要为了给审查者记功而推送空提交。')
-  expect(delivery).toContain('不要给 bot')
+  // delivery 默认文本只留触发指引与重复 PR 处置；记功流程在仅注册给 worker 的 review 技能中按需进入上下文。
+  expect(delivery).toContain('完整流程在 dsh-superagent-review 技能中；首次评估人工评审者的反馈时先打开它')
+  expect(delivery).toContain('立即用 gh 关闭本工单的 PR，无需询问任何人')
+  const review = composeSkill(defaultPrompts(), 'review')
+  expect(review).toContain('Co-authored-by: <name or login> <id+login@users.noreply.github.com>')
+  expect(review).toContain('在该 PR 分支的每个提交上')
+  expect(review).toContain('git filter-branch -f --msg-filter')
+  expect(review).toContain('绝不要为了给审查者记功而推送空提交。')
+  expect(review).toContain('不要给 bot')
 })
 
 it('refuses the main Session a bash command that runs sleep and a long job wait, as reports arrive by themselves, and no worker', async () => {

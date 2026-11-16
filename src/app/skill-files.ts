@@ -21,7 +21,7 @@ function load(name: string) {
   if (!match) throw new Error(`Invalid packaged skill: ${path}`)
   return { name: match[1]!, description: match[2]!, content: match[3]!, path }
 }
-export const bundledSkills = { admission: load('admission'), feishu: load('feishu'), github: load('github'), gitlab: load('gitlab') }
+export const bundledSkills = { admission: load('admission'), review: load('review'), feishu: load('feishu'), github: load('github'), gitlab: load('gitlab') }
 /**
  * 加载内置提示词文件（`prompts/<name>.md`）。源 `.md` 文件把每个中文段落写在一行内，以便 diff 易读；
  * `promptFile` 会在每个段落内用空格连接各行，同时保留空行分隔的段落。

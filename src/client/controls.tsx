@@ -10,7 +10,6 @@ const cx = (...names: (string | false | undefined)[]) => names.filter(Boolean).j
 
 const ICON_PATHS = {
   'chevron-left': 'M15 5l-7 7 7 7',
-  'chevron-right': 'M9 5l7 7-7 7',
   'chevron-down': 'M5 9l7 7 7-7',
   'chevron-up': 'M5 15l7-7 7 7',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4',

@@ -17,6 +17,8 @@ export const sourceSkills: Readonly<Record<'feishu' | 'github' | 'gitlab', strin
   github: bundledSkills.github.content, gitlab: bundledSkills.gitlab.content }
 /** 准入评估的完整规则技能（`skills/dsh-superagent-admission/SKILL.md`）；仅注册给主会话，团队可用 `skill/admission` 覆盖。 */
 export const admissionSkill = bundledSkills.admission.content
+/** PR 审查处置技能（`skills/dsh-superagent-review/SKILL.md`）；仅注册给工作单元，团队可用 `skill/review` 覆盖。 */
+export const reviewSkill = bundledSkills.review.content
 export const cliNotes = promptFile('cli')
 /** Default text for the team-editable prompt sections (communication, ticket scope, and PR delivery). */
 export const teamDefaults = {

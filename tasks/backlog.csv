@@ -13,3 +13,4 @@ task_id,title,status,description,priority,owner,acceptance,depends_on,tags,updat
 12,速率限制与退避,todo,GitHub/GitLab fetch 与飞书 OpenAPI 的退避与令牌桶——429/限流响应统一分类处理;避免限流放大为轮询失败,P2,,限流时按退避重试不判失败;测试覆盖限流分类,,reliability,2026-11-16
 13,飞书回写目标定案,todo,群消息与飞书 docx 来源的终态回写目标未定（Excel/CSV/TSV 与 bitable 已闭环）;定案后更新 009 第 5 章驱动表与驱动实现,P2,,回写目标定案并记录取舍;涉及实现时补驱动与测试,,task-sources,2026-11-16
 14,飞书群列表真机实测,todo,群 ID 下拉已完成面板级验证;需在装有真实飞书凭据的实例上点选确认（POST feishu-im/chats 全链路）,P1,,真机点选成功并据此建单,1,feishu,2026-11-16
+15,time-context/agent-instructions 预设行实测,todo,宿主 time-context 预设行与 agent-instructions 的价值需真机按 usage 表 cacheReadTokens 对照实测（R 轮明确不猜测性修改——担心 time-context 每分钟变化打掉 provider 端 prompt cache）;实测有收益再接线,P2,,真机对照 cacheReadTokens 有结论;无收益则记录不采纳,,llm,2026-11-16

@@ -107,6 +107,18 @@ export interface CodeSyncInput {
   auth?: GitAuth
 }
 
+/** 同步与推送共用的仓库前置：范围校验、Git 凭据/SSH 注入与包装好的 git 入口。 */
+async function repoGit(input: Pick<CodeSyncInput, 'commands' | 'codeSource' | 'directory' | 'auth'>) {
+  const scoped = input.commands.scope(input.codeSource)
+  const source = scoped.source
+  if (source?.kind !== 'github' && source?.kind !== 'gitlab') throw new Error('代码仓库记录必须是 GitHub 或 GitLab')
+  // 优先使用项目选择的 Git 凭据；没有凭据时退回记录里的 SSH key 或本机助手。
+  const auth = input.auth ? await gitAuthArgs(input.auth) : { args: [] as string[], cleanup: async () => {} }
+  const ssh = auth.args.length ? auth.args : source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
+  const git = (args: string[]): Promise<string> => scoped.git(ssh.length ? [...ssh, ...args] : args, input.directory)
+  return { scoped, source, auth, git }
+}
+
 /**
  * 同步代码源到 `directory`。
  * 首次同步初始化仓库并检出分支；之后只做快进合并，遇到本地改动或分叉时明确失败，不执行重置。
@@ -114,42 +126,36 @@ export interface CodeSyncInput {
  */
 export async function syncCode(input: CodeSyncInput): Promise<CodeSyncResult> {
   const { signal } = input
-  const scoped = input.commands.scope(input.codeSource)
-  const source = scoped.source
-  if (source?.kind !== 'github' && source?.kind !== 'gitlab') throw new Error('代码仓库记录必须是 GitHub 或 GitLab')
+  const { scoped, source, auth, git } = await repoGit(input)
   // 测试与预检可能没有解析出部署；此时 `remoteOf` 使用内置默认主机。
   const remote = remoteOf(source, input.remoteUrl, scoped.deployment
     ? { github: scoped.deployment.githubHost.get(), gitlab: scoped.deployment.gitlabHost.get() } : undefined)
-  // 优先使用项目选择的 Git 凭据；没有凭据时退回记录里的 SSH key 或本机助手。
-  const auth = input.auth ? await gitAuthArgs(input.auth) : { args: [] as string[], cleanup: async () => {} }
-  const ssh = auth.args.length ? auth.args : source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
-  const git = (args: string[]): Promise<string> => scoped.git(ssh.length ? [...ssh, ...args] : args, input.directory)
-    await mkdir(input.directory, { recursive: true })
-    // 登记目录后，git 的凭据助手才会按目录选择该代码仓库记录的凭据。
-    await recordTicketSource(input.stateDir, input.directory, input.codeSource)
-    signal.throwIfAborted()
-    try {
-      if (!(await isRepository(git, input.directory))) {
+  await mkdir(input.directory, { recursive: true })
+  // 登记目录后，git 的凭据助手才会按目录选择该代码仓库记录的凭据。
+  await recordTicketSource(input.stateDir, input.directory, input.codeSource)
+  signal.throwIfAborted()
+  try {
+    if (!(await isRepository(git, input.directory))) {
+      await git(['init', '--quiet'])
+      await git(['remote', 'add', 'origin', remote])
+    } else {
+      // 远端更换后旧镜像与新历史没有共同祖先，merge --ff-only 必然报 unrelated histories；
+      // 工作副本是纯镜像（执行发生在独立 worktree），远端变化时重建镜像而不是报错。
+      const previous = (await git(['remote', 'get-url', 'origin']).catch(() => '')).trim()
+      if (previous && previous !== remote) {
+        // 重建前先拆除挂在镜像上的工单 worktree（评审 E11）：它们是镜像登记的资源，
+        // 直接 rm 镜像会留下指向已消失 gitdir 的残破目录，复活工单的 materialize
+        // 校验将从此永久失败；逐个走 git 的拆除协议，单个失败不阻塞重建。
+        await detachWorktrees(git, input.directory)
+        await rm(input.directory, { recursive: true, force: true })
+        await mkdir(input.directory, { recursive: true })
         await git(['init', '--quiet'])
         await git(['remote', 'add', 'origin', remote])
       } else {
-        // 远端更换后旧镜像与新历史没有共同祖先，merge --ff-only 必然报 unrelated histories；
-        // 工作副本是纯镜像（执行发生在独立 worktree），远端变化时重建镜像而不是报错。
-        const previous = (await git(['remote', 'get-url', 'origin']).catch(() => '')).trim()
-        if (previous && previous !== remote) {
-          // 重建前先拆除挂在镜像上的工单 worktree（评审 E11）：它们是镜像登记的资源，
-          // 直接 rm 镜像会留下指向已消失 gitdir 的残破目录，复活工单的 materialize
-          // 校验将从此永久失败；逐个走 git 的拆除协议，单个失败不阻塞重建。
-          await detachWorktrees(git, input.directory)
-          await rm(input.directory, { recursive: true, force: true })
-          await mkdir(input.directory, { recursive: true })
-          await git(['init', '--quiet'])
-          await git(['remote', 'add', 'origin', remote])
-        } else {
-          await git(['remote', 'set-url', 'origin', remote])
-        }
+        await git(['remote', 'set-url', 'origin', remote])
       }
-      const before = await head(git)
+    }
+    const before = await head(git)
     const branch = input.branch.trim() || await defaultBranch(git)
     await git(['fetch', '--prune', '--quiet', 'origin'])
     signal.throwIfAborted()
@@ -214,12 +220,7 @@ export interface CodePushInput {
  */
 export async function pushCode(input: CodePushInput): Promise<void> {
   const { signal } = input
-  const scoped = input.commands.scope(input.codeSource)
-  const source = scoped.source
-  if (source?.kind !== 'github' && source?.kind !== 'gitlab') throw new Error('代码仓库记录必须是 GitHub 或 GitLab')
-  const auth = input.auth ? await gitAuthArgs(input.auth) : { args: [] as string[], cleanup: async () => {} }
-  const ssh = auth.args.length ? auth.args : source.auth === 'ssh' ? ['-c', `core.sshCommand=${sshCommandOf(source.sshKey)}`] : []
-  const git = (args: string[]): Promise<string> => scoped.git(ssh.length ? [...ssh, ...args] : args, input.directory)
+  const { auth, git } = await repoGit(input)
   try {
     // 分支优先取调用方指定；否则用镜像当前检出的分支（回写路径刚同步/提交过，指向正确），
     // 不做网络探测——推送必须与镜像状态一致，而不是远端的默认分支。

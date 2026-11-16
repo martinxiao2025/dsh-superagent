@@ -6,11 +6,9 @@
 import { liveTicket, runningAssignment, type Assignment, type Ticket, type TicketInput } from '../core/index.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { Later } from '../app/later.ts'
-import { capped, inputMessage, inputResource, workerSessionId } from './format.ts'
+import { ASSIGNMENT_CHARS, capped, inputMessage, inputResource, workerSessionId } from './format.ts'
 import type { WorkerContext } from './dsh.ts'
 
-/** 工单消息中内联任务分配文本的字符上限；更长的文本通过其资源读取。 */
-const ASSIGNMENT_CHARS = 1500
 /** 当输入来自人时为 true（非上下文的真人触发器，或状态请求之类的直接文本输入）。 */
 export const fromPerson = (input?: TicketInput): boolean => input?.kind === 'trigger' ? !!input.human && !input.context : input?.kind === 'text'
 
@@ -41,9 +39,15 @@ export async function deliverQueued(w: WorkerContext, ticketId: string): Promise
       }
       const input = ticket.inputs.find(item => item.id === inputId)
       try {
-        // 若工作单元会话被外部删除，则重新创建它。
+        // 若工作单元会话被外部删除，则重新创建它，并注入一次续作说明：新会话只会直接收到新输入，
+        // 没有原始任务分派——指引工作单元自读 assignment 与 inputs 资源找回上下文（requestId 按会话幂等）。
         if (!w.host.context.agents.get(sessionId as SessionId)) {
           await w.host.sessions.ensure(sessionId, ticket.execution?.directory ?? '', ticket.title, 'worker')
+          const rebuilt = 'This Executor Session was recreated after the previous one was removed; only new inputs reach it directly. '
+            + `Read ticket/${ticketId}/assignment for the original mandate and ticket/${ticketId}/inputs for earlier inputs before continuing.`
+          await w.host.sessions.prompt(sessionId, `session-rebuilt:${ticketId}`, rebuilt,
+            { inject: 'The Executor Session was recreated; its earlier context is in its ticket resources' })
+            .catch(() => { /* 注入失败不阻塞输入投递。 */ })
         }
         if (input) await deliverInput(w, ticket, assignment, input)
       } catch (error) {

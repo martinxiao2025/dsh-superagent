@@ -33,7 +33,7 @@ export const AssessmentSchema = z.object({
 
 /** 初始线程窗口的字符上限：分别用于触发器本身、其最近的两条相邻消息、其他窗口消息和存根预览。 */
 const TRIGGER_CHARS = 4000, NEAR_CHARS = 1200, WINDOW_CHARS = 400, STUB_CHARS = 50
-const FINISHED = 'This assessment has finished: it was decided, timed out or restarted'
+const FINISHED = 'This assessment has finished: it was decided, timed out or restarted; re-run orchestrator_eval with the trigger_id to load the current assessment'
 const EXPLICIT = 'This is an explicit request, which is routed instead of assessed: use orchestrator_route with its trigger_id and kind accept, attach, stop or ignore'
 type AssessmentContext = Awaited<ReturnType<typeof admissionContext>>
 type ReadCache = {
@@ -41,7 +41,7 @@ type ReadCache = {
 }
 /** 评估运行期间保留的每次评估状态：已提供的读取缓存、已加载的线程上下文（或错误），以及进行中的初始加载。 */
 interface EvalReads { cache: ReadCache; context?: AssessmentContext; error?: string; loading?: Promise<void> }
-/** 线程级窗口缓存：评估超时重排或宿主重启后，同线程的新评估直接复用已读线程窗口，免去 `seed()` 全量重拉。 */
+/** 线程级窗口缓存：评估超时重排（≤2 次）后，同线程的新评估直接复用已读线程窗口，免去 `seed()` 全量重拉（进程内，不跨重启）。 */
 const THREAD_CACHE_TTL_MS = 10 * 60_000, THREAD_CACHE_LIMIT = 8
 /** 评估来源不提供线程上下文的触发器时返回的消息。 */
 const NO_CONTEXT = 'This Source gives no Thread context; assess the Trigger\'s own text and the batch.'

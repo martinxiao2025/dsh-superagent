@@ -455,9 +455,9 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 | `src/client/project-wizard.tsx` | 新建项目四步向导与已保存项目的卡片、声明式规格驱动的编辑表单 |
 | `src/client/thread.tsx`、`ticket.tsx` | 记录页面：带时间线的线程，以及带授权、输入和派工的工单 |
 | `src/client/settings.tsx` | 设置标签页：分组导航和屏幕上的分组 |
-| `src/client/settings-kit.tsx` | 设置块的构件：各阶段分组共享的设置、`useBlockDraft`、字段（包括来源 kind 的字段），以及保存历史 |
+| `src/client/settings-kit.tsx` | 设置块的构件：各阶段分组共享的设置、`useBlockDraft`、字段（包括来源 kind 的字段）、模型槽位（目录经 props 注入，整页单次拉取）与表单转换助手（`FieldConversion`/`numberField`），以及保存历史 |
 | `src/client/boundary.tsx` | `Boundary`：面板渲染错误的兜底界面，错误详情与重试入口隔离在面板内 |
-| `src/client/models.tsx` | 模型设置分组：角色位（编排/工作单元）、六个阶段、子代理与工具型小模型的模型矩阵，全部留空继承宿主默认 |
+| `src/client/models.tsx` | 模型设置分组：角色位（编排/工作单元）、六个阶段与子代理的模型矩阵（目录整页单次拉取、经 props 下发），全部留空继承宿主默认 |
 | `src/client/prompts.tsx` | 提示词设置：页面拥有它读取的视图，编辑器拥有草稿，编辑、完整提示词和历史标签页据此渲染；内置部分的编辑器显示已变化的默认值，并保留或丢弃覆盖 |
 | `src/client/prompt-config.ts` | 按段落、团队段落、技能名、内置部分（`part/<key>`，带 `withOverride`）和提示词视图给出的部分标题组织的提示词配置，以及完整提示词的行差异，均为纯函数 |
 | `src/client/deployment.tsx` | 部署设置，也在 DeepSeek Harness 插件管理器中显示 |
@@ -695,7 +695,7 @@ Registry 的配置方法包括 `kind`、`instances`、`instance`、`validate`、
 
 没有工具用于忽略未完成的决定、重新运行安装、刷新来源显示名称，或把执行器拥有的人工跟进送入评估。最后一种操作会被 `orchestrator_trigger_requeue` 有意拒绝。其他面板操作都有等价的工具。
 
-大多数内置指令位于 `prompts/*.md`，每行一句，由 `promptFile` 连接。来源技能与准入规则技能位于 `skills/dsh-superagent-*/SKILL.md`。工具说明和固定通知（例如重启恢复备注）留在代码中。评估入口指令位于 `prompts/admission.md`，评估详述位于准入技能。
+大多数内置指令位于 `prompts/*.md`，每行一句，由 `promptFile` 连接。来源技能与内置运营技能（准入规则、审查处置）位于 `skills/dsh-superagent-*/SKILL.md`。工具说明和固定通知（例如重启恢复备注）留在代码中。评估入口指令位于 `prompts/admission.md`，评估详述位于准入技能；审查处置入口位于团队段落，详述位于审查技能。
 
 `tests/model-surface.spec.ts` 会检查这些接口是否偏移。[004 提示词](004-prompts.md) 说明团队可编辑的部分。
 

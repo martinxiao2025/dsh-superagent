@@ -88,7 +88,17 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
     ['PR 描述必须同时包含 Before 和 After 视觉证据', '相同的场景、视口、主题和相关 UI 状态', '仅有 After 的证据是不完整的',
       '而不是把原型图当作先前的实现', '标明基线和变更后的修订', '不要声称 UI PR 已就绪']],
   ['Human attention is limited', 'team/communication', ['人的注意力是有限的。']],
-  ['Each automated reviewer gets at most three rounds per PR', 'team/communication', ['每个 PR 对每个自动审查器最多处理三轮审查']],
+  ['Each automated reviewer gets at most three rounds per PR', 'skill review', ['每个 PR 对每个自动审查器最多处理三轮审查']],
+  ['Review threads are answered and resolved by outcome, never by a top-level PR comment', 'skill review',
+    ['对于已修复、已推送并验证的发现，静默解决其审查线程', '绝不要用顶层 PR 评论或 PR 正文处置表替代单独的线程回复']],
+  ['Human reviewers are credited once per PR by rewriting its commits', 'skill review',
+    ['每位记功的人一个 `--trailer`', '绝不要为了给审查者记功而推送空提交']],
+  // 审查处置详述只随技能按需进入上下文；team 段保留触发指引（复用 013 admission 迁技能模式）。
+  ['Review handling lives in the review skill, with a trigger line in the team sections', 'team/communication',
+    ['先打开 dsh-superagent-review 技能']],
+  ['Review handling lives in the review skill, with a trigger line in the team sections', 'team/delivery',
+    ['完整流程在 dsh-superagent-review 技能中；首次评估人工评审者的反馈时先打开它',
+      '立即用 gh 关闭本工单的 PR，无需询问任何人']],
   ['An incomplete draft is blocked, and every change is reviewed and checked', 'work', ['不完整的草稿即为 blocked', '审查变更并运行相关检查']],
   ['Investigation has no fixed round limit', 'team/scope', ['没有固定的调查或实现轮次限制']],
   ['A resolved blocker resumes on its own; a person\'s hold lasts until a person lifts it', 'team/scope',
@@ -106,7 +116,7 @@ const RULES: [rule: string, file: string, says: string[], gone?: string[]][] = [
   ['Removed rules stay removed', '*', [], ['最多三轮调查/实施', '继续 dispatch 直到明确指示', 'page-size']],
 ]
 const textOf = (file: string) => file === '*' ? composePrompt(defaultPrompts(), 'orchestrator') + composePrompt(defaultPrompts(), 'worker')
-  : file.startsWith('skill ') ? bundledSkills[file.slice(6) as 'admission' | 'github' | 'feishu'].content : promptFile(file)
+  : file.startsWith('skill ') ? bundledSkills[file.slice(6) as 'admission' | 'review' | 'github' | 'feishu'].content : promptFile(file)
 it.each(RULES)('%s (%s)', (_rule, file, says, gone = []) => {
   const text = textOf(file)
   for (const words of says) expect(text).toContain(words)

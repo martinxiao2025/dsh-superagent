@@ -76,22 +76,28 @@ function pickSheet(sheets: readonly { name: string; path: string; xml: string }[
   return found
 }
 
+/** 解析工作簿 XML 与关系 XML，得到每张工作表的名称与包内路径；`r:id` 指向缺失关系的表跳过。 */
+function sheetLocations(workbook: string, rels: string): { name: string; path: string }[] {
+  const relations = new Map([...rels.matchAll(/<Relationship\b([^>]*)\/?>/g)]
+    .map(match => { const attrs = attributes(match[1]!); return [attrs.Id ?? '', attrs.Target ?? ''] }))
+  return [...workbook.matchAll(/<sheet\b([^>]*)\/?>/g)]
+    .map(match => attributes(match[1]!))
+    .flatMap(sheet => {
+      const target = relations.get(sheet['r:id'] ?? '') ?? ''
+      if (!target) return []
+      const path = (target.startsWith('/') ? target.slice(1) : `xl/${target}`).replace(/^xl\/xl\//, 'xl/')
+      return [{ name: sheet.name ?? '', path }]
+    })
+}
+
 /** 解析工作簿中的工作表名称、路径与 XML。 */
 function workbookSheets(buffer: Buffer, entries: readonly ZipEntry[]): { name: string; path: string; xml: string }[] {
   const text = (name: string): string => {
     const found = entries.find(item => item.name === name)
     return found ? zipRead(buffer, found).toString('utf8') : ''
   }
-  const relations = new Map([...text('xl/_rels/workbook.xml.rels').matchAll(/<Relationship\b([^>]*)\/?>/g)]
-    .map(match => { const attrs = attributes(match[1]!); return [attrs.Id ?? '', attrs.Target ?? ''] }))
-  return [...text('xl/workbook.xml').matchAll(/<sheet\b([^>]*)\/?>/g)]
-    .map(match => attributes(match[1]!))
-    .flatMap(sheet => {
-      const target = relations.get(sheet['r:id'] ?? '') ?? ''
-      if (!target) return []
-      const path = (target.startsWith('/') ? target.slice(1) : `xl/${target}`).replace(/^xl\/xl\//, 'xl/')
-      return [{ name: sheet.name ?? '', path, xml: text(path) }]
-    })
+  return sheetLocations(text('xl/workbook.xml'), text('xl/_rels/workbook.xml.rels'))
+    .map(sheet => ({ ...sheet, xml: text(sheet.path) }))
 }
 
 /** CSV / TSV 必须是 UTF-8（含 BOM），否则给出转码提示。 */
@@ -388,18 +394,13 @@ export function createZip(files: readonly { name: string; data: Buffer }[]): Buf
   return Buffer.concat([...locals, ...centrals, end])
 }
 
-/** 由工作簿与关系文件得到工作表 XML 的路径。 */
+/** 由工作簿与关系文件得到工作表 XML 的路径：按名挑选，缺省回退 `tasks` 或第一张表。 */
 function sheetPath(workbook: string, rels: string, sheet: string): string {
-  const sheets = [...workbook.matchAll(/<sheet\b([^>]*)\/?>/g)].map(match => attributes(match[1]!))
+  const sheets = sheetLocations(workbook, rels)
   const picked = sheet ? sheets.find(item => item.name === sheet)
-    : sheets.find(item => (item.name ?? '').toLowerCase() === TASK_SHEET) ?? sheets[0]
+    : sheets.find(item => item.name.toLowerCase() === TASK_SHEET) ?? sheets[0]
   if (!picked) throw new TaskFileError(`找不到工作表：${sheet}`)
-  const id = picked['r:id'] ?? ''
-  const relation = [...rels.matchAll(/<Relationship\b([^>]*)\/?>/g)].map(match => attributes(match[1]!))
-    .find(item => item.Id === id)?.Target ?? ''
-  if (!relation) throw new TaskFileError(`工作表缺少关系：${sheet}`)
-  const path = relation.startsWith('/') ? relation.slice(1) : `xl/${relation}`
-  return path.replace(/^xl\/xl\//, 'xl/')
+  return picked.path
 }
 
 /** 解析工作表行；单元格按 `r` 属性的列字母定位，空缺列留空，行号取 `r` 属性。 */

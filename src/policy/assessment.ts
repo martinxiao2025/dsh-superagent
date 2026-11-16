@@ -7,7 +7,6 @@ import type { AssessmentOutcome, Strength } from '../core/index.ts'
 import { RuleIdSchema, type Settings } from '../settings/schema.ts'
 
 export const RuleMatchSchema = z.object({ rule_id: RuleIdSchema, reason: z.string().trim().min(1).max(500) }).strict()
-export type RuleMatch = z.infer<typeof RuleMatchSchema>
 export const RuleAssessmentSchema = RuleMatchSchema.extend({ matched: z.boolean() }).strict()
 export type RuleAssessment = z.infer<typeof RuleAssessmentSchema>
 export const AdmissionDirectionSchema = z.object({

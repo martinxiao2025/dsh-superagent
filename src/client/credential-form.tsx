@@ -204,8 +204,13 @@ export function CredentialCardsSection<V extends SavedCredentialView, D extends 
   const [checks, setChecks] = useState<Record<string, SourceCheck>>({})
   const [verifyOpen, setVerifyOpen] = useState(false)
   const [verifyError, setVerifyError] = useState('')
-  const load = async () => setItems(await domain.list(call))
-  useEffect(() => { load().catch(failure => notify(errorText(failure))) }, [])
+  // 列表加载失败给出错误态与重试入口，而不是让「正在读取…」永久停留。
+  const [loadError, setLoadError] = useState('')
+  const load = async () => {
+    setLoadError('')
+    try { setItems(await domain.list(call)) } catch (failure) { setLoadError(errorText(failure)) }
+  }
+  useEffect(() => { void load() }, [])
   /** 收起新增区块并清空草稿与预检结果。 */
   const closeAdd = () => { setAdding(false); setVerifyOpen(false); setDraft(domain.emptyDraft); setChecks({}); setVerifyError('') }
   const create = async () => {
@@ -241,8 +246,11 @@ export function CredentialCardsSection<V extends SavedCredentialView, D extends 
         fields={domain.verifyFields} checks={checks} busy={checking} />
     </div>}
     <div className="dt-cards">
-      {items === null ? <Hint>{t('loading')}</Hint> : items.length === 0 ? <Hint>{words.none}</Hint>
-        : items.map(record => <SavedCredentialCard key={`${record.id}:${record.revision}`} record={record} changed={load} domain={domain} />)}
+      {items === null ? loadError
+        ? <p className="dt-error" role="alert">{loadError} <Button variant="outline" size="sm" onClick={() => { void load() }}>{t('retry')}</Button></p>
+        : <Hint>{t('loading')}</Hint>
+        : items.length === 0 ? <Hint>{words.none}</Hint>
+          : items.map(record => <SavedCredentialCard key={`${record.id}:${record.revision}`} record={record} changed={load} domain={domain} />)}
     </div>
   </>
 }

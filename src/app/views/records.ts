@@ -105,7 +105,6 @@ export function triggerView(view: Snapshot, trigger: Trigger, threadDecisions?: 
       decision: decision ? { id: decision.id, outcome: outcomeOf(decision), reason: decision.reason, ticketId: decision.ticketId }
         : undefined } }
 }
-export type TriggerView = ReturnType<typeof triggerView>
 /** 处于 `person` 阶段的工单为何在等待人员处理的一行摘要（已回答并回到执行器后省略）。 */
 function ticketNote(ticket: Ticket, stage: TicketStage): { text: string; error: boolean } | undefined {
   if (stage.stage !== 'person') return undefined
@@ -129,7 +128,6 @@ export function ticketSummary(ticket: Ticket) {
     directory: attribute(ticket.execution?.directory), project: attribute(ticket.execution?.project), summary: latestReport(ticket)?.summary ?? '', createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt }
 }
-export type TicketSummaryView = ReturnType<typeof ticketSummary>
 function threadUrl(store: Store, thread: Thread): string | undefined {
   return attribute(thread.meta.url) ?? store.read.firstTrigger(thread.key)?.url
 }
@@ -137,7 +135,6 @@ export function threadFacts(store: Store, thread: Thread) {
   const url = threadUrl(store, thread)
   return { key: thread.key, source: thread.ref.source, title: threadTitle(store, thread), ...url ? { url } : {}, facts: (thread.meta.facts ?? {}) as ThreadFacts }
 }
-export type ThreadFactsView = ReturnType<typeof threadFacts>
 export const ticketLine = (view: Snapshot, ticket: Ticket) => ({ ...ticketSummary(ticket),
   threads: view.threadsOf(ticket.id).map(thread => threadFacts(view.store, thread)) })
 export function threadTitle(store: Pick<Store, 'read'>, thread: Thread): string {
@@ -175,7 +172,6 @@ export function threadSummary(view: Snapshot, thread: Thread) {
     pending, pollError: attribute(thread.meta.pollError), url: threadUrl(store, thread),
     facts: (thread.meta.facts ?? {}) as ThreadFacts }
 }
-export type ThreadSummaryView = ReturnType<typeof threadSummary>
 /** 解析渠道链接；当来源链接指向某个触发器时，优先使用该触发器的 URL。 */
 export function channelLink({ store, links }: ViewHost, channel: ChannelRef) {
   const { url, label, triggerId } = links(channel)
@@ -207,4 +203,3 @@ export function decisionView(view: Snapshot, decision: Decision) {
     ...thread ? { threadTitle: threadTitle(store, thread) } : {}, preview: texts.join(' / '),
     ticketTitle: decision.ticketId ? store.tickets.get(decision.ticketId)?.title : undefined }
 }
-export type DecisionView = ReturnType<typeof decisionView>

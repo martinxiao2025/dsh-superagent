@@ -83,6 +83,8 @@ export function storeReads(db: DatabaseSync) {
     const rows = db.prepare(`SELECT ${bucket} AS key, COUNT(DISTINCT u.value ->> '$.ticket') AS tickets, COUNT(*) AS requests,
       SUM(COALESCE(u.value ->> '$.input', 0) + COALESCE(u.value ->> '$.cacheRead', 0) + COALESCE(u.value ->> '$.cacheWrite', 0)) AS input,
       SUM(COALESCE(u.value ->> '$.output', 0)) AS output,
+      MIN(CAST(u.value ->> '$.promptRevision' AS INTEGER)) AS minRev,
+      MAX(CAST(u.value ->> '$.promptRevision' AS INTEGER)) AS maxRev,
       SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'completed' THEN 1 ELSE 0 END) AS completed,
       SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'merged' THEN 1 ELSE 0 END) AS merged,
       SUM(CASE WHEN t.value ->> '$.ended.outcome' = 'closed' THEN 1 ELSE 0 END) AS closed,

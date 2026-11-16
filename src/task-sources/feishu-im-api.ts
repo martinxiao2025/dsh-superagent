@@ -2,7 +2,7 @@
  * 飞书群消息读取接口：按群拉取最近消息并抽取纯文本，供飞书消息任务来源使用。
  * 端点映射、字段解析与分页只写一遍；CLI 与 HTTP 的传输差异由 FeishuTransport 承担。
  */
-import { larkTransport, httpTransport, type FeishuTransport, type LarkCall } from '../feishu-transport.ts'
+import { FEISHU_PAGE as PAGE, itemsOf, larkTransport, httpTransport, type FeishuTransport, type LarkCall } from '../feishu-transport.ts'
 
 /** 一条群消息的最小视图：编号稳定，文本已抽取，发送者与时间用于展示与排障。 */
 export interface ImMessage {
@@ -13,9 +13,9 @@ export interface ImMessage {
   createdAt: string
 }
 
-/** 读取群消息的能力；`limit` 为期望的最大条数，实现负责分页。 */
+/** 读取群消息的能力；`limit` 为期望的最大条数，实现负责分页。单次调用由传输层超时兜底。 */
 export interface FeishuImApi {
-  messages(chatId: string, options: { limit: number; signal?: AbortSignal }): Promise<ImMessage[]>
+  messages(chatId: string, options: { limit: number }): Promise<ImMessage[]>
   /** 机器人已加入的群列表；任务来源的群 ID 选择用它，最多返回 200 个。 */
   chats(): Promise<{ id: string; name: string }[]>
 }
@@ -23,7 +23,6 @@ export interface FeishuImApi {
 /** 凭据读取群消息的能力；未安装或材料不可用时返回 undefined，由驱动给出可读的预检结果。 */
 export type FeishuImReader = (credential: string) => Promise<FeishuImApi | undefined>
 
-const PAGE = 50
 /** 分页上限：与知识库读取保持一致，避免异常分页拖住一轮轮询。 */
 const MAX_PAGES = 200
 
@@ -87,9 +86,6 @@ function messageOf(value: Record<string, unknown>): ImMessage {
     createdAt: String(value.create_time ?? ''),
   }
 }
-
-const itemsOf = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
-  Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
 
 /** 群消息与群列表端点映射的唯一实现；`transport.get` 返回已解包的 `data`。 */
 export function feishuImApi(transport: FeishuTransport): FeishuImApi {

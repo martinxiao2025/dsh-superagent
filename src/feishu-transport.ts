@@ -16,6 +16,18 @@ export type LarkCall = (args: string[]) => Promise<unknown>
 /** 飞书 OpenAPI 的固定前缀；HTTP 直连与凭据探测共用。 */
 export const FEISHU_BASE = 'https://open.feishu.cn/open-apis'
 
+/** 单次飞书 HTTP 调用的上限：CLI 路径由 commandTimeoutMs 兜底，HTTP 路径在此自兜底，避免半开连接冻结回写/轮询通道。 */
+const HTTP_TIMEOUT_MS = 30_000
+/** 每次调用叠加超时；传入的 lifetime 信号仍然先导。传输层与凭据探测共用。 */
+export const timedFeishuSignal = (signal?: AbortSignal): AbortSignal =>
+  AbortSignal.any([...signal ? [signal] : [], AbortSignal.timeout(HTTP_TIMEOUT_MS)])
+
+/** 飞书列表接口的固定页大小；Wiki 与 Im 两套 API 共用。 */
+export const FEISHU_PAGE = 50
+/** 从已解包的 `data` 里取出列表字段；字段缺失时为空数组。 */
+export const itemsOf = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
+  Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
+
 /** 传输面：`path` 以 `/` 开头且不含 `/open-apis` 前缀；返回已解包的 `data` 对象。写操作走 `post`。 */
 export interface FeishuTransport {
   get(path: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>
@@ -32,7 +44,7 @@ export class TokenManager {
   async token(): Promise<string> {
     if (this.cached && this.cached.expiresAt > Date.now()) return this.cached.token
     const response = await fetch(`${FEISHU_BASE}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST', signal: this.signal, headers: { 'content-type': 'application/json' },
+      method: 'POST', signal: timedFeishuSignal(this.signal), headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ app_id: this.appId, app_secret: this.appSecret }),
     })
     const payload = await response.json() as { code?: number; msg?: string; tenant_access_token?: string; expire?: number }
@@ -80,7 +92,7 @@ export function larkTransport(lark: LarkCall): FeishuTransport {
 export function httpTransport(appId: string, appSecret: string, signal?: AbortSignal): FeishuTransport {
   const tenant = new TokenManager(appId, appSecret, signal)
   const call = async (path: string, init: { method: 'GET' | 'POST'; url: URL; body?: string }): Promise<Record<string, unknown>> => {
-    const response = await fetch(init.url, { method: init.method, signal,
+    const response = await fetch(init.url, { method: init.method, signal: timedFeishuSignal(signal),
       headers: { authorization: `Bearer ${await tenant.token()}`, ...(init.method === 'POST' ? { 'content-type': 'application/json' } : {}) },
       ...init.body ? { body: init.body } : {} })
     const payload = await response.json() as { code?: number; msg?: string; message?: string; data?: unknown }

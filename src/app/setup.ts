@@ -227,6 +227,13 @@ export class Setup {
       const { remote: resolved, key } = resolveCodeRepoRemote(kind, config, credential, credentialAuth,
         { github: this.host.machine.githubHost.get(), gitlab: this.host.machine.gitlabHost.get() })
       const remote = () => resolved
+      // 远端可达性判定：`remote` 与 `repository`/`project` 两个分支共用（有分支即可达，空仓库单独提示）。
+      const reachable = async (): Promise<SourceCheck> => {
+        const refs = await probeRemote(probe, remote(), credential ? '' : key, credentialAuth)
+        return refs.branches.length
+          ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
+          : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
+      }
       if (field === 'gitCredential') {
         if (!gitCredential) return checkPassed(field, 'codeRepoCredentialAuto')
         if (!credential || !credentialAuth) return checkFailed(field, 'codeRepoCredentialUnusable', { credential: gitCredential })
@@ -255,18 +262,12 @@ export class Setup {
       }
       if (field === 'remote') {
         if (!String(config.remote ?? '').trim()) return checkPassed(field, 'codeRepoRemoteAuto', { remote: remote() })
-        const refs = await probeRemote(probe, remote(), credential ? '' : key, credentialAuth)
-        return refs.branches.length
-          ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
-          : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
+        return reachable()
       }
       if (field === 'repository' || field === 'project') {
         if (credential || auth === 'ssh') {
           if (credential && !credentialAuth) return checkFailed(field, 'codeRepoCredentialUnusable', { credential: gitCredential })
-          const refs = await probeRemote(probe, remote(), credential ? '' : key, credentialAuth)
-          return refs.branches.length
-            ? checkPassed(field, 'codeRepoAccessible', { remote: remote(), branches: String(refs.branches.length) })
-            : checkFailed(field, 'codeRepoEmpty', { remote: remote() })
+          return reachable()
         }
         if (kind === 'github') {
           const access = await checkGithubRepository(this.host.machine, 'candidate', config, probe)

@@ -128,6 +128,7 @@ it('aggregates the retrospective by revision with the ticket outcomes joined in'
   // 计费输入含 cacheRead（各 100）：500 = (100+100) + (200+100)。
   expect(buckets).toEqual([expect.objectContaining({ key: '3', tickets: 2, requests: 2, input: 500, output: 30, completed: 1 })])
   const models = store.read.retro('model')
-  expect(models[0]).toMatchObject({ key: 'unknown', requests: 2 })
+  // 修订范围随桶返回（SQL 聚合 MIN/MAX promptRevision），而不是永远为空。
+  expect(models[0]).toMatchObject({ key: 'unknown', requests: 2, revisions: [3, 3] })
   expect(store.read.retro('stage')).toEqual([])
 })
