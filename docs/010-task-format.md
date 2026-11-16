@@ -1,6 +1,6 @@
 # 010 任务清单格式规范（标准工作簿与知识库任务表）
 
-> 状态：已实现（0.2.0：`src/task-sources/excel-format.ts`、`excel-template.ts` 与 `GET task-format/template`），配套 [009-authoritative-project-design.md](009-authoritative-project-design.md) 第 6 章；第 7 节记录已定案的取舍。
+> 状态：已实现（0.2.0：`src/task-sources/excel-format.ts`、`excel-template.ts` 与 `GET task-format/template`），配套 [009 项目交付域设计](009-project-design.md) 第 5 章；第 7 节记录已定案的取舍。
 > 适用范围：Excel / CSV / TSV 任务清单，以及飞书知识库中承载任务的文档与多维表格。
 > 结论先行：**由系统定义标准格式，并作为唯一路径**；非标准清单整批拒绝，用模板改造。理由见第 1 节。
 
@@ -140,7 +140,7 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 用本插件管理「本插件自己的开发」时，仓库自带标准清单（`tasks/backlog.csv`），任务来源指向它即可闭环：
 
 1. 把 [examples/project-seed.json](../examples/project-seed.json) 复制到工作目录，替换占位符（仓库、凭据、prepare）。
-2. 用管理 API 创建项目：`POST /orchestrator/api/projects`，请求体即该 JSON（字段缺省值见 [009 第 4 章](009-authoritative-project-design.md)）。
+2. 用管理 API 创建项目：`POST /orchestrator/api/projects`，请求体即该 JSON（字段缺省值见 [009 第 3 章](009-project-design.md)）。
 3. 首个轮询点起，清单里 `status` 为 `pendingStatuses`（种子示例为 `todo`/`blocked`）的行按全局 FIFO 出队建单；工单结束后 `status` 列按 `doneStatus`/`failedStatus` 回写并提交进仓库。
 4. 标准枚举与 `taskPolicy` 的关系：`pendingStatuses`/`doneStatus`/`failedStatus` 只能取 010 §1.3 的五个枚举值；示例种子把完成/失败直接定为 `done`/`cancelled`，回写无需语义映射。
 
@@ -166,9 +166,9 @@ externalId = task_id（文档/表格内唯一）或 record_id（多维表格）
 
 ## 7. 已定案的取舍
 
-1. **标准格式是唯一路径**（自定义映射已移除，不再有高级开关）——009 §13.1 第 10.13 项随此更新。
+1. **标准格式是唯一路径**（自定义映射已移除，不再有高级开关；见 009 第 5 章）。
 2. **`status` 就用这五个值**（`todo` / `in_progress` / `blocked` / `done` / `cancelled`，见 `excel-format.ts` 的 `TASK_STATUSES`）；未引入 `review`，需要验收语义时由 `taskPolicy` 的状态映射表达。
 3. **`depends_on` 仅作元数据列**，不参与调度阻塞（调度器不读取该列）；引入依赖调度前不改变这一语义。
 4. **清单模式不做**：复选框解析（原 `feishu-doc.ts` 的 `checklistTasks`）从未接线为可用路径，已随该文件的删除一并移除；任务只来自标准任务表与多维表格。
 5. **模板生成只在面板**（`GET task-format/template`），不做 CLI 命令。
-6. **严格模式默认关闭**：跨文档 `task_id` 默认按文档隔离（见 009 §13.1 第 10.12 项），严格模式留作可选。
+6. **严格模式默认关闭**：跨文档 `task_id` 默认按文档隔离（见 009 第 5 章），严格模式留作可选。

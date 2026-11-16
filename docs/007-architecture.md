@@ -1,6 +1,6 @@
 # 007 架构
 
-这是实现的开发者指南。它把 [001 领域模型](001-domain.md) 到 [006 部署](006-deployment.md) 中的概念映射到类、接口和文件。先从运行时和 Engine 开始，再把模块表和测试表当作代码索引使用。
+这是实现的开发者指南。它把 [001 领域模型](001-domain.md) 到 [006 部署](006-deployment.md) 中的概念映射到类、接口和文件。先从运行时和 Engine 开始，再把模块表和测试表当作代码索引使用。各命令与谓词的完整行为规则以 001–003 为权威，本文只给一句话目的并指向所在章节。
 
 ## 核心类与胶水层
 
@@ -67,42 +67,42 @@ Engine 暴露一个入口点，并委托给七个内部部件。它拥有每条�
 
 | 角色 | 方法 | 效果 |
 | --- | --- | --- |
-| 来源 | `receive(trigger)` | 存储触发器一次，并答复 `stored`、`duplicate`，或在没有来源接收时答复 `filtered`；把它扇出给订阅其线程的工单，其中人的消息会立即恢复已结束的工单，除非处理已暂停；并在其主线程上排队等待评估，除非它是抵达工单的人的消息，那将留给该工单 |
-| 来源 | `bindThread(ticketId, thread, own)` | 让打开的工单关注来源的某个线程（例如拉取请求的线程），工单打开它时 `own` 为真；已关闭的线程再次绑定后会重新打开。结束工单的是线程的关闭，而不是 `ready` 报告 |
-| 来源 | `threadClosed(thread, outcome, at)` | 线程已关闭：每个关注它的打开工单记录该关闭，并在它关注的线程都处理完毕（`followsDone`）后结束：它打开的线程都不再打开，或当它没有打开任何线程时，它关注的所有线程都已关闭。它按这些关闭中最新者的结果结束为 `merged` 或 `closed`，除非关闭后恢复的工作尚未报告 `ready`，或其执行器接手了某个人工跟进（通过确认或回答）而该跟进是在其最新非 `progress` 报告之后、或在上个回合结束后才被决定的；此后的 `dropped` 报告会按关闭结果结束它 |
+| 来源 | `receive(trigger)` | 存储触发器一次（答复 `stored`、`duplicate` 或 `filtered`），并按 [002 授权](002-authorization.md#触发器的两条路径) 的两条路径分发：扇出给订阅其线程的工单——人的消息会立即恢复已结束的工单；否则在其主线程上排队等待评估 |
+| 来源 | `bindThread(ticketId, thread, own)` | 让打开的工单关注来源的某个线程（工单打开它时 `own` 为真）；结束工单的是线程的关闭，而不是 `ready` 报告（[003 · 跟进与上下文线程](003-execution.md#跟进与上下文线程)） |
+| 来源 | `threadClosed(thread, outcome, at)` | 记录线程关闭并结算关注它的工单：全部处理完毕（`followsDone`）后按 [003 · 工单如何结束](003-execution.md#工单如何结束) 的判定结束为 `merged` 或 `closed`（含恢复中工作与人工跟进的例外） |
 | 主会话 | `candidate(triggerId)` | 持有某触发器的评估，按其评估器所见 |
 | 主会话 | `candidateDelivered(evalId)` | 评估的候选已抵达主会话：其截止时间从此刻计算 |
-| 主会话 | `decide(triggerId, outcome)` | 记录评估决定，或为明确请求记录直接决定。接受会原子地创建工单、授权、派工、订阅和确认。被从卡片忽略的推断候选会在所给理由之前记录 `ignoredFromCard`。当 `followupOwners` 仍拥有人工跟进时，只允许停止 |
-| 主会话 | `attach(ticketId, triggerId, note?)` | 把触发器路由到它所指向的工单，其执行器随后把它作为跟进决定，并结束持有它的评估，该评估的其他触发器等待新的评估；已结束的工单会在其授权下立即恢复，除非处理已暂停。执行器仍在决定的跟进会被拒绝，路由回交回它的工单也会被拒绝 |
+| 主会话 | `decide(triggerId, outcome)` | 记录评估决定（或为明确请求记录直接决定）；接受会原子地创建工单、授权、派工、订阅和确认。决定与推断候选的规则见 [002 · 评估](002-authorization.md#评估决定是否开始工作) 与 [002 · 接单模式与规则](002-authorization.md#接单模式与规则) |
+| 主会话 | `attach(ticketId, triggerId, note?)` | 把触发器路由到它所指向的工单并结束持有它的评估；已结束的工单在其授权下立即恢复（[002 · 订阅](002-authorization.md#订阅继续已有的工作)） |
 | 主会话 | `requestStatus(ticketId)` | 向等待中的执行器会话请求状态，并答复是否已请求 |
 | 主会话 | `note(ticketId, text)` | 把其他工作的事实作为文本输入交给工单的执行器，这不授予任何权限 |
 | 主会话、执行器 | `reply(request)` | 按用途为渠道排队消息：`acknowledgement`、`answer`、`result` 或 `attention` |
-| 人 | `stopTicket(ticketId, reason?)` | 人的停止，会撤回授权 |
-| 人 | `retryTicket(ticketId)` | 结束在 `failed` 或 `blocked` 报告之后等待人的工单的停滞派工，或输入投递失败的派工（`canRetry`），并启动新的派工 |
+| 人 | `stopTicket(ticketId, reason?)` | 人的停止，会撤回授权（[002 · 恢复与停止](002-authorization.md#恢复与停止)） |
+| 人 | `retryTicket(ticketId)` | 结束等待人的停滞派工或投递失败的派工，并启动新的派工；何时可重试（`canRetry`）见 [003 · 重试](003-execution.md#重试) |
 | 人 | `reevaluate(triggerId)` | 把已存储的触发器排队以进行新的评估 |
 | 人 | `unsubscribe(thread)` | 取消线程上的所有订阅，曾关注它的工单不再关注它；各自继续决定它在那里收到的跟进 |
 | 人 | `dismiss(decisionId)` | 忽略 `unavailable` 决定所显示的问题，该决定会记录此操作 |
 | 执行器 | `assignmentStarted(ticketId, assignmentId)` | 派工开始运行；其等待中的输入发出 |
 | 执行器 | `inputsDelivered(ticketId, assignmentId, inputIds)` | 输入抵达派工的执行器会话，每条等待某个步骤纳入 |
-| 执行器 | `inputsRead(ticketId, inputIds)` | 执行器会话把携带这些输入的消息纳入历史（`user/message` 会话事件），模型由此获得它们；认领后在被取消或失败前未完成的步骤不算。每条输入在随后出现报告或回合结束时算作已读，重启后也是如此，工单结束也不会释放它；在读取记录之前投递的输入，在其投递后出现报告或回合结束时算作已读 |
-| 执行器 | `turnEnded(ticketId, assignmentId)` | 执行器会话的一个回合结束，报告之后也同样，前提是它没有后台运行的工作，或正在移交给 |
+| 执行器 | `inputsRead(ticketId, inputIds)` | 执行器会话把携带这些输入的消息纳入历史（`user/message` 会话事件），模型由此获得它们；每条输入在随后的报告或回合结束时记账为已读，重启后亦然 |
+| 执行器 | `turnEnded(ticketId, assignmentId)` | 执行器会话的一个回合结束，报告之后也同样，前提是它没有后台运行的工作（[003 · 后台工作与执行器槽位](003-execution.md#后台工作与执行器槽位)） |
 | 执行器 | `deliveryFailed(ticketId, assignmentId, error)` | 投递输入失败；工单会显示它，直到投递成功、新派工开始或工单结束 |
-| 执行器 | `report(ticketId, report)` | 记录报告及其向人提出的问题；`dropped` 结束工单，`ready` 会完成不关注任何线程的工单，并按线程结束的方式结束已处理完其所关注线程的工单 |
-| 执行器 | `markUnrelated(ticketId, thread, reason)` | 仅取消该工单对某个它认为无关的被关联线程的订阅，并带理由交回该工单在那里决定的跟进 |
-| 执行器 | `followForContext(ticketId, thread)` | 让打开的工单订阅相关线程以获取上下文：其消息抵达工单，但不授予跟进强度，也不会恢复它 |
-| 执行器 | `handback(ticketId, triggerId, reason)` | 记录工单交回抵达它的触发器，理由随候选携带；一旦没有其他工单决定它，就为它排队新的评估（如果由本工单决定）；答复是否入队。工单对每个触发器只交回一次，并保留其订阅 |
-| 执行器 | `assignmentInterrupted(ticketId, assignmentId)` | 宿主停止时派工正在运行：工作中被中断的，或在最新报告之后又收到输入的，会带恢复备注重新开始，并带上投递给它但执行器会话未纳入的输入，如同重试；自那以后已报告过的派工保留其会话。DshExecutor 在启动时报告每个此类派工（`resume`），最旧的工单优先，并重新排队等待中的启动 |
-| 轮次 | `evaluateDue()` | 除非处理已暂停：启动那些有排队触发器等待的线程的评估，每个线程一次，把期间排队的触发器作为一批；把超过截止时间的评估的触发器再次排队，连续两次，第三次记录为 `unavailable`；并恢复暂停期间人的消息所抵达的已结束工单，前提是其授权仍然成立。候选尚未抵达主会话的评估不会过期。处理暂停期间没有评估过期，恢复后每个截止时间按暂停时长顺延 |
-| 设置 | `policyChanged(from, to, effects)` | 告知每个存活工单变更如何影响它（`src/policy.ts` 中的 `policyEffects`：它接单时所依据的规则发生了变化或不再适用、其请求者可能不再能发起工作，或不再接受主动工作），并按新版本重启进行中的评估 |
+| 执行器 | `report(ticketId, report)` | 记录报告及其向人提出的问题；`dropped` 结束工单，`ready` 按 [003 · 工单如何结束](003-execution.md#工单如何结束) 完成或结束工单 |
+| 执行器 | `markUnrelated(ticketId, thread, reason)` | 取消该工单对它认为无关的被关联线程的订阅，并带理由交回其跟进（[002 · 交回与释放跟进](002-authorization.md#交回与释放跟进)） |
+| 执行器 | `followForContext(ticketId, thread)` | 让打开的工单订阅相关线程以获取上下文：不授予跟进强度，也不会恢复它（[002 · 仅作上下文的订阅](002-authorization.md#仅作上下文的订阅)） |
+| 执行器 | `handback(ticketId, triggerId, reason)` | 记录交回并按 [002 · 交回与释放跟进](002-authorization.md#交回与释放跟进) 的规则为触发器排队新的评估；工单对每个触发器只交回一次，并保留其订阅 |
+| 执行器 | `assignmentInterrupted(ticketId, assignmentId)` | 宿主停止时派工正在运行：按 [003 · 重启](003-execution.md#重启) 的规则恢复——带恢复备注重开、未纳入的输入随行如同重试、已报告的保留其会话；DshExecutor 启动时逐个报告（`resume`），最旧的工单优先 |
+| 轮次 | `evaluateDue()` | 除非处理已暂停：为有排队触发器的线程启动评估（每线程一批）；评估的截止、过期与 `unavailable` 规则见 [002 · 评估未完成时](002-authorization.md#评估未完成时)，暂停期间的顺延与人的消息恢复见 [002 · 恢复与停止](002-authorization.md#恢复与停止) |
+| 设置 | `policyChanged(from, to, effects)` | 告知每个存活工单变更如何影响它（`src/policy.ts` 中的 `policyEffects`），并按新版本重启进行中的评估（[002 · 策略版本](002-authorization.md#策略版本)） |
 
 Engine 把批处理、授权、扇出、恢复和待人工决定生命周期规则保持为私有。几个共享谓词让这些规则保持一致：
 
-- `waitsForPerson`（`src/core/model.ts`）：最新派工报告了 `blocked` 或 `failed`，且此后没有人的消息到达。在此期间，自动输入和失败的启动保持挂起。
-- `followupOwners`：仍对其自己线程上收到的人工跟进负责的工单。工单可以存活，或已结束但没有被人停止、正等待恢复。交回该消息会结束这种拥有关系。
+- `waitsForPerson`（`src/core/model.ts`）：最新派工报告了 `blocked` 或 `failed`，且此后没有人的消息到达——等待期间的挂起语义见 [003 · 执行器受阻或失败](003-execution.md#执行器受阻或失败)。
+- `followupOwners`：仍对其自己线程上收到的人工跟进负责的工单（拥有关系的建立与释放见 [002 · 交回与释放跟进](002-authorization.md#交回与释放跟进)）。
 - `settled`：某个决定解决了请求；停止、不可用、已路由和拒绝停止的决定不算。
-- `ticketStage`（`src/core/stage.ts`）：实现 [003 执行](003-execution.md) 中的阶段表。
+- `ticketStage`（`src/core/stage.ts`）：实现 [003 执行](003-execution.md#工单阶段) 中的阶段表。
 
-工单结束时，未读的跟进返回评估，除非另一个工单仍拥有它们，或另一种去向已处理它们。已确认、已回答和已交回的消息被排除。对于没有确认去向的旧记录，出站回执提供该事实。最终报告也覆盖派工开始时等待的消息，包括恢复它的消息。停止工单的消息不会被自动重新评估。
+工单结束时未读跟进的去向、最终报告对等待消息的覆盖、以及停止工单的消息是否重新评估等结束规则，见 [003 · 工单如何结束](003-execution.md#工单如何结束)。
 
 变更之后，Engine 发出 `src/core/ports.ts` 中 `DomainEvents` 的一个事件：
 

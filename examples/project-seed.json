@@ -1,5 +1,5 @@
 {
-  "$comment": "Excel 任务驱动项目的种子配置示例（POST /orchestrator/api/projects 的请求体）。复制到工作目录，替换占位符后用管理 API 创建项目；字段说明见 docs/009-authoritative-project-design.md 第 4 章与 docs/010-task-format.md。",
+  "$comment": "Excel 任务驱动项目的种子配置示例（POST /orchestrator/api/projects 的请求体）。复制到工作目录，替换占位符后用管理 API 创建项目；字段说明见 docs/009-project-design.md 第 3 章与 docs/010-task-format.md。",
   "name": "<项目名，例如 widgets>",
   "enabled": true,
   "codeRepo": {

@@ -1,10 +1,6 @@
 # dsh-superagent
 
-> **仅供研究参考的原型，不是 DeepSeek 官方产品。** 这份代码源自我们团队的日常开发工作，其中有大量工程由编码智能体完成。请把它当作研究代码，而不是可投产的软件。它可能仍有缺陷，编码风格和工程实践也可能不一致。在你自己的环境中使用之前，请先审阅并调整。
->
-> 我们为公开发布做了适配，因此它与我们的内部版本、以及《Exploring Super-agent Design: Towards a More Autonomous Agent System》中描述的实现并不完全相同。文中讨论的某些设计属于未来发展方向，并未在本原型中实现。
-
-dsh-superagent 是面向 GitHub 仓库的主动式编码智能体，以 [DeepSeek Harness](https://www.deepseek.com/en/harness/) 的插件包形式提供。消息来源是记录（当前为飞书机器人，每条记录独立配置、轮询与健康状态）；工作来自**项目**——项目绑定一个 Git 仓库与一种任务来源（仓库内的 Excel/CSV/TSV 清单、飞书知识库或飞书群消息），智能体按调度领取任务、在各自的会话与 per-ticket worktree 中处理，并把终态回写任务清单。当获得许可的人在对话中向智能体提出工作时，它会开一个工单并在原对话中答复，例如给出一个拉取请求。Web 面板展示需要人处理的事项。
+dsh-superagent 是一个主动式编码智能体，以 [DeepSeek Harness](https://www.deepseek.com/en/harness/) 插件包的形式提供。消息来源是**记录**（当前为飞书机器人：每条记录独立配置、轮询并上报健康状态）；持续工作来自**项目**——每个项目绑定一个 Git 仓库与一种任务来源（仓库内的 Excel/CSV/TSV 清单、飞书知识库或飞书群消息，三选一）。调度器按清单领取任务，为每个工单开出独立的 DSH 会话与 per-ticket git worktree，执行器会话在真实检出里工作，工单终态回写任务清单。当获得许可的人在对话中向智能体提出工作时，它会开一个工单并在原对话中答复。Web 面板展示需要人处理的事项与系统健康。
 
 它也是一种与智能体协作的方式：**尽可能少占用人的注意力，尽可能多地提供价值。** 能为整个团队行动的智能体，也可能浪费整个团队的注意力，因此它只在被请求时、或在团队写下的规则允许时行动，并且只在有人必须行动或能用到结果时才发言。[docs/000-philosophy.md](docs/000-philosophy.md) 解释了这一原则以及它对操作者的要求。
 
@@ -26,13 +22,13 @@ dsh-superagent 是面向 GitHub 仓库的主动式编码智能体，以 [DeepSee
 - [003 执行](docs/003-execution.md)
 - [004 提示词](docs/004-prompts.md)
 - [005 面板](docs/005-panel.md)
-- [006 部署](docs/006-deployment.md)：手动安装、配置、升级与故障排查
-- [007 架构](docs/007-architecture.md)
+- [006 部署](docs/006-deployment.md)：手动安装、配置、管理 API、升级与故障排查
+- [007 架构](docs/007-architecture.md)：开发者指南，模块表与测试表是代码索引
 - [008 操作手册](docs/008-cookbook.md)：新增一个消息来源
-- [009 项目交付域设计](docs/009-authoritative-project-design.md)：项目 / 仓库 / 任务来源 / 凭据 / 调度的权威设计（含实施状态）
-- [010 任务清单格式规范](docs/010-task-format.md)：标准工作簿与知识库任务表（已实现）
-- [011 架构与方案评审](docs/011-architecture-review.md)：评审结论与权威剩余任务清单
-- 方案台账：[012 优化重构方案](docs/012-优化重构方案.md)（M0–M6 已收官）、[013 精简与连续性重构方案](docs/013-精简与连续性重构方案.md)（当前批次）
+- [009 项目交付域设计](docs/009-project-design.md)：项目 / 代码仓库 / 任务来源 / 凭据 / 调度的设计权威
+- [010 任务清单格式规范](docs/010-task-format.md)：标准工作簿与知识库任务表
+
+编码智能体另见 [AGENTS.md](AGENTS.md)：仓库的工作约定、常用命令与测试守卫的硬规则。已完成的工作记录在 [CHANGELOG.md](CHANGELOG.md)；待办任务只记录在 [tasks/backlog.csv](tasks/backlog.csv)。
 
 ## 开发
 

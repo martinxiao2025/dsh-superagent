@@ -257,7 +257,7 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
 
 API 保存具有面板的权限。与通过主会话工具进行的保存不同，它们可以更改执行环境和安装账号字段。
 
-智能体可以依赖以下路由和字段。`src/app/api.ts` 中的其他路由服务于面板，并随面板变化。
+智能体可以依赖以下路由和字段。`src/app/api.ts` 中的其他路由服务于面板，并随面板变化。项目域的其余路由（单项目读写、`projects/<id>/tasks` 与 `run`、凭据引用列表与知识库浏览）见 009 第 6 章。
 
 | 请求 | 答复 |
 | --- | --- |
@@ -284,7 +284,7 @@ API 保存具有面板的权限。与通过主会话工具进行的保存不同�
 | `POST policy-sync/<source id>` | 立即同步该来源的允许名单：`policy`，即保存的来源部分 |
 | `GET prompts`、`PUT prompts`，带 `{"config", "baseRevision"}` | 读取提示词配置：`current`（含 `revision` 和 `config`）、`defaults`、`sections`（团队段落，按会话读取顺序）、`skillName`（团队技能名称的模式）、`builtin`（团队技能不能使用的名称）和 `skillPrefix`（会话加载技能名称时使用的前缀）。或保存它：新的 `revision` |
 | `POST tickets/<id>/retry`、`POST tickets/<id>/stop` | 重试或停止工单，与面板操作相同 |
-| `POST admin/reset`，带 `{"confirm": "RESET"}` | 破坏性重置：先备份 `stateDir` 再清空（见 009 §9.2）；请求体必须显式带确认词 |
+| `POST admin/reset`，带 `{"confirm": "RESET"}` | 破坏性重置：先备份 `stateDir` 再清空（见 009 §8.2）；请求体必须显式带确认词 |
 | `POST admin/backup`，带 `{"target": "<绝对路径>.sqlite"}` | 日常备份：在运行中的数据库上执行 `VACUUM INTO`，把一致性快照写入目标文件；返回 `{ "snapshot": … }` |
 
 健康条目按职责分组：
