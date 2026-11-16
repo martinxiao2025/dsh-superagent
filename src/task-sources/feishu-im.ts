@@ -92,7 +92,7 @@ export const feishuImTaskSource: TaskSourceDriver<FeishuImTaskSourceConfig> = {
     if (!api) throw new Error(config.feishuCredential
       ? `飞书凭据 ${config.feishuCredential} 不可用，无法读取群消息`
       : '任务来源没有绑定飞书凭据，无法读取群消息')
-    const messages = await api.messages(config.chatId, { limit: config.limit, signal: ctx.signal })
+    const messages = await api.messages(config.chatId, { limit: config.limit })
     ctx.signal.throwIfAborted()
     return messages.flatMap(message => {
       // 机器人消息默认不作为任务（评审 S4）：飞书 sender_type 取值 user/app，

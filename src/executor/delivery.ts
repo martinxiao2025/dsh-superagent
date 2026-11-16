@@ -39,9 +39,15 @@ export async function deliverQueued(w: WorkerContext, ticketId: string): Promise
       }
       const input = ticket.inputs.find(item => item.id === inputId)
       try {
-        // 若工作单元会话被外部删除，则重新创建它。
+        // 若工作单元会话被外部删除，则重新创建它，并注入一次续作说明：新会话只会直接收到新输入，
+        // 没有原始任务分派——指引工作单元自读 assignment 与 inputs 资源找回上下文（requestId 按会话幂等）。
         if (!w.host.context.agents.get(sessionId as SessionId)) {
           await w.host.sessions.ensure(sessionId, ticket.execution?.directory ?? '', ticket.title, 'worker')
+          const rebuilt = 'This Executor Session was recreated after the previous one was removed; only new inputs reach it directly. '
+            + `Read ticket/${ticketId}/assignment for the original mandate and ticket/${ticketId}/inputs for earlier inputs before continuing.`
+          await w.host.sessions.prompt(sessionId, `session-rebuilt:${ticketId}`, rebuilt,
+            { inject: 'The Executor Session was recreated; its earlier context is in its ticket resources' })
+            .catch(() => { /* 注入失败不阻塞输入投递。 */ })
         }
         if (input) await deliverInput(w, ticket, assignment, input)
       } catch (error) {

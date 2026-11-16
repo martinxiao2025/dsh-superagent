@@ -58,7 +58,11 @@ export class UsageMeter {
     const usage = event.data.usage
     if (!usage) return
     if (this.host.lifetime.aborted) return
-    const route = this.requests.get(`${sessionId}:${event.data.turn}:${event.data.step}`) ?? { provider: 'unknown', model: 'unknown' }
+    // 消费即删：主会话永不 dispose，保留条目会让 Map 随每个 turn:step 无界增长；
+    // 同键的重试会再次经过 `agent/request` 并重新写入。
+    const routeKey = `${sessionId}:${event.data.turn}:${event.data.step}`
+    const route = this.requests.get(routeKey) ?? { provider: 'unknown', model: 'unknown' }
+    this.requests.delete(routeKey)
     const at = new Date().toISOString()
     const attributed = this.attribute(sessionId)
     const ticket = attributed.ticket ? this.host.store.tickets.get(attributed.ticket) : undefined
@@ -104,7 +108,11 @@ export class UsageMeter {
   /** 落库后的预算判定：软档提醒与子代理封锁、硬档结束工单。 */
   private enforce(ticketId: string): void {
     const ticket = this.host.store.tickets.get(ticketId)
-    if (!ticket || ticket.ended) return
+    if (!ticket || ticket.ended) {
+      // 已结束的工单不再需要软档记忆；顺带清理，避免集合随历史工单无界增长。
+      this.softNotified.delete(ticketId)
+      return
+    }
     const { ratio, sum } = this.ratioOf(ticketId)
     if (ratio < SOFT) return
     if (ratio >= 1) {

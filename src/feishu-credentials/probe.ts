@@ -1,6 +1,6 @@
 /** 飞书凭据的默认探测：应用模式取 tenant token 并读知识库节点，CLI 模式检查可执行文件。 */
 import type { Commands } from '../infra/commands.ts'
-import { FEISHU_BASE, TokenManager } from '../feishu-transport.ts'
+import { FEISHU_BASE, timedFeishuSignal, TokenManager } from '../feishu-transport.ts'
 import type { FeishuProbe } from './service.ts'
 
 export function feishuProbe(commands: Pick<Commands, 'run'>): FeishuProbe {
@@ -14,7 +14,7 @@ export function feishuProbe(commands: Pick<Commands, 'run'>): FeishuProbe {
     const token = await new TokenManager(appId ?? '', appSecret ?? '').token()
     if (!spaceId) return { nodes: 0 }
     const response = await fetch(`${FEISHU_BASE}/wiki/v2/spaces/${encodeURIComponent(spaceId)}/nodes?page_size=1`,
-      { headers: { authorization: `Bearer ${token}` } })
+      { headers: { authorization: `Bearer ${token}` }, signal: timedFeishuSignal() })
     const body = await response.json() as { code?: number; msg?: string; data?: { items?: unknown[] } }
     if (!response.ok || (body.code ?? 0) !== 0) throw new Error(`Feishu API ${body.code ?? response.status}: ${body.msg ?? response.statusText}`)
     return { nodes: body.data?.items?.length ?? 0 }

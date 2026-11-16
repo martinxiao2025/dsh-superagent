@@ -121,24 +121,29 @@ function feishuPath(read: Read): { record?: string; rest: string } {
 const THREAD_DECISIONS = 5
 const triggerLine = (trigger: Trigger) => ({ trigger_id: trigger.id, actor: trigger.actor.id, human: trigger.human, at: trigger.at,
   preview: preview(trigger.text), chars: trigger.text.length, read: `trigger/${trigger.id}` })
-async function transcript(host: ResourceHost, ticketId: string) {
-  // 0.2.2 起 `inspect` 已被 `events` 分页取代：一页足够覆盖执行器会话的转写读取。
+/** transcript 读取的消息窗口；超过该窗口的更早事件以 `older_events` 标记暴露，而不是静默截断。 */
+const TRANSCRIPT_MESSAGES = 200
+async function transcript(host: ResourceHost, ticketId: string, signal?: AbortSignal): Promise<{ records: Parameters<typeof transcriptEntry>[0][];
+  older_events?: true }> {
+  // 0.2.2 起 `inspect` 已被 `events` 分页取代：窗口取最近 TRANSCRIPT_MESSAGES 条消息，消费 `hasMore`
+  // 标记更早事件的存在——长工单不会在模型无感知的情况下丢失开头（原始任务分派经 assignment 资源仍可读）。
   // 原始事件按 `${worker 会话}:transcript` 存入 TextCache；runtime 在该会话到达新事件时删除该键，
   // 因此事件未变期间的重复读取（排查、worker 自读）不再重拉会话事件。
   // 线上的 `SessionWireEvent.type` 是宽泛 string；转写读取只认三种消息事件，逐条收窄后再交给 transcriptEntry。
   const sessionId = workerSessionId(ticketId), cacheKey = `transcript:${sessionId}`
   let body = host.pages.get(cacheKey)
   if (body === undefined) {
-    const page = await host.context.sessionController.events({ address: { kind: 'session', sessionId: sessionId as SessionId } },
-      new AbortController().signal)
-    body = JSON.stringify(page.records.flatMap(record => {
+    const page = await host.context.sessionController.events({ address: { kind: 'session', sessionId: sessionId as SessionId },
+      maxMessages: TRANSCRIPT_MESSAGES }, signal ?? new AbortController().signal)
+    const records = page.records.flatMap(record => {
       const event = record.event
       return event.type === 'user/message' || event.type === 'tool/result' || event.type === 'assistant/message'
         ? [event as unknown as Parameters<typeof transcriptEntry>[0]] : []
-    }))
+    })
+    body = JSON.stringify({ records, ...page.hasMore ? { older_events: true } : {} })
     host.pages.set(cacheKey, body)
   }
-  return JSON.parse(body) as Parameters<typeof transcriptEntry>[0][]
+  return JSON.parse(body)
 }
 
 const ROUTES: readonly Route[] = [
@@ -162,7 +167,8 @@ const ROUTES: readonly Route[] = [
     const ticket = ticketId ? host.store.tickets.get(ticketId) : undefined
     // 执行器会话只能读取其自身工单订阅或关注的线程。
     if (!thread || (ticketId && !(thread.subscriptions.includes(ticketId) || ticket?.follows?.some(follow => follow.thread === rest)))) {
-      throw new Error('Unknown or inaccessible thread')
+      throw new Error(`Unknown or inaccessible thread ${rest}; thread keys look like feishu:<chat id>:<root message id>, `
+        + 'and a ticket\'s thread keys are listed in the ticket/<id> resource')
     }
     const { store } = host
     const { read: _read, tickets: ids, ...card } = threadCard(thread, threadTitle(store, thread))
@@ -235,7 +241,9 @@ const ROUTES: readonly Route[] = [
     }
     const whole = main(read)
     return { ...whole.store.usage.sum(), byModel: whole.store.usage.byModel(),
-      ...list(read, (offset, count) => whole.store.usage.recent(offset + count)) }
+      // `recent(limit)` 返回最新 limit 条（从 0 起）；翻页要的是从 offset 起的一页，须再按 offset 切片，
+      // 否则每一页都重复返回最新一页（next_offset 却在前进）。
+      ...list(read, (offset, count) => whole.store.usage.recent(offset + count).slice(offset)) }
   }],
   ['feishu/', async read => {
     const { record, rest } = feishuPath(read)
@@ -311,7 +319,7 @@ const ROUTES: readonly Route[] = [
       if (message === undefined) throw new Error('Unknown ticket input')
       body = message
     } else if (section === 'message' && part && /^\d+$/.test(part)) {
-      const event = (await transcript(host, id))[Number(part)]
+      const event = (await transcript(host, id, signal)).records[Number(part)]
       const entry = event && transcriptEntry(event)
       if (!entry) throw new Error('Unknown transcript entry')
       body = JSON.stringify(entry)
@@ -323,12 +331,19 @@ const ROUTES: readonly Route[] = [
     else if (section === 'assignment') body = ticket.execution?.assignment ?? ''
     else if (section === 'result') body = latestReport(ticket)?.summary ?? ''
     else if (section === 'transcript') {
-      body = (await transcript(host, id)).flatMap((event, index) => {
-        const entry = transcriptEntry(event)
-        const said = entry?.message.content.map(block => block.type === 'text' ? block.text : `[${block.type}]`).join(' ') ?? ''
-        return entry ? [{ type: entry.type, preview: preview(said).slice(0, 80), chars: JSON.stringify(entry).length,
-          read: `ticket/${id}/message/${index}` }] : []
-      }).reverse().map(event => JSON.stringify(event)).join('\n')
+      const page = await transcript(host, id, signal)
+      // 行序新到旧；`message/<n>` 的编号按底层窗口（旧到新）稳定，read 指针直接可用。
+      // 窗口外还有更早事件时首行显式标记，并指向原始任务分派与输入资源。
+      body = [
+        ...page.older_events ? [JSON.stringify({ older_events: true,
+          note: `events before this ${TRANSCRIPT_MESSAGES}-message window exist; ticket/${id}/assignment and ticket/${id}/inputs carry the original mandate` })] : [],
+        ...page.records.flatMap((event, index) => {
+          const entry = transcriptEntry(event)
+          const said = entry?.message.content.map(block => block.type === 'text' ? block.text : `[${block.type}]`).join(' ') ?? ''
+          return entry ? [{ type: entry.type, preview: preview(said).slice(0, 80), chars: JSON.stringify(entry).length,
+            read: `ticket/${id}/message/${index}` }] : []
+        }).reverse().map(event => JSON.stringify(event)),
+      ].join('\n')
     } else throw new Error('Unknown context resource')
     return text(read, body)
   }],

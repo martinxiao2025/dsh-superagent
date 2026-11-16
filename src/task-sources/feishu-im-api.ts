@@ -13,9 +13,9 @@ export interface ImMessage {
   createdAt: string
 }
 
-/** 读取群消息的能力；`limit` 为期望的最大条数，实现负责分页。 */
+/** 读取群消息的能力；`limit` 为期望的最大条数，实现负责分页。单次调用由传输层超时兜底。 */
 export interface FeishuImApi {
-  messages(chatId: string, options: { limit: number; signal?: AbortSignal }): Promise<ImMessage[]>
+  messages(chatId: string, options: { limit: number }): Promise<ImMessage[]>
   /** 机器人已加入的群列表；任务来源的群 ID 选择用它，最多返回 200 个。 */
   chats(): Promise<{ id: string; name: string }[]>
 }
