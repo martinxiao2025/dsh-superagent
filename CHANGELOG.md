@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### 连续性缺陷修复与遗留收敛批次（docs/014，2026-11-16）
+
+按 [docs/014-连续性缺陷修复与遗留收敛方案.md](docs/014-连续性缺陷修复与遗留收敛方案.md) 的 R0–R3 实施
+（四路并行全库审计 + 宿主 API 源码核对为据，全部结论经全仓引用计数复核）；全部 1408 例测试通过，
+`pnpm check` 全绿。
+
+- **LLM 连续性缺陷修复（R1）**：工单转写读取窗口扩至最近 200 条消息并消费宿主 `hasMore`——
+  更早事件以 `older_events` 首行标记并指向 assignment/inputs 资源，长工单不再静默截断；
+  主会话 `usage` 资源翻页修复（此前 offset>0 永远返回最新一页）；飞书 HTTP 传输与凭据探测
+  补 30s 单调用超时（半开连接不再冻结 limit=1 的回写/轮询串行通道）；retro 聚合 `revisions`
+  落地（by=model/stage 桶返回真实修订范围）；`work.md` 对齐 `orchestrator_report` 实际 schema
+  （删除不存在的 `pr_number` 指引）；worker 会话被外部删除重建时注入一次续作说明
+  （指向原始任务分派资源）；UsageMeter 两处无界内存增长收敛。
+- **审查处置迁技能与 token（R2）**：审查线程回复/解决方式、自动审查器三轮上限、评审者记功
+  提交重写流程迁为技能 `dsh-superagent-review`（仅注册工作单元，`skill/review` 可团队覆盖），
+  team 段两角色每请求各省约 3.8k 字符；评估超时重排后的候选卡带 `requeued` 标记；
+  `orchestrator_read` 工具描述最长的两条 holds 收紧。
+- **死代码与 013 N2 遗漏还债（R0）**：零引用类型导出 ×10、死函数（`pollFailure`/`pause` 等）、
+  死 locale 键 ×7、死图标；补做 013 N2 设计表中四项无收口记录的合并（sheetPath 单源、
+  `itemsOf`/`PAGE` 收敛、飞书凭据解析单源、sync/push 前奏 `repoGit`）；策略保存三件套与
+  预检探测尾巴收敛；`ASSIGNMENT_CHARS` 归位单源。
+- **配置面与客户端收敛（R3）**：删除 `models.utility` 半实现槽位（面板可配置但无任何路由
+  消费点）；模型目录整页单次拉取（10 请求→1）；凭据列表加载失败给出错误态与重试；
+  retro 表类型改服务端推导；队列操作后主动刷新；表单数字转换 `numberField` 单源。
+
 ### 精简与连续性批次（docs/013，2026-11-15/16）
 
 按 [docs/013-精简与连续性重构方案.md](docs/013-精简与连续性重构方案.md) 的 N0–N2 实施（四路并行全库审计为据，
