@@ -60,4 +60,3 @@ export function settingsView(store: Store, sources: SourceRegistry, health: Heal
   }
 }
 export type SettingsView = ReturnType<typeof settingsView>
-export type SourceSettingsView = SettingsView['sources'][number]

@@ -182,7 +182,7 @@ export class Settings {
    * @throws 当 `block` 未知、来源未安装、`value` 无效（例如 `executor` 块携带只有 `pause` 才设置的 `paused`）、非面板 `origin` 修改仅面板字段，或角色模型/账户校验失败时抛出 UserError | z.ZodError。
    */
   async save(block: SettingsBlock, value: unknown, revision: number, origin: SettingsOrigin) {
-    const { store, sources, engine, sessions } = this.host
+    const { store, sources, sessions } = this.host
     const stale = () => revision !== store.blockRevision(block)
     if (stale()) throw new SettingsConflict('Settings changed. Reload before saving.')
     const [kind, id] = block.includes(':') ? block.split(/:(.*)/s) as [string, string] : [block, block]
@@ -218,17 +218,7 @@ export class Settings {
         stopped: 0 }
     }
     const restarting = setupChanged(old, settings) || !this.host.setup.configured()
-    const before = policyVersion(old), after = policyVersion(settings)
-    const scope = (version: SettingsValue) => ({
-      scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
-    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, SettingsSchema.parse(settings), scope,
-      id => store.projects.get(id))
-    const notified = [...effects.keys()]
-    store.atomic(() => {
-      store.saveSettings(SettingsSchema.parse(settings), { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
-      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(old, settings)))
-      if (before !== after) engine.policyChanged(before, after, effects)
-    })
+    const policyChanged = this.persistWithPolicy(block, old, SettingsSchema.parse(settings), origin)
     // 当 `blockedCommands` 变化时立即重写执行器命令 shim。
     const blocked = settings.executor.blockedCommands
     const changed = blocked.join(' ') !== old.executor.blockedCommands.join(' ')
@@ -239,13 +229,32 @@ export class Settings {
     const delivery = restarting ? 'pending' : await sessions.delivery(`settings:${block}`)
     if (restarting) this.host.setup.restart()
     else this.host.requestPass()
-    return { saved: true, revision: store.blockRevision(block), policy_changed: before !== after, restarting, context_delivery: delivery,
+    return { saved: true, revision: store.blockRevision(block), policy_changed: policyChanged, restarting, context_delivery: delivery,
       stopped }
   }
   /** 主触发来源属于记录 `id` 的未结束工单；用于删除保护与停用后的收尾。 */
   openTickets(id: string): Ticket[] {
     const { store } = this.host
     return store.tickets.open().filter(ticket => store.triggers.get(ticket.origin.triggerId)?.source === id)
+  }
+  /**
+   * 保存已解析的设置并按需传播策略变更：策略版本前后对照、受影响工单的效果计算、
+   * 单一事务与主会话通知。`save` 与 `removeSource` 共用；`settings` 必须已经 `SettingsSchema.parse` 归一。
+   */
+  private persistWithPolicy(block: SettingsSave, old: SettingsValue, settings: SettingsValue, origin: SettingsOrigin): boolean {
+    const { store, engine, sessions } = this.host
+    const before = policyVersion(old), after = policyVersion(settings)
+    const scope = (version: SettingsValue) => ({
+      scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
+    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), old, settings, scope,
+      id => store.projects.get(id))
+    const notified = [...effects.keys()]
+    store.atomic(() => {
+      store.saveSettings(settings, { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
+      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(old, settings)))
+      if (before !== after) engine.policyChanged(before, after, effects)
+    })
+    return before !== after
   }
   /**
    * 结束记录 `id` 名下的全部未结束工单，原因记为 `source_disabled`。
@@ -299,7 +308,7 @@ export class Settings {
    * @throws 当记录不存在（`sourceNotInstalled`）或仍有未结束工单（`sourceInUse`）时抛出。
    */
   async removeSource(id: string, origin: SettingsOrigin) {
-    const { store, sources, engine, sessions } = this.host
+    const { store, sources, sessions } = this.host
     const current = store.settings()
     if (!current.sources[id]) throw new UserError('sourceNotInstalled', { source: id })
     const open = this.openTickets(id)
@@ -308,17 +317,7 @@ export class Settings {
     const { [id]: _part, ...restParts } = current.policy.sources
     const settings = SettingsSchema.parse({ ...current, sources: restSources, policy: { ...current.policy, sources: restParts } })
     const block: SettingsSave = `source:${id}`
-    const before = policyVersion(current), after = policyVersion(settings)
-    const scope = (version: SettingsValue) => ({
-      scope: (input: { source: string; meta: Record<string, unknown> }) => this.host.sources.scope(input, version) })
-    const effects = before === after ? new Map() : policyEffects(store.tickets.open(), current, settings, scope,
-      id => store.projects.get(id))
-    const notified = [...effects.keys()]
-    store.atomic(() => {
-      store.saveSettings(settings, { source: origin, block, policyVersion: after, policyChanged: before !== after, notified })
-      if (origin !== 'tool') sessions.notify(...settingsNotice(block, changedPaths(current, settings)))
-      if (before !== after) engine.policyChanged(before, after, effects)
-    })
+    this.persistWithPolicy(block, current, settings, origin)
     this.releaseSource(id)
     sources.syncHealth(settings)
     await sessions.delivery(`settings:${block}`)

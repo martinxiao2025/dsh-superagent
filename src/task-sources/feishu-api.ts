@@ -2,7 +2,7 @@
  * 飞书知识库读取接口：把 wiki 节点、docx 正文与多维表格记录收敛成一套最小调用。
  * 端点映射、字段解析与分页只写一遍；CLI 与 HTTP 的传输差异由 FeishuTransport 承担。
  */
-import { larkTransport, httpTransport, type FeishuTransport, type LarkCall } from '../feishu-transport.ts'
+import { FEISHU_PAGE as PAGE, itemsOf, larkTransport, httpTransport, type FeishuTransport, type LarkCall } from '../feishu-transport.ts'
 
 /** 知识库节点：`nodeToken` 是稳定身份，真正的数据对象在 `objToken`。 */
 export interface WikiNodeRef {
@@ -32,8 +32,6 @@ export interface FeishuWikiApi {
 /** 凭据读取知识库的能力；未安装或材料不可用时返回 undefined，由驱动给出可读的预检结果。 */
 export type FeishuWikiReader = (credential: string) => Promise<FeishuWikiApi | undefined>
 
-const PAGE = 50
-
 /** 逐页读取列表接口，直到 `has_more` 为 false。 */
 async function paged<T>(call: (pageToken: string) => Promise<{ items: T[]; hasMore: boolean; pageToken: string }>): Promise<T[]> {
   const out: T[] = []
@@ -55,9 +53,6 @@ const nodeOf = (value: Record<string, unknown>): WikiNodeRef => ({
   hasChild: value.has_child === true || value.hasChild === true,
   spaceId: String(value.space_id ?? value.spaceId ?? ''),
 })
-
-const itemsOf = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
-  Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
 
 /** 五个读取方法的唯一实现；`transport.get` 返回已解包的 `data`。 */
 export function feishuWikiApi(transport: FeishuTransport): FeishuWikiApi {

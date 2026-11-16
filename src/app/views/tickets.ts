@@ -80,4 +80,3 @@ export function ticketDetail(host: ViewHost, id: string) {
       ...thread.context?.includes(id) ? { context: true as const } : {} })),
     usage: store.usage.sumTicket(id) }
 }
-export type TicketDetailView = NonNullable<ReturnType<typeof ticketDetail>>

@@ -16,6 +16,12 @@ export type LarkCall = (args: string[]) => Promise<unknown>
 /** 飞书 OpenAPI 的固定前缀；HTTP 直连与凭据探测共用。 */
 export const FEISHU_BASE = 'https://open.feishu.cn/open-apis'
 
+/** 飞书列表接口的固定页大小；Wiki 与 Im 两套 API 共用。 */
+export const FEISHU_PAGE = 50
+/** 从已解包的 `data` 里取出列表字段；字段缺失时为空数组。 */
+export const itemsOf = (data: Record<string, unknown>, key = 'items'): Record<string, unknown>[] =>
+  Array.isArray(data[key]) ? data[key] as Record<string, unknown>[] : []
+
 /** 传输面：`path` 以 `/` 开头且不含 `/open-apis` 前缀；返回已解包的 `data` 对象。写操作走 `post`。 */
 export interface FeishuTransport {
   get(path: string, params?: Record<string, unknown>): Promise<Record<string, unknown>>

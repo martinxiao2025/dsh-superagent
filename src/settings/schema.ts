@@ -40,7 +40,6 @@ export const ModelsConfigSchema = z.object({
   subagent: RoleModelSchema.nullable().default(null),
   utility: RoleModelSchema.nullable().default(null),
 }).strict()
-export type ModelsConfig = z.infer<typeof ModelsConfigSchema>
 
 export const AllowedSchema = z.object({ id: z.string().trim().min(1).max(200), name: z.string().trim().max(100).optional() }).strict()
 const Weak = z.enum(['inferred', 'ignore'])

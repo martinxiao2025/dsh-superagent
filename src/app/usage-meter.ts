@@ -88,7 +88,7 @@ export class UsageMeter {
     return { scope: 'subagent' }
   }
   /** 工单的生效预算：项目 `execution.budget` 优先，否则全局 `executor.budget`；未配置返回 undefined。 */
-  budgetOf(ticketId: string): { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined {
+  private budgetOf(ticketId: string): { inputTokens?: number; outputTokens?: number; totalTokens?: number } | undefined {
     return effectiveBudget(this.host.store, ticketId)
   }
   /** 一个工单的预算用量比例（0–∞）：对每个配置的维度求比值取最大；无预算时为 0。 */

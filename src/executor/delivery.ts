@@ -6,11 +6,9 @@
 import { liveTicket, runningAssignment, type Assignment, type Ticket, type TicketInput } from '../core/index.ts'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { Later } from '../app/later.ts'
-import { capped, inputMessage, inputResource, workerSessionId } from './format.ts'
+import { ASSIGNMENT_CHARS, capped, inputMessage, inputResource, workerSessionId } from './format.ts'
 import type { WorkerContext } from './dsh.ts'
 
-/** 工单消息中内联任务分配文本的字符上限；更长的文本通过其资源读取。 */
-const ASSIGNMENT_CHARS = 1500
 /** 当输入来自人时为 true（非上下文的真人触发器，或状态请求之类的直接文本输入）。 */
 export const fromPerson = (input?: TicketInput): boolean => input?.kind === 'trigger' ? !!input.human && !input.context : input?.kind === 'text'
 

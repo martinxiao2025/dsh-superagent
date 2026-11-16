@@ -8,7 +8,7 @@ import { type FeishuWikiApi } from './feishu-api.ts'
 import { feishuFailureCode } from '../feishu-transport.ts'
 import { issuesText, readWikiTasks } from './feishu-wiki-read.ts'
 import {
-  DEFAULT_TASK_FIELDS, errorText, taskColumnShape, taskColumnsOf,
+  DEFAULT_TASK_FIELDS, errorText, feishuCredentialResolve, taskColumnShape, taskColumnsOf,
   type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps, type TaskSourceWriteContext,
 } from './kind.ts'
 import { locateRow } from './locate.ts'
@@ -57,26 +57,13 @@ function columnCheck(field: string, config: FeishuWikiTaskSourceConfig): SourceC
   return column.trim() ? checkPassed(field, 'taskColumnOk', { column }) : checkFailed(field, 'taskColumnUnset')
 }
 
-/** 取凭据：未填写、未安装或材料不可用都给出不同的可读结果。 */
-async function apiOf(config: FeishuWikiTaskSourceConfig,
-  deps: Pick<TaskSourceVerifyDeps, 'feishu'>): Promise<{ api: FeishuWikiApi } | { check: SourceCheck }> {
-  if (!config.feishuCredential) return { check: checkFailed('feishuCredential', 'feishuCredentialUnset') }
-  const api = await deps.feishu?.(config.feishuCredential)
-  return api ? { api } : { check: checkFailed('feishuCredential', 'feishuCredentialMissing', { credential: config.feishuCredential }) }
-}
-
 /** 逐字段预检：凭据、知识空间、根节点与列映射。 */
 async function verify(config: FeishuWikiTaskSourceConfig, field: string, deps: TaskSourceVerifyDeps): Promise<SourceCheck[]> {
-  if (field === 'feishuCredential') {
-    if (!config.feishuCredential) return [checkFailed('feishuCredential', 'feishuCredentialUnset')]
-    const api = await deps.feishu?.(config.feishuCredential)
-    return api ? [checkPassed('feishuCredential', 'feishuCredentialOk', { credential: config.feishuCredential })]
-      : [checkFailed('feishuCredential', 'feishuCredentialMissing', { credential: config.feishuCredential })]
-  }
+  if (field === 'feishuCredential') return (await feishuCredentialResolve(config.feishuCredential, deps.feishu)).checks
   if (field === 'spaceId') {
     if (!config.spaceId) return [checkFailed('spaceId', 'feishuWikiSpaceUnset')]
-    const resolved = await apiOf(config, deps)
-    if ('check' in resolved) return [resolved.check]
+    const resolved = await feishuCredentialResolve(config.feishuCredential, deps.feishu)
+    if (!resolved.api) return resolved.checks
     try {
       const nodes = await resolved.api.children(config.spaceId, '')
       return [checkPassed('spaceId', 'feishuWikiSpaceOk', { spaceId: config.spaceId, nodes: String(nodes.length) })]
@@ -85,8 +72,8 @@ async function verify(config: FeishuWikiTaskSourceConfig, field: string, deps: T
     }
   }
   if (field === 'roots') {
-    const resolved = await apiOf(config, deps)
-    if ('check' in resolved) return [resolved.check]
+    const resolved = await feishuCredentialResolve(config.feishuCredential, deps.feishu)
+    if (!resolved.api) return resolved.checks
     if (!config.roots.length) return [checkPassed('roots', 'feishuWikiRootsSpace', { spaceId: config.spaceId })]
     const missing: string[] = []
     for (const root of config.roots) {

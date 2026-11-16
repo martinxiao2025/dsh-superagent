@@ -300,6 +300,7 @@ export const settingsText = {
   'promptPart.runtime/stages/verify': ['阶段聚焦：验证', 'Stage focus: Verify'],
   'promptPart.runtime/stages/review': ['阶段聚焦：评审', 'Stage focus: Review'],
   'promptPart.runtime/stages/deliver': ['阶段聚焦：交付', 'Stage focus: Deliver'],
+  'promptPart.runtime/stages': ['阶段地图', 'Stage map'],
   'promptPart.skill/admission': ['准入技能', 'Admission skill'],
   'promptPart.skill/feishu': ['飞书技能', 'Feishu skill'],
   'promptPart.skill/github': ['GitHub 技能', 'GitHub skill'],

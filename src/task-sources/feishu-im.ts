@@ -7,7 +7,7 @@ import { checkFailed, checkPassed, type SourceCheck } from '../setup.ts'
 import { feishuFailureCode } from '../feishu-transport.ts'
 import type { FeishuImApi } from './feishu-im-api.ts'
 import {
-  DEFAULT_TASK_FIELDS, errorText,
+  DEFAULT_TASK_FIELDS, errorText, feishuCredentialResolve,
   type TaskSourceDriver, type TaskSourceRunContext, type TaskSourceVerifyDeps,
 } from './kind.ts'
 
@@ -51,26 +51,13 @@ function chatErrorCode(error: unknown): string {
   return feishuFailureCode(error, { forbidden: 'feishuChatForbidden', missing: 'feishuChatMissing', fallback: 'feishuChatUnreadable' })
 }
 
-/** 取凭据：未填写、未安装或材料不可用都给出不同的可读结果。 */
-async function apiOf(config: FeishuImTaskSourceConfig,
-  deps: Pick<TaskSourceVerifyDeps, 'feishuIm'>): Promise<{ api: FeishuImApi } | { check: SourceCheck }> {
-  if (!config.feishuCredential) return { check: checkFailed('feishuCredential', 'feishuCredentialUnset') }
-  const api = await deps.feishuIm?.(config.feishuCredential)
-  return api ? { api } : { check: checkFailed('feishuCredential', 'feishuCredentialMissing', { credential: config.feishuCredential }) }
-}
-
 /** 逐字段预检：凭据、群可读性与读取参数。 */
 async function verify(config: FeishuImTaskSourceConfig, field: string, deps: TaskSourceVerifyDeps): Promise<SourceCheck[]> {
-  if (field === 'feishuCredential') {
-    if (!config.feishuCredential) return [checkFailed('feishuCredential', 'feishuCredentialUnset')]
-    const api = await deps.feishuIm?.(config.feishuCredential)
-    return api ? [checkPassed('feishuCredential', 'feishuCredentialOk', { credential: config.feishuCredential })]
-      : [checkFailed('feishuCredential', 'feishuCredentialMissing', { credential: config.feishuCredential })]
-  }
+  if (field === 'feishuCredential') return (await feishuCredentialResolve(config.feishuCredential, deps.feishuIm)).checks
   if (field === 'chatId') {
     if (!config.chatId) return [checkFailed('chatId', 'feishuChatUnset')]
-    const resolved = await apiOf(config, deps)
-    if ('check' in resolved) return [resolved.check]
+    const resolved = await feishuCredentialResolve(config.feishuCredential, deps.feishuIm)
+    if (!resolved.api) return resolved.checks
     try {
       const messages = await resolved.api.messages(config.chatId, { limit: 1 })
       return [checkPassed('chatId', 'feishuChatOk', { chatId: config.chatId, messages: String(messages.length) })]

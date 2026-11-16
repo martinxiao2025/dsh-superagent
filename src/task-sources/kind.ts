@@ -116,6 +116,18 @@ export function repoCheck(field: string, error: unknown): SourceCheck {
   }
   return checkFailed(field, 'taskRepoSyncFailed', { output: errorText(error) })
 }
+/**
+ * 解析飞书凭据为读取能力：未填写、未安装或材料不可用都映射为可读的字段级预检结果；
+ * 成功时附带 Ok 结果。知识库与群消息两个驱动共用。
+ */
+export async function feishuCredentialResolve<Api>(credential: string,
+  reader: ((name: string) => Promise<Api | undefined>) | undefined): Promise<{ api?: Api; checks: SourceCheck[] }> {
+  if (!credential) return { checks: [checkFailed('feishuCredential', 'feishuCredentialUnset')] }
+  const api = await reader?.(credential)
+  return { ...api ? { api } : {}, checks: [api
+    ? checkPassed('feishuCredential', 'feishuCredentialOk', { credential })
+    : checkFailed('feishuCredential', 'feishuCredentialMissing', { credential })] }
+}
 
 /**
  * 任务来源驱动：只负责「列出任务」与可选回写，不拆解、不判重、不做业务过滤。
