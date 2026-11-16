@@ -30,15 +30,13 @@ const StageModelsSchema = z.object({
 }).strict()
 /**
  * 各角色的模型配置：两个角色位（编排主会话与工作单元）、六个工作阶段（未配置的阶段回落
- * `worker`）、子代理默认模型（未显式选择时），以及工具型小模型（`utility`，供轻量结构化任务）。
- * 任何一项留 null 表示继承宿主默认——零配置即零行为变化。
+ * `worker`）与子代理默认模型（未显式选择时）。任何一项留 null 表示继承宿主默认——零配置即零行为变化。
  */
 export const ModelsConfigSchema = z.object({
   orchestrator: RoleModelSchema.nullable().default(null),
   worker: RoleModelSchema.nullable().default(null),
   stages: StageModelsSchema.default(() => StageModelsSchema.parse({})),
   subagent: RoleModelSchema.nullable().default(null),
-  utility: RoleModelSchema.nullable().default(null),
 }).strict()
 
 export const AllowedSchema = z.object({ id: z.string().trim().min(1).max(200), name: z.string().trim().max(100).optional() }).strict()

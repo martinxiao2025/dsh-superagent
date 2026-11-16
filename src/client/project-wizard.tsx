@@ -4,7 +4,7 @@ import { usePoll } from './api.ts'
 import { Button, Input, SegmentedControl, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { useAction, usePanel } from './provider.tsx'
-import { Field, Fields, numberOf, useBlockDraft, useSettings } from './settings-kit.tsx'
+import { Field, Fields, numberOf, numberField, plainField, useBlockDraft, useSettings, type FieldConversion } from './settings-kit.tsx'
 import { localized, type T } from './text.ts'
 import { ConfirmButton, Hint, LabelValue } from './widgets.tsx'
 import { useFieldChecks } from './checks.tsx'
@@ -259,15 +259,9 @@ type ProjectFormValue = Omit<ProjectView['value'], 'schedule' | 'retry' | 'taskP
   retry: { maxRetries: string; retryBackoffSeconds: string }
   taskPolicy: { pendingStatuses: string; doneStatus: string; failedStatus: string }
 }
-/** 表单字符串 ⇄ 保存值的单字段双向转换。 */
-interface FieldConversion<Form, Saved> { read: (saved: Saved) => Form; write: (form: Form) => Saved }
-/** 数字输入：表单以字符串承载；保存时解析，非法输入按 0 提交，由服务端校验拒绝。 */
-const numberField: FieldConversion<string, number> = { read: String, write: text => numberOf(text) ?? 0 }
 /** 状态清单：表单是逗号分隔字符串；保存时拆分、去空白、去空项。 */
 const statusListField: FieldConversion<string, string[]> = { read: list => list.join(', '),
   write: text => text.split(/[,，]/).map(status => status.trim()).filter(Boolean) }
-/** 原样字段：读写都不转换。 */
-const plainField: FieldConversion<string, string> = { read: value => value, write: form => form }
 /** 项目编辑表单的声明式规格：saved 与 toValue 由同一份 spec 派生，转换规则只写一遍。 */
 const PROJECT_FORM_SPEC = {
   schedule: { intervalMinutes: numberField },

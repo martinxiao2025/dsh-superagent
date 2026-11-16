@@ -57,10 +57,10 @@ const TASKS_PAGE = 50
 export function ProjectPage({ id }: { id: string }) {
   const { t, call, notify, navigate } = usePanel()
   const [limit, setLimit] = useState(TASKS_PAGE)
-  const { data, error } = usePoll(() => call('GET projects/:id/tasks', { id, query: { limit } }), [id, limit], 3000)
-  const retry = useAction((entryId: string) => call('POST queue/:id/retry', { id: entryId }))
-  const cancel = useAction((entryId: string) => call('POST queue/:id/cancel', { id: entryId }))
-  const clear = useAction(() => call('POST queue/clear', { query: { project: id } }))
+  const { data, error, reload } = usePoll(() => call('GET projects/:id/tasks', { id, query: { limit } }), [id, limit], 3000)
+  const retry = useAction((entryId: string) => call('POST queue/:id/retry', { id: entryId }), { reload })
+  const cancel = useAction((entryId: string) => call('POST queue/:id/cancel', { id: entryId }), { reload })
+  const clear = useAction(() => call('POST queue/clear', { query: { project: id } }), { reload })
   if (!data) return <><PageHead title={t('term.project')} />
     {error instanceof ApiError && error.missing ? <Hint>{t('projectNotFound')}</Hint> : <LoadState error={error} loading />}</>
   return <>

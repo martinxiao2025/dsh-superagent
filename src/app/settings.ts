@@ -197,10 +197,10 @@ export class Settings {
     // 停用一条正在工作的记录会结束它名下未完成工单，而不是让它们失去来源后悬挂。
     const disabling = kind === 'source' && current.sources[id]?.enabled !== false && !(parsed as { enabled: boolean }).enabled
     const candidate = rules.merge(current, parsed, id)
-    // models 块保存时校验每个非空模型都可解析（角色位、阶段、子代理与工具型）；provider 不可用即拒绝保存。
+    // models 块保存时校验每个非空模型都可解析（角色位、阶段与子代理）；provider 不可用即拒绝保存。
     if (kind === 'models') {
       const models = parsed as SettingsValue['models']
-      for (const model of [models.orchestrator, models.worker, models.subagent, models.utility, ...Object.values(models.stages)]) {
+      for (const model of [models.orchestrator, models.worker, models.subagent, ...Object.values(models.stages)]) {
         if (!model) continue
         try { await resolveRoleModel(this.host.context, model) }
         catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }

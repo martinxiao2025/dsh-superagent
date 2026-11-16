@@ -13,6 +13,12 @@ import { Hint, LoadState } from './widgets.tsx'
 
 /** 解析数字输入字符串，为空时返回 `null`，使服务器拒绝空的必填数字，而不是将其强制转换为 0。 */
 export const numberOf = (text: string): number | null => text.trim() ? Number(text) : null
+/** 表单字符串 ⇄ 保存值的单字段双向转换；设置块与项目表单共用，转换规则只写一遍。 */
+export interface FieldConversion<Form, Saved> { read: (saved: Saved) => Form; write: (form: Form) => Saved }
+/** 数字输入：表单以字符串承载；保存时解析，非法输入按 0 提交，由服务端校验拒绝。 */
+export const numberField: FieldConversion<string, number> = { read: String, write: text => numberOf(text) ?? 0 }
+/** 原样字段：读写都不转换。 */
+export const plainField: FieldConversion<string, string> = { read: value => value, write: form => form }
 interface SettingsData { settings: SettingsView; reload: () => Promise<void> }
 const SettingsContext = createContext<SettingsData | undefined>(undefined)
 export function useSettings(): SettingsData {
@@ -69,11 +75,10 @@ function SwitchRow({ label, hint, checked,
   </div>
 }
 type RoleModel = Settings['models']['worker']
-export function ModelField({ id, value, onChange }: { id: string; value: RoleModel; onChange: (next: RoleModel) => void }) {
-  const { t, call } = usePanel()
-  const [catalog, setCatalog] = useState<ApiResponse<'GET models'>>()
-  const [error, setError] = useState<string>()
-  useEffect(() => { call('GET models').then(setCatalog, failure => setError(errorText(failure))) }, [call])
+/** 一个模型槽位的三个输入与建议列表；目录由调用方一次拉取后经 props 下发（每页一个 ModelField 拉一次，此前每个实例各拉一次）。 */
+export function ModelField({ id, value, onChange, catalog, error }: { id: string; value: RoleModel; onChange: (next: RoleModel) => void;
+  catalog: ApiResponse<'GET models'> | undefined; error?: string | undefined }) {
+  const { t } = usePanel()
   const current = { provider: value?.provider ?? '', model: value?.model ?? '', effort: value?.reasoningEffort ?? '' }
   const set = (next: Partial<typeof current>) => {
     const { provider, model, effort } = { ...current, ...next }
